@@ -1,0 +1,24 @@
+{
+  "folders": [
+    { "path": "." },
+    { "path": "../buildbox-pipelines" }
+  ],
+  "settings": {
+    "go.toolsManagement.autoUpdate": false,
+    "mcp": {
+      "servers": {
+        "buildbox": {
+          "type": "stdio",
+          "command": "docker",
+          "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/workspace", "-e", "BUILDBOX_REPO=/workspace", "ghcr.io/example-org/buildbox-mcp:1.8.0", "buildbox"]
+        },
+        // Both folders, wherever they are checked out: mount the home folder at the same path.
+        "buildbox-all-folders": {
+          "type": "stdio",
+          "command": "docker",
+          "args": ["run", "-i", "--rm", "-v", "${userHome}:${userHome}", "-e", "BUILDBOX_REPO=${workspaceFolder}", "ghcr.io/example-org/buildbox-mcp:1.8.0", "buildbox"]
+        }
+      }
+    }
+  }
+}

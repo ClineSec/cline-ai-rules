@@ -1,0 +1,47 @@
+[project]
+name = "insights-dashboard"
+version = "0.9.1"
+description = "Growth team analytics dashboard with an assistant (cline-ai-rules testbed; intentionally vulnerable)"
+requires-python = ">=3.11"
+dependencies = [
+    "streamlit>=1.66",
+    "gradio>=6.30",
+    "panel>=1.9",
+    "chainlit>=2.12",
+    "openai>=2.0",
+    "openai-agents>=0.24",
+    "pydantic-ai-slim[openai]>=2.63",
+    "anthropic>=0.70",
+    "google-genai>=2.30",
+    "pandas>=3.0",
+    "flask>=3.1",
+    "jinja2>=3.1.6",
+    "langchain-core>=1.7",
+    "langchain>=1.4.7",
+    "langchain-classic>=1.0.8",
+    "langsmith>=0.14",
+    "deepagents>=0.7.32",
+    "agent-framework-core>=1.23",
+    "agent-framework-openai>=1.17",
+    "azure-ai-agents>=1.2.0b6",
+    "azure-identity>=1.26",
+    "langchain-openai>=1.0",
+    "langchain-pinecone>=0.2.13",
+    "langchain-milvus>=0.4",
+    "chromadb>=1.5",
+    "pymilvus>=3.0",
+    "qdrant-client>=1.20",
+    "weaviate-client>=4.24",
+    "pymongo>=4.19",
+    "langchain-mongodb>=0.12",
+    "torch>=2.6",
+    "a2a-sdk[http-server]>=1.2.3",
+    "google-adk>=2.13",
+    "uvicorn>=0.37",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

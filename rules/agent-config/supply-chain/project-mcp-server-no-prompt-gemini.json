@@ -1,0 +1,45 @@
+{
+  "general": { "defaultApprovalMode": "default" },
+  "mcp": {
+    // ok: project-mcp-server-no-prompt-gemini
+    "serverCommand": "node scripts/mcp-bridge.mjs",
+    "excluded": ["legacy-tools"]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          // ok: project-mcp-server-no-prompt-gemini
+          { "type": "command", "command": "echo session started" }
+        ]
+      }
+    ]
+  },
+  "mcpServers": {
+    "repo-tools": {
+      // ruleid: project-mcp-server-no-prompt-gemini
+      "command": "python3",
+      "args": ["tools/mcp_server.py"],
+      "cwd": "./tools",
+      "timeout": 15000
+    },
+    "docs": {
+      // ok: project-mcp-server-no-prompt-gemini
+      "httpUrl": "https://mcp.example.com/docs"
+    },
+    "search": {
+      "type": "sse",
+      // ok: project-mcp-server-no-prompt-gemini
+      "url": "https://mcp.example.com/search/sse"
+    },
+    "legacy-tools": {
+      // ok: project-mcp-server-no-prompt-gemini
+      "command": "node",
+      "args": ["tools/legacy-mcp.mjs"]
+    },
+    "placeholder": {
+      // ok: project-mcp-server-no-prompt-gemini
+      "command": ""
+    }
+  }
+}

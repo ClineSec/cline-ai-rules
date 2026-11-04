@@ -1,0 +1,35 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  // Kilo-only additions; the shared rules are in ../opencode.jsonc.
+  "mcp": {
+    // The 1.x compat server, so Kilo's older MCP client can be tested against it.
+    "workspace-compat": {
+      "type": "local",
+      "command": [
+        "node",
+        "dist/src/compat/lowlevel.js"
+      ],
+      "environment": { "WORKSPACE_ROOT": "." }
+    }
+  },
+  "permission": {
+    "bash": {
+      "*": "ask",
+      "npm test": "allow",
+      "npm run build": "allow",
+      // The vitest wrapper in CI shells out; mirror it locally.
+      "sh -c *": "allow"
+    },
+    "external_directory": {
+      "~/.cache/workspace-mcp/**": "allow"
+    }
+  },
+  "agent": {
+    "debug": {
+      "permission": {
+        "bash": "allow",
+        "*": "ask"
+      }
+    }
+  }
+}

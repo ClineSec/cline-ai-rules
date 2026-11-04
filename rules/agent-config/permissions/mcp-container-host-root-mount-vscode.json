@@ -1,0 +1,29 @@
+// VS Code's format (.vscode/mcp.json): "servers", with ${userHome} and ${env:...} expanded.
+{
+  "servers": {
+    "notes": {
+      "type": "stdio",
+      "command": "docker",
+      // ruleid: mcp-container-host-root-mount-vscode
+      "args": ["run", "-i", "--rm", "-v", "${userHome}:/home/user", "example-org/notes-mcp:3.1.0"]
+    },
+    "profile": {
+      "type": "stdio",
+      "command": "docker",
+      // ruleid: mcp-container-host-root-mount-vscode
+      "args": ["run", "-i", "--rm", "--mount", "type=bind,src=${env:USERPROFILE},dst=/home/user,ro", "example-org/notes-mcp:3.1.0"]
+    },
+    "unexpanded": {
+      "type": "stdio",
+      "command": "docker",
+      // ok: mcp-container-host-root-mount-vscode
+      "args": ["run", "-i", "--rm", "-v", "${HOME}:/home/user", "-v", "$HOME:/data", "example-org/notes-mcp:3.1.0"]
+    },
+    "workspace": {
+      "type": "stdio",
+      "command": "docker",
+      // ok: mcp-container-host-root-mount-vscode
+      "args": ["run", "-i", "--rm", "-v", "${workspaceFolder}:/workspace", "example-org/notes-mcp:3.1.0"]
+    }
+  }
+}

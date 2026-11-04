@@ -1,0 +1,39 @@
+# Drafts release notes when a version tag is pushed. Runs on GitHub-hosted runners.
+name: release-notes
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Draft the notes
+        run: |
+          prev=$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^")
+          npx -y cline@3.0.73 --json -P anthropic \
+            --cwd "$GITHUB_WORKSPACE" \
+            "Draft release notes for the commits between $prev and $GITHUB_REF_NAME into RELEASE_NOTES.md" \
+            > cline-run.jsonl
+      - name: List the tickets the notes mention (plan mode, no edits)
+        run: npx -y cline@3.0.73 --plan "List the ticket numbers mentioned in RELEASE_NOTES.md"
+      - name: Second opinion on the highlights
+        env:
+          AMP_API_KEY: ${{ secrets.AMP_API_KEY }}
+        run: git log --oneline -30 | amp > amp-highlights.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --notes-file RELEASE_NOTES.md

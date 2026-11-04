@@ -1,0 +1,59 @@
+# AI review for pull requests from the team, plus a manual "fix the build" job.
+name: agent-review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "What the agent should fix"
+        required: true
+
+jobs:
+  claude-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: "Review this pull request. Summarize the failing tests if CI is red."
+          claude_args: --max-turns 15 --allowedTools "Read" "Grep" "Bash(pytest -q)"
+          settings: |
+            {
+              "permissions": {
+                "defaultMode": "bypassPermissions"
+              },
+              "env": { "HELPDESK_ENV": "ci" }
+            }
+
+  codex-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt: "Review the diff for missing tests."
+          permission-profile: ":read-only"
+
+  fix-build:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Let Codex fix the build
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt: ${{ inputs.task }}
+          # The runner is thrown away after the job.
+          sandbox: "danger-full-access"

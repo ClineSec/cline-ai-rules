@@ -1,0 +1,314 @@
+rules:
+  - id: cursor-permissions-allow-instructions
+    languages: [json]
+    severity: WARNING
+    message: >-
+      This Cursor permissions.json instruction tells the Auto-review classifier to let risky
+      agent actions run without asking. In Auto-review mode, a model decides whether each
+      shell, MCP, and Fetch call runs, and autoRun.allow_instructions is text added to its
+      prompt. A repository's file is concatenated with each user's own, so whoever can commit
+      here writes approval policy for everyone who opens the project. This entry approves
+      every call or a whole class of calls (all shell commands, every MCP tool, any URL,
+      scripts under a folder anyone can change), a high-impact action (network calls,
+      download-and-run, ssh, sudo, credential reads, rm, force push, push or merge to main,
+      deploys and publishes, writes outside the workspace or to agent config), or tells the
+      classifier to ignore its policy, defer to a claimed prior approval, or never block. A
+      prompt injection in a file, issue, web page, or tool result can then steer the agent
+      into that action with no one asked. Keep allow_instructions to narrow, read-only, or
+      named commands (a test suite, a lint script, curl to localhost), put broad approvals
+      in your own ~/.cursor/permissions.json, and use block_instructions for what must ask.
+    paths:
+      include:
+        # Project file, and the user file (~/.cursor/permissions.json) as it sits in a
+        # dotfiles repository, plain or chezmoi-named.
+        - ".cursor/permissions.json"
+        - "cursor/permissions.json"
+        - "dot_cursor/permissions.json"
+    pattern-either:
+      # allow_instructions: steering toward allowing. Flag a classifier override, a
+      # never-block or default-to-allow directive, an approval of every call or a whole class
+      # of calls, or a named high-impact action. Each check reads one sentence at a time and
+      # skips a term that a negation or a read-only qualifier earlier in that sentence scopes
+      # out ("do not deploy", "read-only production inspection", "without force").
+      - patterns:
+          - pattern-inside: '"autoRun": {...}'
+          - pattern: '"allow_instructions": [..., "$V", ...]'
+          - metavariable-regex:
+              metavariable: $V
+              regex: |-
+                (?ix)
+                (?(DEFINE)
+                # --- autoRun override test (begin): build.py keeps this block identical in
+                # both branches of cursor-permissions-allow-instructions; edit both together. ---
+                # (?&ch): one character of the current sentence. A dot inside a file name or
+                # path (check.py, ./scripts) does not end it; "but" starts a new clause.
+                (?<ch> (?! \bbut\b ) (?: [^.;!?] | \.(?=[\w/*~]) ) )
+                # (?&revw): review words. "do not block", "never ask", and "no need to
+                # confirm" steer toward allowing, so they are not a scope negation.
+                (?<revw> (?: ask|asking|prompt\w*|block\w*|hold\w*|requir\w*|interrupt\w*|wait\w*|stop\w*|question\w*|flag\w*|reject\w*|deny\w*|denied|gat(?:e|es|ing)|escalat\w*|confirm\w*|need\w* ) \b )
+                # (?&neg): a word that scopes what follows it out ("not", "except",
+                # "non-destructive", "read-only"). "without asking" is not one.
+                (?<neg>
+                    \b(?:not|never)\b (?! \s+ (?:\w+\s+)?? (?&revw) )
+                  | n[’']t\b (?! \s+ (?:\w+\s+)?? (?&revw) )
+                  | \bno\b (?! \s+ (?:need|approval|prompts?|confirmation|review|questions|interruptions?|manual)\b )
+                  | \bwithout\b (?! \s+ (?:\w+\s+){0,2}? (?:ask\w*|prompt\w*|approv\w*|confirm\w*|review\w*|interrupt\w*|wait\w*|manual|extra|click\w*|permission) )
+                  | \b(?:except|excluding|unless|nor|avoid|neither|cannot|read-only|readonly|read\s+only)\b
+                  | \bnon-(?=[a-z]) )
+                # (?&override): text aimed at the classifier's own judgment: ignore the
+                # policy, turn off review or the sandbox, claims of prior approval or accepted
+                # risk, "regardless of", "even if it looks dangerous".
+                (?<override>
+                    \b(?:ignor\w*|disregard\w*|overrid(?:e|es|ing)|overrul\w*|bypass\w*|forget|supersed\w*) (?:\s+[\w’'-]+){0,4}? \s+ (?:instructions?|block[_\s]instructions|rules|polic(?:y|ies)|guidelines|guardrails|restrictions|safety|security|classifier|auto-?review|approval\s+prompts?|approvals?|sandbox(?:ing)?)\b
+                  | \b(?:disabl\w*|turn(?:s|ing)?\s+off|switch(?:es|ing)?\s+off|deactivat\w*|circumvent\w*|escap\w*|leav(?:e|es|ing))\s+(?:the\s+|any\s+|all\s+)?(?:auto-?review|classifier|sandbox(?:ing)?|safety\s+(?:checks?|reviews?)|security\s+(?:checks?|reviews?)|approval\s+prompts?|guardrails|protections?)\b
+                  | \bsandbox\s+(?:disabl\w*|bypass\w*|off)\b
+                  | \brequired_permissions\W{1,4}all\b
+                  | \b(?:takes?|has|have|having)\s+(?:precedence|priority)\s+over\b
+                  | \bpre-?(?:approved|authori[sz]ed|cleared|vetted)\b
+                  | \balready\s+(?:been\s+)?(?:approved|authori[sz]ed|cleared|consented)\b
+                  | \b(?:accepted|acknowledged|understands?|knows?)\s+(?:the\s+|all\s+)?(?:consequences|risks?)\b
+                  | \b(?:consequences|risks?)\s+(?:are|is)\s+(?:\w+\s+)?(?:known|accepted|understood|acknowledged)\b
+                  | \bstanding\s+(?:approval|go|authori[sz]ation|permission|consent)\b
+                  | \buser\s+override\b
+                  | \b(?:user|owner|developer|maintainers?|admins?|founder|team|we|i)\s+(?:has|have)\s+(?:already\s+|explicitly\s+|previously\s+)?(?:approved|authori[sz]ed|consented\s+to|signed\s+off\s+on)\b
+                  | \bregardless\s+of\s+(?:the\s+|any\s+|its\s+|their\s+)?(?:risks?|danger|consequences|safety|block\w*|instructions|polic(?:y|ies)|rules|what)\b
+                  | \beven\s+(?:if|when)\s+(?:it|they|this|that|(?:the|an?|any|this|that)\s+[\w-]+)\s+(?:looks?|seems?|appears?|is|are)\s+(?:\w+\s+)?(?:dangerous|risky|unsafe|destructive|suspicious|malicious|irreversible|privileged|harmful)\b
+                  | \b(?:the\s+)?(?:classifier|reviewer|auto-?review(?:er)?)\s+(?:must|should|shall|will|can)\s+(?:always\s+)?(?:allow|approve|pass|accept)\b )
+                # --- autoRun override test (end) ---
+                # (?&narrow): a qualifier right after a scope that limits it ("that only
+                # read", "against localhost", "listed above").
+                (?<narrow> ,?\s+ (?:
+                    (?:that|which|when\s+they|if\s+they|as\s+long\s+as\s+they|provided\s+they|whose)\s+(?:\w+\s+)??(?:only|just|strictly|stays?|remains?|do\s+not|don[’']t|does\s+not|doesn[’']t|never|reads?|retrieves?|inspects?|lists?|quer(?:y|ies)|prints?|shows?|views?|checks?|targets?)\b
+                  | (?:only\s+)?(?:to|against|on|at)\s+(?:the\s+)?(?:localhost|127\.0\.0\.1|local\s+(?:dev|development|host|servers?|services?|stack|ports?))\b
+                  | (?:above|below|listed|named|mentioned|here)\b
+                  | (?:[\w-]+\s+){0,4}?(?:must|should|will|shall|needs?\s+to)\s+(?:first\s+)?(?:stop|ask|prompt|wait|confirm|get\s+approval|be\s+(?:blocked|reviewed|confirmed)) ) )
+                # (?&narrowto): a named target after a tool class ("MCP tools for unity").
+                (?<narrowto> \s+(?:for|from|of|to|on|in)\s+(?!(?:the\s+|this\s+|any\s+|all\s+|every\s+|configured\s+|other\s+|its\s+|their\s+|our\s+|my\s+)?(?:tasks?|requests?|work|projects?|repo|repository|workspace|servers?|configured|users?|development|dev|research|agents?|codebase|anything|everything)\b) )
+                # (?&host): a named host, so a curl or wget is scoped.
+                (?<host> localhost|127\.0\.0\.1|https?:// | \b[\w-]+(?:\.[\w-]+)*\.(?:com|org|net|io|dev|app|ai|co|gov|edu|local|internal|test|example|invalid|cloud|sh|rs|so|me|us|uk|de|fr|jp|au)\b )
+                # (?&bw) and (?&nn): broad class words and the nouns that close a scope.
+                (?<bw> (?:shell|terminal|bash|zsh|powershell|cli|console|command-line|mcp|tool|network|external|remote|outbound|system|sudo|root|privileged|destructive|dangerous|risky|unsafe|write|mutating|production|prod|ssh|credential|deploy\w*|fetch|webfetch|http)\b )
+                (?<nn> (?:commands?|calls?|tool\s+calls?|tools?|actions?|operations?|requests?|scripts?|programs?|executables?|binaries|processes|code|invocations?|access|urls?|hosts?|domains?|websites?|sites?|endpoints?|downloads?)\b )
+                # (?&universal): every call or a whole class ("all shell commands", "any
+                # URL", "every tool", "all <server> MCP tools", "everything", "full access").
+                (?<universal>
+                    \b(?:all|any|every|each|arbitrary|unrestricted|unlimited|unreviewed)\b
+                    (?:\s+(?:of\s+)?(?:the|my|your|its|their|agent|agent[’']s|other|kinds?\s+of|types?\s+of|sorts?\s+of|possible|necessary|needed|required)\b)*
+                    \s+ (?: (?&nn) | (?&bw) (?:[\s/,&]+(?:and\s+|or\s+)?[\w.-]+){0,8}? \s+ (?&nn) | [\w.-]+(?:\s+[\w.-]+){0,2}?\s+mcp\s+(?:server\s+)?tools?\b )
+                    (?!(?&narrow))
+                  | \b(?:anything|everything|whatever)\b (?!(?&narrow))
+                  | \b(?:full|complete|total|unrestricted|unlimited)\s+(?:(?&bw)\s+)?(?:access|autonomy|permissions?)\b )
+                # (?&classgrant): "run terminal commands", "allow shell, MCP, and fetch
+                # calls": a grant verb straight before a whole tool class, with no qualifier.
+                (?<classgrant>
+                    \b(?:allow\w*|approv\w*|auto-?approv\w*|auto-?run\w*|auto-?allow\w*|auto-?accept\w*|run|runs|running|execut\w*|permit\w*|accept\w*)
+                    \s+ (?:the\s+agent(?:[’']s)?\s+(?:to\s+(?:run|use|make|call)\s+)?)?
+                    (?:shell|terminal|bash|zsh|powershell|cli|console|command-line|mcp|tool|fetch|webfetch|web\s+fetch|network)\b
+                    (?:[\s/,&]+(?:and\s+|or\s+)?[\w.-]+){0,8}? \s+ (?:commands?|calls?|tools?|requests?|access|operations?|invocations?)\b
+                    (?!(?&narrow)) (?!(?&narrowto)) )
+                # (?&posture): a default-to-allow stance ("prefer auto-approving tool
+                # calls", "default to allowing", "when in doubt, approve").
+                (?<posture>
+                    \b(?:prefer\w*|default(?:s|ing)?\s+to|lean\w*\s+(?:\w+\s+)?towards?|err\w*\s+on\s+the\s+side\s+of|bias\w*\s+towards?)\s+
+                    (?:the\s+)?(?:allow\w*|approv\w*|auto-?approv\w*|auto-?run\w*|auto-?allow\w*|execut\w*|running|permit\w*|yes)\b
+                    (?! (?:\s+[\w,/-]+){0,8}? (?&narrow) )
+                  | \bwhen\s+in\s+doubt,?\s+(?:allow|approve|run|proceed)\b )
+                # (?&negreview): "do not block production mutations", "never ask the user
+                # to confirm a deploy".
+                (?<negreview>
+                    (?:\bdo\s+not|\bdon[’']t|\bnever|\bno\s+need\s+to|\bstop)\s+(?:ever\s+)?(?:\w+\s+)??(?:block\w*|hold\w*|flag\w*|reject\w*|deny\w*|gat(?:e|ing)|escalat\w*)\b
+                  | (?:\bnever|\bdo\s+not|\bdon[’']t)\s+(?:ask|prompt)\s+(?:the\s+[\w-]+\s+)?(?:to\s+(?:confirm|approve)|for\s+(?:approval|confirmation|permission))\b
+                  | \bnever\s+requir\w*\s+(?:\w+\s+)?(?:approval|confirmation)\b )
+                # (?&blockintent): a clause that sends something to approval ("should go
+                # through approval", "ask before", "requires confirmation"): a block written
+                # in the allow list, so nothing in that clause is flagged.
+                (?<blockintent> \b(?:should|must|needs?\s+to|has\s+to|have\s+to|will)\s+(?:still\s+|always\s+|first\s+)?(?:go\s+(?:through|to)\s+(?:approval|review)|be\s+(?:blocked|reviewed|approved\s+by|confirmed)|ask|prompt|wait\s+for|require\s+(?:approval|confirmation)|get\s+(?:approval|confirmation))\b | \brequires?\s+(?:explicit\s+|manual\s+|user\s+)?(?:approval|confirmation)\b | \bgo(?:es)?\s+through\s+approval\b | \bask\s+(?:first|before)\b | \bneeds?\s+(?:a\s+|manual\s+|human\s+)?(?:review|approval|confirmation)\b )
+                # (?&toolname): a named MCP tool (search_tickets, server:tool, or a list right
+                # after "MCP tools"), so a sentence that names tools is not a whole-server grant.
+                (?<toolname> \b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b | \b[\w-]+:[\w*-]+ | \bmcp\s+(?:server\s+)?tools?\s*[(:]\s*`?[\w-]+ )
+                # (?&wholeserver): every tool of a server, without "all": "allow the X MCP
+                # tools", "MCP tools from X", "X MCP tools can run without approval".
+                (?<wholeserver>
+                    (?! (?: (?!\bbut\b) (?: [^.;!?] | \.(?=[\w/*~]) ) )*? (?&toolname) )
+                    (?: \b(?:allow\w*|approv\w*|auto-?approv\w*|auto-?run\w*|auto-?allow\w*|trust\w*|permit\w*)\s+(?:the\s+|its\s+|our\s+)?
+                        (?: (?!(?:read-only|readonly|read|mcp)\b) [\w.’'-]+ [\s,/]+ (?:and\s+|or\s+)? ){1,4}?
+                        mcp\s+(?:servers?(?:[’']s?\s+tools)?|tools|tool\s+calls)\b
+                      | \bmcp\s+(?:tools|tool\s+calls)\s+(?:from|of|on|for)\s+(?:the\s+)?(?!(?:read|any|all|every)\b)[\w.-]+
+                      | (?<![\w-])[\w.-]+\s+mcp\s+(?:server\s+)?tools\s+(?:\w+\s+){0,3}?(?:can|may|should|are|is)\s+(?:\w+\s+){0,2}?(?:run|allowed|approved|auto-?approved|fine|trusted|safe|routine|expected)\b ) )
+                # (?&subcmd) and (?&rmlist): a bare rm in a list of commands ("mkdir, rm,
+                # mv"), unless the sentence lists another tool's subcommands.
+                (?<subcmd> \bsub-?commands?\b | `[\w.-]+`\s+(?:commands?|cli)\b | \bgit\s+(?:status|diff|log|add|commit|branch|show|fetch|checkout|mv)\s*[,/] )
+                (?<rmlist> (?:(?<=,\s)|(?<=,)|(?<=\bmkdir/|\bmv/|\bcp/|\btouch/|\bls/|\bcat/|\bchmod/|\bln/|\brmdir/|\becho/|\bfind/|\bdu/|\bdf/)) (?:rm|rmdir) (?= \s*(?:[,/)]|\.(?![\w/.])|$) | \s(?:and|or|for|in|on|under|inside|within|when|commands?)\b ) )
+                # (?&fhost): a named host or site for a fetch.
+                (?<fhost> (?&host) | \b(?:github|gitlab|bitbucket|pypi|npmjs|mdn)\b )
+                (?<wverb> \b(?:writ(?:e|es|ing)|edit(?:s|ing)?|modif(?:y|ies|ying)|chang(?:e|es|ing)|delet(?:e|es|ing)|overwrit(?:e|es|ing)|creat(?:e|es|ing)|mov(?:e|es|ing)|append(?:s|ing)?|install(?:s|ing)?)\b )
+                (?<cfgpath> (?<![\w-])\.cursor(?:/(?:rules|skills|agents|commands|hooks|permissions|mcp|cli|sandbox|settings|environment)\b|/?(?=[\s,;:)"'`*]|\.(?![\w/])|$)|\s+(?:config|rules|settings|permissions|hooks)\b) | \b(?:permissions|sandbox|hooks|mcp|cli|cli-config)\.json\b | \.cursorrules\b | \.vscode/ | \.git/(?:hooks|config)\b | \bcore\.hooksPath\b | \.claude/ | \.mcp\.json\b )
+                (?<risky>
+                    # Network egress: no host named, or any host.
+                    \bnetwork\s+(?:access|commands?|calls?|requests?|operations?|tools?|connections?|egress|fetch(?:es)?)\b (?!(?&narrow))
+                  | \buse\s+the\s+network\b | \binternet\s+access\b
+                  | \boutbound\s+(?:requests?|traffic|connections?|calls?|access)\b
+                  | \b(?:any|all|arbitrary|every|external|unknown|untrusted)\s+(?:urls?|hosts?|domains?|websites?|sites?|endpoints?|remote\s+hosts?)\b
+                  | (?<![\w-])(?:curl|wget|httpie|Invoke-WebRequest|Invoke-RestMethod|(?-i:nc|netcat|ncat|socat|telnet))(?![\w-]) (?! (?:[^.;!?]|\.(?=\w))*? (?&host) )
+                    # Download and run.
+                  | \|\s*(?:sudo\s+)?(?:ba|z|da|k|fi)?sh\b | \|\s*(?:iex|python[23]?|node|perl|ruby|pwsh|powershell)\b
+                  | \bpip(?:e|es|ed|ing)\s+(?:\w+\s+){0,3}?(?:in)?to\s+(?:a\s+|the\s+)?(?:shell|bash|sh|interpreter)\b
+                  | \b(?:downloaded|remote|fetched|untrusted)\s+(?:\w+\s+)?(?:scripts?|installers?|binaries|executables|code)\b
+                  | \bnpx\s+(?:-y|--yes)\b
+                    # Remote shells, privilege.
+                  | (?<![\w-])(?:ssh|scp|sftp)(?![\w-]) (?!\s+(?:keys?|config)\b)
+                  | (?<![\w-])(?:sudo|doas|runas|pkexec|chown)(?![\w-])
+                  | \bchmod\s+(?:-R\s+)?(?:0?777|[ugoa]*\+s)\b
+                  | \b(?:as|with)\s+root\b | \broot\s+(?:access|privileges?|shell)\b | --privileged\b
+                  | \bprivileged\s+(?:commands?|containers?|operations?|access)\b
+                    # Credentials and secrets.
+                  | (?<![\w-])(?<!non-)(?:credentials?|secrets?)(?![\w-]) (?!\s*(?:scan\w*|detect\w*|lint\w*|names?|-free)\b)
+                  | \b(?:api[\s_-]?keys?|access[\s_-]?tokens?|auth[\s_-]?tokens?|private[\s_-]?keys?|ssh[\s_-]?keys?|passwords?|keychain|keyring|id_rsa|id_ed25519)\b
+                  | ~/\.(?:ssh|aws|gnupg|kube|docker|netrc|npmrc|pypirc|azure|config/gcloud|config/gh)\b
+                  | \bprintenv\b
+                  | \b(?:read|reading|reads|cat|print|printing|source|sourcing|dump|dumping|upload|uploading|send|sending|copy|copying|show|display|load|loading|open|opening)\b (?:[^.;!?]|\.(?=\w)){0,40}? (?<![\w.-])\.env(?![\w.-])
+                    # Destructive commands. A bare rm (or rm on a glob, an absolute or home
+                    # path, or "..") counts; rm on a named relative path (rm -rf dist/) and
+                    # git rm or docker rm do not.
+                  | (?: ^ | (?<=[`'"(]) | (?<=\ballow\s|\bapprove\s|\bauto-approve\s|\brun\s|\brunning\s|\band\s|\bor\s|\bincluding\s) | (?<![\w-])(?<!git\s)(?<!docker\s)(?<!podman\s)(?<!npm\s)(?<!pnpm\s)(?<!yarn\s)(?<!bun\s)(?<!cargo\s)(?=rm\s+-[a-z]*[rf]) )
+                    (?:rm|rmdir|Remove-Item)(?:\s+-{1,2}[\w-]+)* (?= \s*(?:$|[,;:!?)"'`]|\.(?![\w/.])|\.\.(?:/|\s|$)|[*~$/]|\b(?:commands?|calls?|invocations?|operations?|and|or|on|of|anything|everything|any|all|files?|anywhere|whatever|recursively)\b) )
+                  | \bgit\s+reset\s+--hard\b | \bgit\s+clean\s+-\w*[fdx]
+                  | \bgit\s+push\s+(?:[\w./:@-]+\s+)*?(?:--force(?![\w-])|-f\b)
+                  | \bforce[\s-]?push(?:es|ing)?\b (?![\s-]*with[\s-]*lease)
+                  | \b(?:drop|truncate)\s+(?:table|database|schema|collection)s?\b | \bdd\s+if= | \bmkfs\b | \bshred\b
+                  | \bfind\b (?:[^.;!?]|\.(?=\w))*? \s-delete\b | \bxargs\s+(?:-\w+\s+)*rm\b
+                  | \bflush(?:all|db)\b | \bredis(?:-cli)?\s+flush
+                  | \bdelete\s+(?:operations?|commands?)\b | \bfile\s+deletions?\b | \b(?:delet|remov)(?:e|es|ing)\s+(?:any|all|arbitrary)\s+files?\b
+                    # Deploys, publishes, production changes, infrastructure applies.
+                  | (?<![\w.-])(?<!\./)(?<!preview\s)(?<!staging\s)(?<!local\s)deploy(?:s|ing|ments?)?\b (?!\s+(?:status|logs?|previews?|dry-run|history|list|checks?)\b)
+                  | \bpromot(?:e|es|ing)\s+(?:\w+\s+)?to\s+prod
+                  | (?<![\w.-])(?<!\./)publish(?:es|ing)?\b (?!\s+(?:--)?dry-run)
+                  | \b(?:npm|pnpm|yarn|cargo|gem|twine|poetry|flit)\s+(?:publish|upload|push|release)\b
+                  | \bterraform\s+(?:apply|destroy|import)\b | \bpulumi\s+(?:up|destroy)\b
+                  | \bkubectl\s+(?:apply|delete|exec|patch|scale|edit|replace|rollout|drain|cordon)\b
+                  | \bhelm\s+(?:install|upgrade|uninstall|delete|rollback)\b
+                  | \b(?:vercel|netlify|firebase|fly|heroku)\s+(?:\S+\s+){0,3}?(?:--prod\b|deploy\b)
+                  | \b(?:prod|production)(?:/[\w-]+)?\s+(?:mutations?|writes?|changes?|deploy\w*|databases?|db|migrations?|data|promote|releases?)\b
+                  | \b(?:mutat\w*|writ\w*|migrat\w*|delet\w*|drop\w*|chang\w*|modif\w*|updat\w*)\s+(?:\w+\s+){0,3}?(?:against|on|in|to)\s+(?:the\s+)?(?:prod|production)\b
+                    # Push or merge to the default branch, approving pull requests.
+                  | \bpush(?:es|ing)?\s+(?:-u\s+|--set-upstream\s+)?(?:(?:directly\s+)?to\s+)?(?:(?:the\s+)?origin\s+|origin/)?(?:main|master|trunk|production|prod)\b
+                  | \bmerg(?:e|es|ing)\s+(?:[\w./-]+\s+){0,4}?(?:in)?to\s+(?:origin/)?(?:main|master|trunk)\b
+                  | \bgh\s+pr\s+merge\b | \bpr\s+review\s+(?:\S+\s+)*?--approve\b
+                  | \bapprov(?:e|es|ing)\s+(?:its\s+own\s+|their\s+own\s+|the\s+agent[’']s\s+)?(?:pull\s+requests?|PRs|merge\s+requests?)\b
+                  | \b(?:push|pushes|pushing|merge|merges|merging)\b (?: (?! \b(?:not|never|no|except|unless|but|other\s+than|excluding|without)\b ) [^.;!?] ){1,80}? \b(?:to|into|onto)\s+(?:the\s+)?(?:origin/)?(?:main|master|trunk)\b (?!\s+(?:menu|page|process|thread|window|screen|function|module|file|entry|loop)\b) (?!\.\w)
+                    # The Fetch tool with no host or site named.
+                  | (?: (?<![\w-])web\s*fetch(?:es)?\b | (?<!^)(?<![.;!?:]\s)(?<![\w-])(?-i:Fetch)\b | (?<![\w-])(?<!git\s)fetch(?:es)?\s+(?:calls?|requests?|tool\s+calls?)\b | \bthe\s+fetch\s+tool\b )
+                    (?! (?:[^.;!?]|\.(?=\w))*? (?&fhost) )
+                    # Writes outside the workspace, and to agent and editor config.
+                  | (?&wverb) (?:[^.;!?]|\.(?=\w)){0,80}? (?:~/|\$HOME\b|%USERPROFILE%|(?<![\w.])/etc/|outside\s+(?:of\s+)?(?:the|this)\s+(?:workspace|repo|repository|project)|\.(?:bash|zsh)rc\b|\.(?:bash_)?profile\b|shell\s+rc|anywhere\s+on\s+(?:the|this|my)\s+(?:machine|system|disk|computer))
+                  | (?&wverb) (?:[^.;!?]|\.(?=\w)){0,120}? (?&cfgpath)
+                  | (?&cfgpath) (?:[^.;!?]|\.(?=\w)){0,60}? (?&wverb)
+                    # Inline code.
+                  | \b(?:python[23]?|py|node|nodejs|deno|bun|ruby|perl|php|bash|sh|zsh|pwsh|powershell)\s+-(?:c|e|-eval|command)\b (?!(?&narrow))
+                  | \binline\s+(?:python|node|javascript|js|scripts?|code|shell)\b | (?<![\w-])eval(?![\w-])
+                    # Every script in a folder: scripts under a path, or a run of a glob.
+                  | (?<![\w-])(?:scripts?|binaries|executables|programs)\s+(?:(?:located|kept|stored)\s+)?(?:in|under|from|inside|within)\s+(?:the\s+)?[`'"]?(?=[\w.*~/-]*/)(?:\.{0,2}/)?[\w.-]+(?:/[\w.*-]*)*
+                  | \b(?:run|running|runs|execut\w*|invok\w*|sourc\w*|scripts?|bash|sh|zsh|python[23]?|node|pwsh|powershell)\b [\s(`'"]+ (?:[\w-]+[\s(`'"]+){0,2}? (?:\.{0,2}/)?[\w.-]+(?:/[\w.-]+)*/\*(?:\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|ps1|bat|cmd|rb|pl))?(?![\w.])
+                  | (?:\.{0,2}/)?[\w.-]+(?:/[\w.-]+)*/\*(?:\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|ps1|bat|cmd|rb|pl))?(?![\w.]) [\s)`'"]+ scripts?\b
+                  | \b(?:treat|consider|regard|assume|mark)\s+(?:the\s+)?[`'"]?(?:\.{0,2}/)?[\w.-]+(?:/[\w.*-]*)*/[`'"]?\s+(?:\w+\s+){0,3}?as\s+(?:always\s+)?(?:safe|trusted|harmless|benign|pre-?approved|approved)\b )
+                )
+                ^ (?: .*? (?: [.;!?]\s+ | \bbut\s+ | \)[\s,]* ) )??
+                (?! (?: (?!\bbut\b) (?: [^.;!?,:] | \.(?=[\w/*~]) ) )*? (?&blockintent) )
+                (?: (?: (?! (?&neg) ) (?&ch) )*?
+                    (?: (?&override) | (?&negreview) | (?&posture) | (?&universal) | (?&classgrant) | (?&wholeserver) | (?&risky) )
+                  | (?! (?: (?!\bbut\b) (?: [^.;!?] | \.(?=[\w/*~]) ) )*? (?&subcmd) )
+                    (?: (?! (?&neg) ) (?&ch) )*? (?&rmlist) )
+          - focus-metavariable: $V
+      # block_instructions: steering toward blocking, so a risky action named here is the
+      # point. Flag only an entry that turns review off: a classifier override, or "never
+      # block" / "do not ask about" anything, any call, or a whole tool class.
+      - patterns:
+          - pattern-inside: '"autoRun": {...}'
+          - pattern: '"block_instructions": [..., "$V", ...]'
+          - metavariable-regex:
+              metavariable: $V
+              regex: |-
+                (?ix)
+                (?(DEFINE)
+                # --- autoRun override test (begin): build.py keeps this block identical in
+                # both branches of cursor-permissions-allow-instructions; edit both together. ---
+                # (?&ch): one character of the current sentence. A dot inside a file name or
+                # path (check.py, ./scripts) does not end it; "but" starts a new clause.
+                (?<ch> (?! \bbut\b ) (?: [^.;!?] | \.(?=[\w/*~]) ) )
+                # (?&revw): review words. "do not block", "never ask", and "no need to
+                # confirm" steer toward allowing, so they are not a scope negation.
+                (?<revw> (?: ask|asking|prompt\w*|block\w*|hold\w*|requir\w*|interrupt\w*|wait\w*|stop\w*|question\w*|flag\w*|reject\w*|deny\w*|denied|gat(?:e|es|ing)|escalat\w*|confirm\w*|need\w* ) \b )
+                # (?&neg): a word that scopes what follows it out ("not", "except",
+                # "non-destructive", "read-only"). "without asking" is not one.
+                (?<neg>
+                    \b(?:not|never)\b (?! \s+ (?:\w+\s+)?? (?&revw) )
+                  | n[’']t\b (?! \s+ (?:\w+\s+)?? (?&revw) )
+                  | \bno\b (?! \s+ (?:need|approval|prompts?|confirmation|review|questions|interruptions?|manual)\b )
+                  | \bwithout\b (?! \s+ (?:\w+\s+){0,2}? (?:ask\w*|prompt\w*|approv\w*|confirm\w*|review\w*|interrupt\w*|wait\w*|manual|extra|click\w*|permission) )
+                  | \b(?:except|excluding|unless|nor|avoid|neither|cannot|read-only|readonly|read\s+only)\b
+                  | \bnon-(?=[a-z]) )
+                # (?&override): text aimed at the classifier's own judgment: ignore the
+                # policy, turn off review or the sandbox, claims of prior approval or accepted
+                # risk, "regardless of", "even if it looks dangerous".
+                (?<override>
+                    \b(?:ignor\w*|disregard\w*|overrid(?:e|es|ing)|overrul\w*|bypass\w*|forget|supersed\w*) (?:\s+[\w’'-]+){0,4}? \s+ (?:instructions?|block[_\s]instructions|rules|polic(?:y|ies)|guidelines|guardrails|restrictions|safety|security|classifier|auto-?review|approval\s+prompts?|approvals?|sandbox(?:ing)?)\b
+                  | \b(?:disabl\w*|turn(?:s|ing)?\s+off|switch(?:es|ing)?\s+off|deactivat\w*|circumvent\w*|escap\w*|leav(?:e|es|ing))\s+(?:the\s+|any\s+|all\s+)?(?:auto-?review|classifier|sandbox(?:ing)?|safety\s+(?:checks?|reviews?)|security\s+(?:checks?|reviews?)|approval\s+prompts?|guardrails|protections?)\b
+                  | \bsandbox\s+(?:disabl\w*|bypass\w*|off)\b
+                  | \brequired_permissions\W{1,4}all\b
+                  | \b(?:takes?|has|have|having)\s+(?:precedence|priority)\s+over\b
+                  | \bpre-?(?:approved|authori[sz]ed|cleared|vetted)\b
+                  | \balready\s+(?:been\s+)?(?:approved|authori[sz]ed|cleared|consented)\b
+                  | \b(?:accepted|acknowledged|understands?|knows?)\s+(?:the\s+|all\s+)?(?:consequences|risks?)\b
+                  | \b(?:consequences|risks?)\s+(?:are|is)\s+(?:\w+\s+)?(?:known|accepted|understood|acknowledged)\b
+                  | \bstanding\s+(?:approval|go|authori[sz]ation|permission|consent)\b
+                  | \buser\s+override\b
+                  | \b(?:user|owner|developer|maintainers?|admins?|founder|team|we|i)\s+(?:has|have)\s+(?:already\s+|explicitly\s+|previously\s+)?(?:approved|authori[sz]ed|consented\s+to|signed\s+off\s+on)\b
+                  | \bregardless\s+of\s+(?:the\s+|any\s+|its\s+|their\s+)?(?:risks?|danger|consequences|safety|block\w*|instructions|polic(?:y|ies)|rules|what)\b
+                  | \beven\s+(?:if|when)\s+(?:it|they|this|that|(?:the|an?|any|this|that)\s+[\w-]+)\s+(?:looks?|seems?|appears?|is|are)\s+(?:\w+\s+)?(?:dangerous|risky|unsafe|destructive|suspicious|malicious|irreversible|privileged|harmful)\b
+                  | \b(?:the\s+)?(?:classifier|reviewer|auto-?review(?:er)?)\s+(?:must|should|shall|will|can)\s+(?:always\s+)?(?:allow|approve|pass|accept)\b )
+                # --- autoRun override test (end) ---
+                (?<negblock>
+                    (?:\bdo\s+not|\bdon[’']t|\bnever|\bno\s+need\s+to)\s+(?:ever\s+)?(?:block|flag|reject|deny|review|hold|gate|question|escalate|ask\s+about|prompt\s+(?:for|on|about))\s+(?:(?:on|for|about)\s+)?
+                    (?:anything|everything|(?:any|all|every)\b(?!\s+(?:of\s+)?(?:the\s+)?(?:above|following|these|those|listed))|tool\s+calls|(?:shell|terminal|mcp|network|fetch)\b) )
+                )
+                ^ (?: .*? (?: [.;!?]\s+ | \bbut\s+ | \)[\s,]* ) )??
+                (?: (?! (?&neg) ) (?&ch) )*?
+                (?: (?&override) | (?&negblock) )
+          - focus-metavariable: $V
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM01:2026 - Prompt Injection"
+        - "LLM01:2025 - Prompt Injection"
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI01 - Agent Goal Hijack"
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-AC.11.2 - AI Code-Review & Assistant Bot Hardening"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0081 - Modify AI Agent Configuration"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-1427: Improper Neutralization of Input Used for LLM Prompting"
+        - "CWE-250: Execution with Unnecessary Privileges"
+      # The words of an instruction can't show everything the classifier will make of it;
+      # whole-class approvals and override phrases are near-certain.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [cursor]
+      references:
+        # Cursor docs, read 2026-10-23: autoRun.allow_instructions / block_instructions
+        # (string[]), per-user and per-repo files concatenated; Auto-review shipped in 3.6.
+        - https://cursor.com/docs/reference/permissions
+        - https://cursor.com/docs/agent/security/run-modes
+        - https://cursor.com/changelog/auto-review
+        - https://cursor.com/blog/agent-autonomy-auto-review
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM01_PromptInjection.md
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md
+        - https://cwe.mitre.org/data/definitions/1427.html

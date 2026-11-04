@@ -1,0 +1,20 @@
+name: Run artifacts
+version: 0.1.0
+schema: v1
+mcpServers:
+  - name: Run artifacts
+    command: docker
+    args:
+      - run
+      - -i
+      - --rm
+      - -v
+      - /:/projects/host:ro
+      - mcp/filesystem:1.0.2
+      - /projects/host/tmp/ci-fixer-artifacts
+  - name: Fixture logs
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-filesystem@2.0.0"
+      - ./test/fixtures/logs

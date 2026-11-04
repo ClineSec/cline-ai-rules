@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "tickets": {
+      // ruleid: project-mcp-server-no-prompt-roo
+      "command": "uvx",
+      "args": ["example-org-tickets-mcp==2.1.0"],
+      "alwaysAllow": ["get_ticket"],
+      "disabled": false
+    },
+    "scratch": {
+      // ok: project-mcp-server-no-prompt-roo
+      "command": "node",
+      "args": ["scripts/scratch-mcp.mjs"],
+      "disabled": true
+    },
+    "kb": {
+      "type": "streamable-http",
+      // ok: project-mcp-server-no-prompt-roo
+      "url": "https://mcp.example.com/kb"
+    }
+  }
+}

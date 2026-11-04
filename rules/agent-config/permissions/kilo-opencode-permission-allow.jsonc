@@ -1,0 +1,239 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // "permission": { "bash": "allow" },
+  "permission": {
+    // ruleid: kilo-opencode-permission-allow
+    "*": "allow",
+    "doom_loop": "ask",
+    // ok: kilo-opencode-permission-allow
+    "webfetch": "allow",
+    "read": {
+      // ok: kilo-opencode-permission-allow
+      "*": "allow",
+      "*.env": "ask"
+    }
+  },
+  "agent": {
+    "everything": {
+      // ruleid: kilo-opencode-permission-allow
+      "permission": "allow"
+    },
+    "builder": {
+      "permission": {
+        "*": "ask",
+        // ruleid: kilo-opencode-permission-allow
+        "bash": "allow",
+        // ruleid: kilo-opencode-permission-allow
+        "edit": "allow",
+        // ruleid: kilo-opencode-permission-allow
+        "external_directory": "allow",
+        // ok: kilo-opencode-permission-allow
+        "task": "allow"
+      }
+    },
+    "patterns": {
+      "permission": {
+        "bash": {
+          // ruleid: kilo-opencode-permission-allow
+          "*": "allow",
+          "rm -rf *": "deny",
+          "git push *": "ask"
+        },
+        "edit": {
+          // ruleid: kilo-opencode-permission-allow
+          "**": "allow"
+        },
+        "external_directory": {
+          // ruleid: kilo-opencode-permission-allow
+          "~/**": "allow",
+          "~/.ssh/**": "deny"
+        }
+      }
+    },
+    "wildcard-map": {
+      "permission": {
+        "*": {
+          // ruleid: kilo-opencode-permission-allow
+          "*": "allow"
+        }
+      }
+    },
+    "runners": {
+      "permission": {
+        "bash": {
+          "*": "ask",
+          // ok: kilo-opencode-permission-allow
+          "git status *": "allow",
+          // ok: kilo-opencode-permission-allow
+          "npm test": "allow",
+          // ruleid: kilo-opencode-permission-allow
+          "bash -c *": "allow"
+        }
+      }
+    },
+    "interpreters": {
+      "permission": {
+        "bash": {
+          "*": "ask",
+          // ok: kilo-opencode-permission-allow
+          "python -m pytest *": "allow",
+          // ok: kilo-opencode-permission-allow
+          "npm test *": "allow",
+          // ok: kilo-opencode-permission-allow
+          "npm run lint *": "allow",
+          // ok: kilo-opencode-permission-allow
+          "npx eslint *": "allow",
+          // ok: kilo-opencode-permission-allow
+          "node --test *": "allow",
+          // ruleid: kilo-opencode-permission-allow
+          "uv run *": "allow"
+        }
+      }
+    },
+    "interpreter-path": {
+      "permission": {
+        // ruleid: kilo-opencode-permission-allow
+        "bash": { "*": "ask", ".venv/bin/python3 -c *": "allow" }
+      }
+    },
+    "package-runner": {
+      "permission": {
+        // ruleid: kilo-opencode-permission-allow
+        "bash": { "*": "ask", "npx *": "allow" }
+      }
+    },
+    "root": {
+      "permission": {
+        "bash": {
+          "*": "ask",
+          // ruleid: kilo-opencode-permission-allow
+          "sudo *": "allow"
+        }
+      }
+    },
+    "scoped": {
+      "permission": {
+        "edit": {
+          "*": "ask",
+          // ok: kilo-opencode-permission-allow
+          "docs/**": "allow"
+        },
+        "external_directory": {
+          // ok: kilo-opencode-permission-allow
+          "~/projects/shared/**": "allow"
+        },
+        "bash": {
+          // ok: kilo-opencode-permission-allow
+          "*": "ask"
+        }
+      }
+    },
+    "mcp": {
+      "permission": {
+        // ruleid: kilo-opencode-permission-allow
+        "github_*": "allow",
+        // ok: kilo-opencode-permission-allow
+        "github_get_*": "allow",
+        // ok: kilo-opencode-permission-allow
+        "github_list_issues": "allow",
+        // ok: kilo-opencode-permission-allow
+        "playwright_*": "ask",
+        // ruleid: kilo-opencode-permission-allow
+        "linear_*": { "*": "allow" }
+      }
+    },
+    "overridden": {
+      "permission": {
+        // ok: kilo-opencode-permission-allow
+        "bash": "allow",
+        "*": "ask"
+      }
+    },
+    "overridden-pattern": {
+      "permission": {
+        "bash": {
+          // ok: kilo-opencode-permission-allow
+          "sh *": "allow",
+          "*": "deny"
+        }
+      }
+    },
+    "overridden-outer": {
+      "permission": {
+        "bash": {
+          // ok: kilo-opencode-permission-allow
+          "*": "allow"
+        },
+        "*": "ask",
+        // ruleid: kilo-opencode-permission-allow
+        "edit": "allow"
+      }
+    },
+    "commented": {
+      "permission": {
+        // "bash": "allow",
+        /* "edit": "allow", */
+        // ok: kilo-opencode-permission-allow
+        "bash": "ask"
+      }
+    },
+    "legacy": {
+      "tools": {
+        // ruleid: kilo-opencode-permission-allow
+        "bash": true,
+        // ok: kilo-opencode-permission-allow
+        "webfetch": true,
+        // ruleid: kilo-opencode-permission-allow
+        "write": true,
+        // ruleid: kilo-opencode-permission-allow
+        "jira_*": true,
+        // ok: kilo-opencode-permission-allow
+        "patch": false
+      }
+    },
+    "legacy-with-permission": {
+      "tools": {
+        // ok: kilo-opencode-permission-allow
+        "bash": true
+      },
+      "permission": {
+        "bash": "ask"
+      }
+    },
+    "legacy-other-permission": {
+      "tools": {
+        // ruleid: kilo-opencode-permission-allow
+        "edit": true,
+        // ok: kilo-opencode-permission-allow
+        "bash": true
+      },
+      "permission": {
+        "bash": { "*": "ask", "npm test": "allow" },
+        "skill": { "*": "deny" }
+      }
+    },
+    "legacy-star-permission": {
+      "permission": { "*": "ask" },
+      "tools": {
+        // ok: kilo-opencode-permission-allow
+        "write": true,
+        // ok: kilo-opencode-permission-allow
+        "notion_*": true
+      }
+    },
+    "legacy-overridden": {
+      "tools": {
+        // ok: kilo-opencode-permission-allow
+        "bash": true,
+        "*": false
+      }
+    },
+    "prompted": {
+      "prompt": "Answer in JSON such as {\"permission\": {\"bash\": \"allow\"}, \"tools\": {\"bash\": true}}.",
+      "permission": {
+        // ok: kilo-opencode-permission-allow
+        "edit": "deny"
+      }
+    }
+  }
+}

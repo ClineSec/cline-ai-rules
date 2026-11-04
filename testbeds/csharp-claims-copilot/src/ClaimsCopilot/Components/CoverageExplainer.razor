@@ -1,0 +1,46 @@
+@using Ganss.Xss
+@using Markdig
+@using Microsoft.SemanticKernel
+@inject Kernel Kernel
+
+<div class="coverage-explainer">
+    <h4>What the policy says about this loss</h4>
+    @if (_loading)
+    {
+        <p class="muted">Reading the policy wording...</p>
+    }
+    else
+    {
+        <div class="explanation">@((MarkupString)Markdown.ToHtml(_explanation))</div>
+        <div class="exclusions">@((MarkupString)_exclusionsHtml)</div>
+        <p class="disclaimer">@_disclaimer</p>
+    }
+</div>
+
+@code {
+    private static readonly HtmlSanitizer Sanitizer = new();
+
+    [Parameter, EditorRequired] public string ClaimId { get; set; } = "";
+    [Parameter, EditorRequired] public string PolicyForm { get; set; } = "";
+
+    private bool _loading = true;
+    private string _explanation = "";
+    private string _exclusionsHtml = "";
+    private string _disclaimer = "";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        var explanation = await Kernel.InvokePromptAsync(
+            $"Explain in markdown how policy form {PolicyForm} applies to claim {ClaimId}. Do not decide coverage.");
+        _explanation = explanation.GetValue<string>() ?? "";
+
+        var exclusions = await Kernel.InvokePromptAsync(
+            $"List the exclusions in policy form {PolicyForm} that may apply to claim {ClaimId}, as markdown.");
+        _exclusionsHtml = Sanitizer.Sanitize(Markdown.ToHtml(exclusions.GetValue<string>() ?? ""));
+
+        var disclaimer = await Kernel.InvokePromptAsync("One sentence reminding the adjuster that this is not a coverage decision.");
+        _disclaimer = disclaimer.ToString();
+        _loading = false;
+    }
+}

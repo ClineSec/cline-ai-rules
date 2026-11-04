@@ -1,0 +1,25 @@
+{
+  "servers": {
+    "buildbox": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "BUILDBOX_DATABASE_URL",
+        "-v", "${workspaceFolder}:/workspace",
+        "ghcr.io/example-org/buildbox-mcp:1.8.0", "buildbox"
+      ]
+    },
+    "buildbox-fetch": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "BUILDBOX_DATABASE_URL",
+        "-v", "${workspaceFolder}:/workspace",
+        "-v", "${userHome}:/root:ro",
+        "ghcr.io/example-org/buildbox-mcp:1.8.0", "buildbox"
+      ]
+    }
+  }
+}

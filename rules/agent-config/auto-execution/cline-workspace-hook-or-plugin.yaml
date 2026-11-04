@@ -1,0 +1,102 @@
+rules:
+  - id: cline-workspace-hook-or-plugin
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This file is a Cline hook or plugin committed to the repository, and Cline runs it on its
+      own. Workspace hooks in .clinerules/hooks/ and .cline/hooks/ run at task start and resume,
+      before and after every tool call, on each prompt, and when a task ends; every .js and .ts
+      module under .cline/plugins/ is imported when a session starts. Hooks are on by default and
+      nothing asks before a run: the VS Code extension only waits for VS Code's one-time
+      workspace trust, and the Cline CLI has no trust prompt. Anyone who can change this file,
+      through a pull request, a compromised dependency, or a worm that writes into the repo, runs
+      code with the developer's credentials on every machine that runs Cline in the project. Keep
+      personal hooks and plugins in ~/Documents/Cline/Hooks, ~/.cline/hooks, or ~/.cline/plugins;
+      if a shared one is intended, protect these folders with CODEOWNERS review like any code
+      that runs on checkout.
+    paths:
+      include:
+        # Hook files are named after their event, with no extension (the VS Code extension on
+        # macOS and Linux runs these when executable) or one of .sh .bash .zsh .js .mjs .cjs .ts
+        # .mts .cts .py .ps1 (the CLI and SDK pick an interpreter from the extension or shebang;
+        # the extension runs .ps1 on Windows). The CLI and SDK match the name in any case, so
+        # each letter is a character class; globs have no {a,b} alternation, hence ".*".
+        - ".clinerules/hooks/[Tt][Aa][Ss][Kk][Ss][Tt][Aa][Rr][Tt]"
+        - ".clinerules/hooks/[Tt][Aa][Ss][Kk][Ss][Tt][Aa][Rr][Tt].*"
+        - ".clinerules/hooks/[Tt][Aa][Ss][Kk][Rr][Ee][Ss][Uu][Mm][Ee]"
+        - ".clinerules/hooks/[Tt][Aa][Ss][Kk][Rr][Ee][Ss][Uu][Mm][Ee].*"
+        - ".clinerules/hooks/[Tt][Aa][Ss][Kk][Cc][Aa][Nn][Cc][Ee][Ll]"
+        - ".clinerules/hooks/[Tt][Aa][Ss][Kk][Cc][Aa][Nn][Cc][Ee][Ll].*"
+        - ".clinerules/hooks/[Tt][Aa][Ss][Kk][Cc][Oo][Mm][Pp][Ll][Ee][Tt][Ee]"
+        - ".clinerules/hooks/[Tt][Aa][Ss][Kk][Cc][Oo][Mm][Pp][Ll][Ee][Tt][Ee].*"
+        - ".clinerules/hooks/[Tt][Aa][Ss][Kk][Ee][Rr][Rr][Oo][Rr]"
+        - ".clinerules/hooks/[Tt][Aa][Ss][Kk][Ee][Rr][Rr][Oo][Rr].*"
+        - ".clinerules/hooks/[Pp][Rr][Ee][Tt][Oo][Oo][Ll][Uu][Ss][Ee]"
+        - ".clinerules/hooks/[Pp][Rr][Ee][Tt][Oo][Oo][Ll][Uu][Ss][Ee].*"
+        - ".clinerules/hooks/[Pp][Oo][Ss][Tt][Tt][Oo][Oo][Ll][Uu][Ss][Ee]"
+        - ".clinerules/hooks/[Pp][Oo][Ss][Tt][Tt][Oo][Oo][Ll][Uu][Ss][Ee].*"
+        - ".clinerules/hooks/[Uu][Ss][Ee][Rr][Pp][Rr][Oo][Mm][Pp][Tt][Ss][Uu][Bb][Mm][Ii][Tt]"
+        - ".clinerules/hooks/[Uu][Ss][Ee][Rr][Pp][Rr][Oo][Mm][Pp][Tt][Ss][Uu][Bb][Mm][Ii][Tt].*"
+        - ".clinerules/hooks/[Pp][Rr][Ee][Cc][Oo][Mm][Pp][Aa][Cc][Tt]"
+        - ".clinerules/hooks/[Pp][Rr][Ee][Cc][Oo][Mm][Pp][Aa][Cc][Tt].*"
+        - ".clinerules/hooks/[Ss][Ee][Ss][Ss][Ii][Oo][Nn][Ss][Hh][Uu][Tt][Dd][Oo][Ww][Nn]"
+        - ".clinerules/hooks/[Ss][Ee][Ss][Ss][Ii][Oo][Nn][Ss][Hh][Uu][Tt][Dd][Oo][Ww][Nn].*"
+        - ".cline/hooks/[Tt][Aa][Ss][Kk][Ss][Tt][Aa][Rr][Tt]"
+        - ".cline/hooks/[Tt][Aa][Ss][Kk][Ss][Tt][Aa][Rr][Tt].*"
+        - ".cline/hooks/[Tt][Aa][Ss][Kk][Rr][Ee][Ss][Uu][Mm][Ee]"
+        - ".cline/hooks/[Tt][Aa][Ss][Kk][Rr][Ee][Ss][Uu][Mm][Ee].*"
+        - ".cline/hooks/[Tt][Aa][Ss][Kk][Cc][Aa][Nn][Cc][Ee][Ll]"
+        - ".cline/hooks/[Tt][Aa][Ss][Kk][Cc][Aa][Nn][Cc][Ee][Ll].*"
+        - ".cline/hooks/[Tt][Aa][Ss][Kk][Cc][Oo][Mm][Pp][Ll][Ee][Tt][Ee]"
+        - ".cline/hooks/[Tt][Aa][Ss][Kk][Cc][Oo][Mm][Pp][Ll][Ee][Tt][Ee].*"
+        - ".cline/hooks/[Tt][Aa][Ss][Kk][Ee][Rr][Rr][Oo][Rr]"
+        - ".cline/hooks/[Tt][Aa][Ss][Kk][Ee][Rr][Rr][Oo][Rr].*"
+        - ".cline/hooks/[Pp][Rr][Ee][Tt][Oo][Oo][Ll][Uu][Ss][Ee]"
+        - ".cline/hooks/[Pp][Rr][Ee][Tt][Oo][Oo][Ll][Uu][Ss][Ee].*"
+        - ".cline/hooks/[Pp][Oo][Ss][Tt][Tt][Oo][Oo][Ll][Uu][Ss][Ee]"
+        - ".cline/hooks/[Pp][Oo][Ss][Tt][Tt][Oo][Oo][Ll][Uu][Ss][Ee].*"
+        - ".cline/hooks/[Uu][Ss][Ee][Rr][Pp][Rr][Oo][Mm][Pp][Tt][Ss][Uu][Bb][Mm][Ii][Tt]"
+        - ".cline/hooks/[Uu][Ss][Ee][Rr][Pp][Rr][Oo][Mm][Pp][Tt][Ss][Uu][Bb][Mm][Ii][Tt].*"
+        - ".cline/hooks/[Pp][Rr][Ee][Cc][Oo][Mm][Pp][Aa][Cc][Tt]"
+        - ".cline/hooks/[Pp][Rr][Ee][Cc][Oo][Mm][Pp][Aa][Cc][Tt].*"
+        - ".cline/hooks/[Ss][Ee][Ss][Ss][Ii][Oo][Nn][Ss][Hh][Uu][Tt][Dd][Oo][Ww][Nn]"
+        - ".cline/hooks/[Ss][Ee][Ss][Ss][Ii][Oo][Nn][Ss][Hh][Uu][Tt][Dd][Oo][Ww][Nn].*"
+        # Cline plugins: every .js and .ts file under .cline/plugins/, outside node_modules.
+        - ".cline/plugins/**/*.ts"
+        - ".cline/plugins/**/*.js"
+      exclude:
+        - "node_modules"
+    # Checked against the Cline source at v4.1.25 (VS Code extension) and the SDK it ships,
+    # 2026-10-23: hook discovery (apps/vscode hook-factory.ts, sdk hook-file-config.ts and
+    # storage/paths.ts), hooksEnabled defaulting to true (state-keys.ts), plugin discovery and
+    # import (storage/paths.ts discoverPluginModulePaths, plugin-config-loader.ts), and the
+    # extension's manifest, which declares no untrustedWorkspaces support.
+    # The file itself is the code that runs, so the finding lands on its first line of code or
+    # its shebang, after blank lines and comments.
+    pattern-regex: '\A\x{FEFF}?(?:[ \t\r\n]++|#(?!!)[^\n]*+|//[^\n]*+|/\*(?s:.*?)\*/|<\#(?s:.*?)\#>)*+\K\S[^\n]*'
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+        - "ASI04 - Agentic Supply Chain Vulnerabilities"
+      mitre-atlas:
+        - "AML.T0081 - Modify AI Agent Configuration"
+      cwe:
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      technology: [cline, cline-cli]
+      references:
+        - https://docs.cline.bot/customization/hooks
+        - https://github.com/cline/cline/blob/v4.1.25/apps/vscode/src/core/hooks/hook-factory.ts
+        - https://github.com/cline/cline/blob/v4.1.25/sdk/packages/core/src/hooks/hook-file-config.ts
+        - https://github.com/cline/cline/blob/v4.1.25/sdk/packages/shared/src/storage/paths.ts
+        - https://code.visualstudio.com/api/extension-guides/workspace-trust
+        - https://www.sonarsource.com/blog/mini-shai-hulud-targets-ai-coding-agents/
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md

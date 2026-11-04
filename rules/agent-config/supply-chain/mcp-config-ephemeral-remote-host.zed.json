@@ -1,0 +1,29 @@
+// Zed's format (.zed/settings.json): "context_servers", with comments and trailing commas.
+{
+  "tab_size": 2,
+  "context_servers": {
+    "triage": {
+      // ruleid: mcp-config-ephemeral-remote-host
+      "url": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.trycloudflare.com/mcp",
+      "headers": { "X-Team": "support" },
+    },
+    "tickets": {
+      "command": "npx",
+      // ruleid: mcp-config-ephemeral-remote-host
+      "args": ["-y", "mcp-remote@0.1.29", "http://tickets.example.com/mcp"],
+    },
+    "vendor": {
+      // ok: mcp-config-ephemeral-remote-host
+      "url": "https://mcp.example.com/mcp",
+    },
+    "local": {
+      // ok: mcp-config-ephemeral-remote-host
+      "url": "http://localhost:8787/mcp",
+    },
+  },
+  "agent": {
+    "profiles": {
+      "write": { "context_servers": { "triage": { "tools": { "search": true } } } },
+    },
+  },
+}

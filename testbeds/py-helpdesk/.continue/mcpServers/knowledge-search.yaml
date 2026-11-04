@@ -1,0 +1,21 @@
+name: Knowledge search
+version: 0.1.0
+schema: v1
+mcpServers:
+  - name: KB search
+    type: streamable-http
+    url: https://kb-search.example.invalid/mcp
+    requestOptions:
+      headers:
+        X-Api-Key: FAKE0kbsearch0TEST0continue01
+        X-Team: helpdesk
+  - name: Runbook search
+    type: streamable-http
+    url: https://runbook-search.example.invalid/mcp
+    apiKey: ${{ secrets.RUNBOOK_SEARCH_KEY }}
+  - name: KB search (lab)
+    type: sse
+    url: http://198.51.100.23:8080/sse
+  - name: KB search (dev container)
+    type: streamable-http
+    url: http://host.docker.internal:8040/mcp/kb

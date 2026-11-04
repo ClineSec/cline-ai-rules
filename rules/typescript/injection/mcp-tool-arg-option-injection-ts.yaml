@@ -1,0 +1,385 @@
+rules:
+  - id: mcp-tool-arg-option-injection-ts
+    # JavaScript/TypeScript twin of mcp-tool-arg-option-injection: a tool argument becomes
+    # an argv item of git or another option-parsing program with no "--" before it, through
+    # child_process (no shell), execa, cross-spawn, Bun.spawn, simple-git, or a $`...`
+    # template (execa, Bun Shell, zx), which escape shell syntax but not options (Bun's docs
+    # call this out). simple-git 4.0.2 blocks the options that run commands
+    # (--upload-pack, --exec, -c core.* writes) but not --output, which overwrites files.
+    # The pattern-sources block and the first sanitizer are shared with
+    # mcp-tool-arg-to-shell-ts (build.py SHARED_BLOCKS): edit both together.
+    # Resource templates and prompts (since 2026-10-25): registerResource with a
+    # ResourceTemplate (the callback gets the filled-in URI and its variables), registerPrompt
+    # with argsSchema (validated before the handler runs, so the schema sanitizer covers it),
+    # the 1.32.1 resource() / prompt() overloads, setRequestHandler("resources/read" |
+    # "prompts/get") and ReadResourceRequestSchema / GetPromptRequestSchema, and punkpeye
+    # fastmcp 4.23.5 addResourceTemplate / addPrompt load(args), checked at v2.3.1 and 1.32.1.
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      An MCP tool argument, resource-template parameter, or prompt argument is passed to git
+      (or ssh, rsync, tar, curl, wget, rg) as a command-line argument with no `--` before it
+      and no check for a leading dash. The model chooses these values (tool arguments always,
+      resource URIs and prompt arguments in clients that let it), and a prompt injection can
+      choose them for it: a value like `--output=/home/user/.bashrc` (git diff),
+      `--upload-pack=...` (git fetch), `--pre=...` (rg), or `-oProxyCommand=...` (ssh) is read
+      as an option, which can overwrite files or run commands. Put `"--"` before user values
+      where the program accepts it, reject values that start with `-`, or validate them
+      against an anchored pattern in the tool's schema (`z.string().regex(/^[\w./]+$/)`).
+    mode: taint
+    pattern-sources:
+      # The handler's first parameter (the validated arguments object, destructured or not).
+      # `($ARGS, ...) => {...}` also matches function expressions and expression bodies.
+      # Resource templates and prompts count since 2026-10-25: the client fills a template's
+      # variables and a prompt's arguments, and clients let the model fill them.
+      - patterns:
+          - pattern-either:
+              - pattern: $SERVER.registerTool($NAME, $CONFIG, ($ARGS, ...) => {...})
+              # Deprecated v1 overloads: the handler is the last argument. tool(name, cb) and
+              # tool(name, description, cb) register zero-argument tools whose handler only
+              # gets the request context.
+              - patterns:
+                  - pattern: $SERVER.tool($NAME, $X, ..., ($ARGS, ...) => {...})
+                  - pattern-not: $SERVER.tool($NAME, "$DESC", ($ARGS, ...) => {...})
+              - pattern: '$SERVER.addTool({..., execute: ($ARGS, ...) => {...}, ...})'
+              # Prompts: registerPrompt(name, { argsSchema }, (args, ctx) => ...). Without
+              # argsSchema the handler gets only the context. The v1 prompt(name,
+              # [description,] argsSchema, cb) overloads are like tool()'s.
+              - pattern: '$SERVER.registerPrompt($NAME, {..., argsSchema: $SCHEMA, ...}, ($ARGS, ...) => {...})'
+              - patterns:
+                  - pattern: $SERVER.registerPrompt($NAME, $CONFIG, ($ARGS, ...) => {...})
+                  - pattern-not: '$SERVER.registerPrompt($NAME, {...}, ($ARGS, ...) => {...})'
+              - patterns:
+                  - pattern: $SERVER.prompt($NAME, $X, ..., ($ARGS, ...) => {...})
+                  - pattern-not: $SERVER.prompt($NAME, "$DESC", ($ARGS, ...) => {...})
+              # Resource templates: registerResource(name, new ResourceTemplate("x://{name}",
+              # ...), config, (uri, variables, ctx) => ...) and v1 resource(name, template,
+              # [metadata,] cb): the filled-in URI and its variables. A resource at a fixed
+              # URI string gets only that URI.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SERVER.registerResource($NAME, $TPL, $CONFIG, ($ARGS, ...) => {...})
+                      - pattern: $SERVER.registerResource($NAME, $TPL, $CONFIG, ($URI, $ARGS, ...) => {...})
+                      - pattern: $SERVER.resource($NAME, $TPL, ..., ($ARGS, ...) => {...})
+                      - pattern: $SERVER.resource($NAME, $TPL, ..., ($URI, $ARGS, ...) => {...})
+                  - pattern-not: $SERVER.registerResource($NAME, "$FIXED", ...)
+                  - pattern-not: $SERVER.resource($NAME, "$FIXED", ...)
+              # punkpeye fastmcp: addResourceTemplate and addPrompt take load(args, ...).
+              - pattern: '$SERVER.addResourceTemplate({..., load: ($ARGS, ...) => {...}, ...})'
+              - pattern: '$SERVER.addPrompt({..., load: ($ARGS, ...) => {...}, ...})'
+              # Low-level handlers: the request (request.params.arguments, request.params.uri).
+              - patterns:
+                  - pattern: $SERVER.setRequestHandler($KIND, ($ARGS, ...) => {...})
+                  - metavariable-regex:
+                      metavariable: $KIND
+                      regex: ^(?:[\w.]*(?:CallTool|ReadResource|GetPrompt)RequestSchema|["'](?:tools/call|resources/read|prompts/get)["'])$
+              # Claude Agent SDK: tool(name, description, schema, handler).
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import { $TOOL } from "@anthropic-ai/claude-agent-sdk";
+                          ...
+                      - pattern-inside: |
+                          import { $ORIG as $TOOL } from "@anthropic-ai/claude-agent-sdk";
+                          ...
+                  - pattern: $TOOL($NAME, $DESC, $SCHEMA, ($ARGS, ...) => {...}, ...)
+              # A named handler registered elsewhere in the file: registerTool, tool,
+              # registerPrompt, prompt, registerResource, or resource(..., handler), or
+              # setRequestHandler(<call-tool, read-resource, or get-prompt>, handler). Declared
+              # before its registration, it's found by a regex over the declaration (signature and
+              # balanced body) that looks ahead for the registration; NAMED must name the
+              # function. A statement region from every function to a later registration took
+              # about 15 s on a 5,000-line file (OpenGrep 1.30.2). Declared after it, by regions
+              # that start at the registration (hoisting) or at a function that contains it (a
+              # factory such as createServer() with its handlers declared below it).
+              - patterns:
+                  - pattern-either:
+                      - patterns:
+                          - pattern-regex: |-
+                              (?x)
+                              (?(DEFINE)
+                                (?<str> "(?:[^"\\\n]|\\.)*+" | '(?:[^'\\\n]|\\.)*+' | `(?:[^`\\]|\\.)*+` )
+                                (?<com> //[^\n]*+ | /\*(?:[^*]++|\*(?!/))*+\*/ )
+                                (?<br> \{ (?: [^{}"'`/]++ | (?&com) | (?&str) | (?&br) | [/"'`] )*+ \} )
+                                (?<pa> \( (?: [^()"'`/]++ | (?&com) | (?&str) | (?&pa) | [/"'`] )*+ \) )
+                                (?<ang> < (?: [^<>=]++ | =>? | (?&ang) )*+ > )
+                                (?<ty> (?: [^{}()<>=;]++ | (?&ang) | (?&pa) | => )*? )
+                                (?<arg> [^(),"'`/]++ | (?&com) | (?&str) | (?&pa) | [,"'`/] )
+                                (?<fn> (?: \bexport [ \t]++ (?:default [ \t]++)? )? (?: \basync [ \t]++ )? \bfunction\b [ \t]*+ \*? [ \t]*+ \k<NAMED> \b
+                                  \s*+ (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? (?&br) )
+                                (?<arrow> (?: \bexport [ \t]++ )? \b(?:const|let|var) [ \t]++ \k<NAMED> \b \s*+ (?: : (?&ty) )? = \s*+ (?: async\b \s*+ )?
+                                  (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? => \s*+ (?&br) [ \t]*+ ;? )
+                                (?<reg> (?:registerTool|tool|registerPrompt|prompt) \( (?&arg)*? , \s*+ \k<NAMED> \s*+ ,? \s*+ \)
+                                      | (?:registerResource|resource) \( (?: [^(),"'`/]++ | (?&com) | (?&str) | (?&pa) )++ , \s*+ (?!["'`]) (?&arg)*? , \s*+ \k<NAMED> \s*+ ,? \s*+ \)
+                                      | setRequestHandler \( \s*+ (?: [\w$.]*(?:CallTool|ReadResource|GetPrompt)RequestSchema | "(?:tools/call|resources/read|prompts/get)" | '(?:tools/call|resources/read|prompts/get)' ) \s*+ , \s*+ \k<NAMED> \s*+ ,? \s*+ \)
+                                )
+                              )
+                              (?| (?: \bexport [ \t]++ (?:default [ \t]++)? )? (?: \basync [ \t]++ )? \bfunction\b [ \t]*+ \*? [ \t]*+ (?<NAMED>[\w$]++)
+                                  \s*+ (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? (?&br)
+                                | (?: \bexport [ \t]++ )? \b(?:const|let|var) [ \t]++ (?<NAMED>[\w$]++) \s*+ (?: : (?&ty) )? = \s*+ (?: async\b \s*+ )?
+                                  (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? => \s*+ (?&br) [ \t]*+ ;? )
+                              (?= (?: [^.]++ | \.(?!(?&reg)) )*+ \.(?&reg) )
+                          - pattern-either:
+                              - pattern: function $H($ARGS, ...) {...}
+                              - pattern: const $H = ($ARGS, ...) => {...};
+                          - metavariable-comparison:
+                              comparison: str($H) == str($NAMED)
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: "$SERVER.registerTool(..., $H);\n..."
+                              - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.registerTool(..., $H);\n  ...\n}\n..."
+                              - pattern-inside: "$SERVER.tool(..., $H);\n..."
+                              - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.tool(..., $H);\n  ...\n}\n..."
+                              - pattern-inside: "$SERVER.registerPrompt(..., $H);\n..."
+                              - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.registerPrompt(..., $H);\n  ...\n}\n..."
+                              - pattern-inside: "$SERVER.prompt(..., $H);\n..."
+                              - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.prompt(..., $H);\n  ...\n}\n..."
+                              - patterns:
+                                  - pattern-either:
+                                      - pattern-inside: "$SERVER.registerResource($NAME, $TPL, ..., $H);\n..."
+                                      - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.registerResource($NAME, $TPL, ..., $H);\n  ...\n}\n..."
+                                      - pattern-inside: "$SERVER.resource($NAME, $TPL, ..., $H);\n..."
+                                      - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.resource($NAME, $TPL, ..., $H);\n  ...\n}\n..."
+                                  - metavariable-regex:
+                                      metavariable: $TPL
+                                      regex: ^[^"'`]
+                              - patterns:
+                                  - pattern-either:
+                                      - pattern-inside: "$SERVER.setRequestHandler($KIND, $H);\n..."
+                                      - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.setRequestHandler($KIND, $H);\n  ...\n}\n..."
+                                  - metavariable-regex:
+                                      metavariable: $KIND
+                                      regex: ^(?:[\w.]*(?:CallTool|ReadResource|GetPrompt)RequestSchema|["'](?:tools/call|resources/read|prompts/get)["'])$
+                          - pattern-either:
+                              - pattern: function $H($ARGS, ...) {...}
+                              - pattern: const $H = ($ARGS, ...) => {...};
+              # The second parameter of a named resource-template handler: its variables.
+              - patterns:
+                  - pattern-either:
+                      - patterns:
+                          - pattern-regex: |-
+                              (?x)
+                              (?(DEFINE)
+                                (?<str> "(?:[^"\\\n]|\\.)*+" | '(?:[^'\\\n]|\\.)*+' | `(?:[^`\\]|\\.)*+` )
+                                (?<com> //[^\n]*+ | /\*(?:[^*]++|\*(?!/))*+\*/ )
+                                (?<br> \{ (?: [^{}"'`/]++ | (?&com) | (?&str) | (?&br) | [/"'`] )*+ \} )
+                                (?<pa> \( (?: [^()"'`/]++ | (?&com) | (?&str) | (?&pa) | [/"'`] )*+ \) )
+                                (?<ang> < (?: [^<>=]++ | =>? | (?&ang) )*+ > )
+                                (?<ty> (?: [^{}()<>=;]++ | (?&ang) | (?&pa) | => )*? )
+                                (?<arg> [^(),"'`/]++ | (?&com) | (?&str) | (?&pa) | [,"'`/] )
+                                (?<fn> (?: \bexport [ \t]++ (?:default [ \t]++)? )? (?: \basync [ \t]++ )? \bfunction\b [ \t]*+ \*? [ \t]*+ \k<NAMED> \b
+                                  \s*+ (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? (?&br) )
+                                (?<arrow> (?: \bexport [ \t]++ )? \b(?:const|let|var) [ \t]++ \k<NAMED> \b \s*+ (?: : (?&ty) )? = \s*+ (?: async\b \s*+ )?
+                                  (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? => \s*+ (?&br) [ \t]*+ ;? )
+                                (?<reg> (?:registerResource|resource) \( (?: [^(),"'`/]++ | (?&com) | (?&str) | (?&pa) )++ , \s*+ (?!["'`]) (?&arg)*? , \s*+ \k<NAMED> \s*+ ,? \s*+ \)
+                                )
+                              )
+                              (?| (?: \bexport [ \t]++ (?:default [ \t]++)? )? (?: \basync [ \t]++ )? \bfunction\b [ \t]*+ \*? [ \t]*+ (?<NAMED>[\w$]++)
+                                  \s*+ (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? (?&br)
+                                | (?: \bexport [ \t]++ )? \b(?:const|let|var) [ \t]++ (?<NAMED>[\w$]++) \s*+ (?: : (?&ty) )? = \s*+ (?: async\b \s*+ )?
+                                  (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? => \s*+ (?&br) [ \t]*+ ;? )
+                              (?= (?: [^.]++ | \.(?!(?&reg)) )*+ \.(?&reg) )
+                          - pattern-either:
+                              - pattern: function $H($URI, $ARGS, ...) {...}
+                              - pattern: const $H = ($URI, $ARGS, ...) => {...};
+                          - metavariable-comparison:
+                              comparison: str($H) == str($NAMED)
+                      - patterns:
+                          - pattern-either:
+                              - patterns:
+                                  - pattern-either:
+                                      - pattern-inside: "$SERVER.registerResource($NAME, $TPL, ..., $H);\n..."
+                                      - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.registerResource($NAME, $TPL, ..., $H);\n  ...\n}\n..."
+                                      - pattern-inside: "$SERVER.resource($NAME, $TPL, ..., $H);\n..."
+                                      - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.resource($NAME, $TPL, ..., $H);\n  ...\n}\n..."
+                                  - metavariable-regex:
+                                      metavariable: $TPL
+                                      regex: ^[^"'`]
+                          - pattern-either:
+                              - pattern: function $H($URI, $ARGS, ...) {...}
+                              - pattern: const $H = ($URI, $ARGS, ...) => {...};
+          - focus-metavariable: $ARGS
+    pattern-sanitizers:
+      # Shared with mcp-tool-arg-to-shell-ts (the first sanitizer; build.py
+      # SHARED_BLOCKS). A field whose schema only admits safe values: z.enum, z.literal,
+      # z.number, z.boolean, or a string with an anchored .regex(/^...$/). The SDK validates
+      # arguments against inputSchema before calling the handler, so uses of that field
+      # (destructured or args.field) are clean.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: '$SERVER.registerTool($NAME, {..., inputSchema: {..., $KEY: $TYPE, ...}, ...}, ...)'
+              - pattern-inside: '$SERVER.registerTool($NAME, {..., inputSchema: $Z.object({..., $KEY: $TYPE, ...}), ...}, ...)'
+              - pattern-inside: '$SERVER.tool($NAME, ..., {..., $KEY: $TYPE, ...}, ($ARGS, ...) => {...})'
+              - pattern-inside: '$SERVER.addTool({..., parameters: $Z.object({..., $KEY: $TYPE, ...}), ...})'
+              # A prompt's argsSchema, validated the same way before its handler runs.
+              - pattern-inside: '$SERVER.registerPrompt($NAME, {..., argsSchema: {..., $KEY: $TYPE, ...}, ...}, ...)'
+              - pattern-inside: '$SERVER.registerPrompt($NAME, {..., argsSchema: $Z.object({..., $KEY: $TYPE, ...}), ...}, ...)'
+              - pattern-inside: '$SERVER.prompt($NAME, ..., {..., $KEY: $TYPE, ...}, ($ARGS, ...) => {...})'
+          - metavariable-pattern:
+              metavariable: $TYPE
+              pattern-either:
+                - pattern: $Z.enum(...)
+                - pattern: $Z.nativeEnum(...)
+                - pattern: $Z.literal(...)
+                - pattern: $Z.number(...)
+                - pattern: $Z.boolean(...)
+                - pattern: $Z.int(...)
+                - patterns:
+                    - pattern: $STR.regex($RE, ...)
+                    - metavariable-regex:
+                        metavariable: $RE
+                        regex: ^/\^.*\$/[a-z]*$
+          - pattern-either:
+              - pattern: $KEY
+              - pattern: $OBJ.$KEY
+      # A leading-dash or allowlist check before use.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X.startsWith(...)
+              - pattern: $RE.test($X)
+              - pattern: $X.match($RE)
+          - focus-metavariable: $X
+      - exact: true
+        pattern: $X.replace(/^-+/, "")
+      # An allowlist membership check before use: ALLOWED.has(value), ALLOWED.includes(value).
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $ALLOWED.has($X)
+              - pattern: $ALLOWED.includes($X)
+          - focus-metavariable: $X
+      # A simple-git instance built from a tool's path argument is not attacker text.
+      - exact: true
+        pattern: simpleGit(...)
+      - exact: true
+        pattern: Number(...)
+      - exact: true
+        pattern: parseInt(...)
+      - exact: true
+        pattern: parseFloat(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              # spawn("git", [..., value]) and friends, without a shell (a shell is the
+              # *-tool-arg-to-shell-ts rule's).
+              - patterns:
+                  - pattern-inside: $F($PROG, [..., $ARG, ...], ...)
+                  - metavariable-regex:
+                      metavariable: $F
+                      regex: ^(?:(?:\w+\.)?(?:spawn|spawnSync|\w*[eE]xecFile\w*)|execa|execaSync|crossSpawn)$
+                  - metavariable-regex:
+                      metavariable: $PROG
+                      regex: ^["'`](?:[\w./-]*/)?(?:git|ssh|scp|sftp|rsync|tar|curl|wget|rg|zip|hg|svn)["'`]$
+                  - pattern-not-inside: '$F($PROG, $ARGV, {..., shell: true, ...}, ...)'
+                  - pattern-not-inside: '$F($PROG, $ARGV, {..., shell: "$SHELL", ...}, ...)'
+                  - pattern-not-inside: $F($PROG, [..., "--", ..., $ARG, ...], ...)
+                  - pattern-not-inside: $F($PROG, [..., "--end-of-options", ..., $ARG, ...], ...)
+                  - pattern-either:
+                      - pattern-inside: $F($PROG, [$ARG, ...], ...)
+                      - patterns:
+                          - pattern-inside: $F($PROG, [..., $PREV, $ARG, ...], ...)
+                          - metavariable-regex:
+                              metavariable: $PREV
+                              regex: ^(?!["'`](?:-[a-zA-Z]+|--(?:author|committer|grep|since|until|after|before|branch|depth|message|file|origin|reference|template|config|exclude|include|directory|output|max-count|skip|shallow-since|shallow-exclude|jobs|filter|sort|remote|regexp|glob|type|max-depth))["'`]$)
+              # A whole argv in one array: Bun.spawn(["git", "log", ref]), or one built
+              # before the call.
+              - patterns:
+                  - pattern-inside: '[$PROG, ..., $ARG, ...]'
+                  - metavariable-regex:
+                      metavariable: $PROG
+                      regex: ^["'`](?:[\w./-]*/)?(?:git|ssh|scp|sftp|rsync|tar|curl|wget|rg|zip|hg|svn)["'`]$
+                  - pattern-not-inside: '[..., "--", ..., $ARG, ...]'
+                  - pattern-not-inside: '[..., "--end-of-options", ..., $ARG, ...]'
+                  - pattern-either:
+                      - pattern-inside: '[$PROG, $ARG, ...]'
+                      - patterns:
+                          - pattern-inside: '[..., $PREV, $ARG, ...]'
+                          - metavariable-regex:
+                              metavariable: $PREV
+                              regex: ^(?!["'`](?:-[a-zA-Z]+|--(?:author|committer|grep|since|until|after|before|branch|depth|message|file|origin|reference|template|config|exclude|include|directory|output|max-count|skip|shallow-since|shallow-exclude|jobs|filter|sort|remote|regexp|glob|type|max-depth))["'`]$)
+              # simple-git: git.diff([...]), git.checkout(value), git.raw([...]).
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $GIT = $SIMPLEGIT(...);
+                          ...
+                      - pattern-inside: |
+                          const $GIT = $SIMPLEGIT(...);
+                          ...
+                      - pattern-inside: |
+                          $GIT = $SIMPLEGIT(...).$M2(...);
+                          ...
+                  - metavariable-regex:
+                      metavariable: $SIMPLEGIT
+                      regex: ^(?:simpleGit|simplegit|simple_git)$
+                  - pattern-either:
+                      - patterns:
+                          - pattern-inside: $GIT.$METHOD([..., $ARG, ...], ...)
+                          - pattern-not-inside: $GIT.$METHOD([..., "--", ..., $ARG, ...], ...)
+                          - pattern-not-inside: $GIT.$METHOD([..., "--end-of-options", ..., $ARG, ...], ...)
+                          - pattern-either:
+                              - pattern-inside: $GIT.$METHOD([$ARG, ...], ...)
+                              - patterns:
+                                  - pattern-inside: $GIT.$METHOD([..., $PREV, $ARG, ...], ...)
+                                  - metavariable-regex:
+                                      metavariable: $PREV
+                                      regex: ^(?!["'`](?:-[a-zA-Z]+|--(?:author|committer|grep|since|until|after|before|branch|depth|message|file|origin|reference|template|config|exclude|include|directory|output|max-count|skip|shallow-since|shallow-exclude|jobs|filter|sort|remote|regexp|glob|type|max-depth))["'`]$)
+                      # A single value (git.checkout(branch), git.raw(args)). An array is
+                      # checked element by element above, so its "--end-of-options" and
+                      # literal prefixes count. In an options object simple-git 4.0.2 writes
+                      # values as key=value, except log's {from, to}, which become
+                      # `${from}...${to}`, so only `from` can start an argument.
+                      - patterns:
+                          - pattern-inside: $GIT.$METHOD($ARG, ...)
+                          - metavariable-regex:
+                              metavariable: $ARG
+                              regex: ^(?![\[{])
+                      - pattern-inside: '$GIT.$METHOD({..., from: $ARG, ...}, ...)'
+                  - metavariable-regex:
+                      metavariable: $METHOD
+                      regex: ^(?:raw|diff|diffSummary|show|log|checkout|checkoutBranch|revparse|fetch|pull|push|clone|branch|merge|reset|grep|tag)$
+          - pattern: $ARG
+          # A spread (...args) hides which positions hold values, so it isn't reported.
+          - pattern-not: '...$SPREAD'
+          # A value built after a literal prefix (`origin/${branch}`, "refs/heads/" + name)
+          # can't start with "-".
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: ^(?!["'`](?!\$\{)[^"'`])
+      # $`git log ${ref}` (execa, Bun Shell, zx): each interpolation is one argument, so it
+      # can still be an option. Skipped after "--" and right after a short option (-m ${msg}).
+      - patterns:
+          - pattern: $TAG`...`
+          - pattern-regex: (?s)`[ \t]*(?:git|ssh|scp|sftp|rsync|tar|curl|wget|rg|zip|hg|svn)\b(?:(?!\s--(?:end-of-options)?\s)[^`])*?(?<!\s-[a-zA-Z])(?<!\s-[a-zA-Z]{2})(?<!\s-[a-zA-Z]{3})(?<!\s-[a-zA-Z]{4})\s\$\{[^}]*\}
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-mcp:
+        - "MCP05:2025 - Command Injection & Execution"
+      owasp-aisvs:
+        - "v1.01-C10.4.4 - Schema, Message, and Input Validation"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-88: Improper Neutralization of Argument Delimiters in a Command ('Argument Injection')"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, fastmcp, claude-agent-sdk, node, execa, bun, simple-git, git]
+      references:
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/1.32.1/src/server/mcp.ts
+        - https://github.com/modelcontextprotocol/servers/security/advisories/GHSA-9xwc-hfwc-8w59
+        - https://github.com/oven-sh/bun/blob/bun-v1.4.4/docs/runtime/shell.mdx
+        - https://github.com/steveukx/git-js/blob/simple-git%404.0.2/packages/argv-parser/src/vulnerabilities/detect-vulnerable-flags.ts
+        - https://git-scm.com/docs/gitcli
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.3.1/packages/server/src/server/mcp.ts
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP05-2025%E2%80%93Command-Injection%26Execution.md
+        - https://cwe.mitre.org/data/definitions/88.html

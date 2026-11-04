@@ -1,0 +1,55 @@
+{
+  "folders": [{ "path": "api" }, { "path": "web" }],
+  "settings": {
+    "editor.formatOnSave": true,
+    "mcp": {
+      "inputs": [],
+      "servers": {
+        "api-tools": {
+          "type": "stdio",
+          // ruleid: project-mcp-server-no-prompt-workspace
+          "command": "python", "args": ["api/tools/mcp_server.py"]
+        },
+        /* "old-tools": { "command": "node" }, */
+        "web-tools": {
+          // ok: project-mcp-server-no-prompt-workspace
+          // "command": "node",
+          // ruleid: project-mcp-server-no-prompt-workspace
+          "command": "pnpm",
+          "args": ["--dir", "web", "mcp"]
+        },
+        "status": {
+          "type": "http",
+          // ok: project-mcp-server-no-prompt-workspace
+          "url": "https://mcp.example.com/status"
+        },
+        "unset": {
+          // ok: project-mcp-server-no-prompt-workspace
+          "command": " "
+        }
+      }
+    }
+  },
+  "launch": {
+    "configurations": [
+      {
+        "type": "node",
+        "request": "launch",
+        "name": "API",
+        // ok: project-mcp-server-no-prompt-workspace
+        "runtimeExecutable": "pnpm",
+        "args": ["--dir", "api", "dev"]
+      }
+    ]
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "build",
+        // ok: project-mcp-server-no-prompt-workspace
+        "command": "make build"
+      }
+    ]
+  }
+}

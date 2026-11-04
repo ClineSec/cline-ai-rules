@@ -1,0 +1,108 @@
+rules:
+  - id: mcp-sampling-includes-all-context
+    # An MCP server's sampling request (sampling/createMessage) asking the client to attach
+    # context from every connected MCP server: includeContext "allServers". Sources: the MCP
+    # spec schema 2025-06-18 ("A request to include context from one or more MCP servers
+    # ... The client MAY ignore this request"), 2025-11-25 ("thisServer" and "allServers"
+    # soft-deprecated; servers SHOULD only use them if the client declares
+    # ClientCapabilities.sampling.context), and 2026-07-28 (deprecated under SEP-2596, to be
+    # removed no later than Sampling itself, which SEP-2577 deprecates). Call shapes: MCP
+    # Python SDK v2.3.0 ServerSession.create_message(..., include_context=...) (reached as
+    # ctx.session.create_message), Peer.sample(...), the resolver marker
+    # mcp.server.mcpserver.Sample(..., include_context=...), and CreateMessageRequestParams
+    # (include_context, alias includeContext); v1.30.0 ServerSession.create_message,
+    # ServerTaskContext.create_message / create_message_as_task, and
+    # CreateMessageRequestParams(includeContext=...); fastmcp 2.10.6 to 2.14.0
+    # Context.sample(..., include_context=...) (removed in 2.14.1; fastmcp 3.x and 4.1.3
+    # have no such parameter). Neither SDK checks sampling.context before sending.
+    # "thisServer" is deliberately not reported: the spec defines it as context from the
+    # requesting server itself, which doesn't cross a server boundary.
+    languages: [python]
+    severity: WARNING
+    message: >-
+      This MCP server asks the client to attach context from every connected MCP server to a
+      sampling request (`include_context="allServers"`). A client that honors it puts other
+      servers' data (their tool results, resources, and the conversation around them) into a
+      prompt this server wrote and sends this server the completion, so the server can read
+      data that belongs to other servers: a prompt that says "repeat the context above" is
+      enough, and a sampling prompt built from tool input can be steered the same way. The
+      value has been soft-deprecated since MCP spec 2025-11-25 and is deprecated in 2026-07-28
+      (SEP-2596), which also deprecates sampling itself (SEP-2577); servers SHOULD NOT send it
+      unless the client declares the `sampling.context` capability, and the MCP SDKs send it
+      without checking. Leave `include_context` out (the default is "none") and put the text
+      the request needs into `messages`. If this server came from someone else, don't connect
+      it next to servers that hold private data.
+    patterns:
+      - pattern-either:
+          # A keyword argument on any call: ctx.session.create_message(...), Sample(...),
+          # ctx.sample(...) on fastmcp 2.x, CreateMessageRequestParams(...), a
+          # functools.partial over one of them, or the team's own wrapper.
+          - patterns:
+              - pattern-either:
+                  - pattern: $F(..., include_context=$V, ...)
+                  - pattern: $F(..., includeContext=$V, ...)
+              - focus-metavariable: $V
+          # A dict passed as **kwargs or as raw request params.
+          - patterns:
+              - pattern-either:
+                  - pattern: '{..., "include_context": $V, ...}'
+                  - pattern: '{..., "includeContext": $V, ...}'
+              - focus-metavariable: $V
+          # Set on a params object or kwargs dict after it is built.
+          - patterns:
+              - pattern-either:
+                  - pattern: $O.include_context = $V
+                  - pattern: $O.includeContext = $V
+                  - pattern: $O["include_context"] = $V
+                  - pattern: $O["includeContext"] = $V
+              - focus-metavariable: $V
+          # A wrapper's parameter default: def ask_client(..., include_context="allServers").
+          - patterns:
+              - pattern-either:
+                  - pattern: |
+                      def $FN(..., include_context=$V, ...):
+                          ...
+                  - pattern: |
+                      def $FN(..., includeContext=$V, ...):
+                          ...
+              - focus-metavariable: $V
+          # A settings or dataclass field default. Only inside a class body: a local
+          # variable assigned the value is reported where it is passed, through constant
+          # propagation.
+          - patterns:
+              - pattern-inside: |
+                  class $C(...):
+                      ...
+              - pattern-either:
+                  - pattern: 'include_context: $T = $V'
+                  - pattern: 'include_context = $V'
+              - focus-metavariable: $V
+      # The literal, a module or local constant holding it (constant propagation), or either
+      # arm of a conditional expression.
+      - metavariable-pattern:
+          metavariable: $V
+          pattern: '"allServers"'
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM02:2026 - Sensitive Information Disclosure"
+        - "LLM02:2025 - Sensitive Information Disclosure"
+      owasp-mcp:
+        - "MCP10:2025 - Context Injection & Over-Sharing"
+      mitre-atlas:
+        - "AML.T0057 - LLM Data Leakage"
+      cwe:
+        - "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      technology: [mcp, fastmcp]
+      references:
+        - https://modelcontextprotocol.io/specification/2026-07-28/client/sampling
+        - https://modelcontextprotocol.io/specification/2026-07-28/deprecated
+        - https://modelcontextprotocol.io/specification/2025-11-25/client/sampling
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP10-2025%E2%80%93ContextInjection%26OverSharing.md
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/session.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/docs/handlers/sampling-and-roots.md

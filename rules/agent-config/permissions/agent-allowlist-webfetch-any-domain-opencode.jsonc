@@ -1,0 +1,76 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "*": "ask",
+    "read": "allow",
+    // ruleid: agent-allowlist-webfetch-any-domain-opencode
+    "webfetch": "allow",
+    // ok: agent-allowlist-webfetch-any-domain-opencode
+    // "webfetch": "allow",
+    "bash": {
+      "*": "ask",
+      // ok: agent-allowlist-webfetch-any-domain-opencode
+      "webfetch": "allow"
+    }
+  },
+  "agent": {
+    "docs": {
+      "permission": {
+        "webfetch": {
+          "*": "ask",
+          // ok: agent-allowlist-webfetch-any-domain-opencode
+          "https://docs.example.com/*": "allow",
+          // ok: agent-allowlist-webfetch-any-domain-opencode
+          "https://api.example.com": "allow",
+          // ruleid: agent-allowlist-webfetch-any-domain-opencode
+          "https://*.example.com/*": "allow",
+          // ruleid: agent-allowlist-webfetch-any-domain-opencode
+          "https://docs.example.com*": "allow",
+          // ruleid: agent-allowlist-webfetch-any-domain-opencode
+          "http*://docs.example.com/*": "allow",
+          // ok: agent-allowlist-webfetch-any-domain-opencode
+          "https://*": "deny"
+        }
+      }
+    },
+    "research": {
+      "permission": {
+        // ruleid: agent-allowlist-webfetch-any-domain-opencode
+        "webfetch": { "https://docs.example.com/*": "allow", "*": "allow" }
+      }
+    },
+    "overridden": {
+      "permission": {
+        // ok: agent-allowlist-webfetch-any-domain-opencode
+        "webfetch": { "*": "allow", "https://*": "ask" , "*": "ask" }
+      }
+    },
+    "locked": {
+      "permission": {
+        // ok: agent-allowlist-webfetch-any-domain-opencode
+        "webfetch": "allow",
+        "*": "ask"
+      }
+    },
+    "locked-later": {
+      "permission": {
+        // ok: agent-allowlist-webfetch-any-domain-opencode
+        "webfetch": { "https://*": "allow" },
+        "*": "deny"
+      }
+    },
+    "wholesale": {
+      "permission": {
+        "*": "allow",
+        // ok: agent-allowlist-webfetch-any-domain-opencode
+        "webfetch": "allow"
+      }
+    }
+  },
+  "mcp": {
+    "fetcher": {
+      // ok: agent-allowlist-webfetch-any-domain-opencode
+      "webfetch": "allow"
+    }
+  }
+}

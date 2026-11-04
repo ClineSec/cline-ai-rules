@@ -1,0 +1,114 @@
+# Every hidden path here names a file that doesn't exist.
+model = "gpt-5.5"
+# ok: mcp-config-hidden-path-command-toml
+notify = ["python3", "~/.codex/.cache/.sys/.fixture-notify.py"]
+
+[mcp_servers.productivity]
+command = "python3"
+# ruleid: mcp-config-hidden-path-command-toml
+args = ["~/.config/.cache/.sys/.fixture-mcp.py"]
+
+[mcp_servers.multiline]
+command = "node"
+args = [
+  "--enable-source-maps",
+  # ruleid: mcp-config-hidden-path-command-toml
+  '/home/fixture-user/.codex/.sys/fixture.mjs',
+  # ok: mcp-config-hidden-path-command-toml
+  # "/home/fixture-user/.codex/.sys/commented-out.mjs",
+]
+
+[mcp_servers.program]
+# ruleid: mcp-config-hidden-path-command-toml
+command = "/Users/fixture-user/.local/.cache/fixture-sync"
+startup_timeout_sec = 20
+
+[mcp_servers.windows]
+# ruleid: mcp-config-hidden-path-command-toml
+command = "C:\\Users\\fixture-user\\.codex\\.sys\\fixture.exe"
+
+[mcp_servers.windows-literal]
+command = "py"
+# ruleid: mcp-config-hidden-path-command-toml
+args = ['C:\Users\fixture-user\.codex\.sys\fixture.py']
+
+[mcp_servers.disabled]
+enabled = false
+command = "python3"
+# ok: mcp-config-hidden-path-command-toml
+args = ["~/.config/.cache/.sys/.fixture-mcp.py"]
+
+[mcp_servers.installed]
+# ok: mcp-config-hidden-path-command-toml
+command = "/Users/fixture-user/.local/bin/uvx"
+args = ["example-org-tickets-mcp==1.4.0"]
+
+[mcp_servers.venv]
+# ok: mcp-config-hidden-path-command-toml
+command = "~/.mcp-tools/.venv/bin/python"
+# ok: mcp-config-hidden-path-command-toml
+args = ["~/.claude/scripts/notes_mcp.py"]
+
+[mcp_servers.venv.env]
+# ok: mcp-config-hidden-path-command-toml
+FIXTURE_HOOK = "~/.config/.cache/.sys/.fixture-mcp.py"
+
+[mcp_servers.cwd-relative-script]
+command = "python3"
+# ruleid: mcp-config-hidden-path-command-toml
+cwd = "~/.codex/.cache/.sys"
+args = ["fixture-mcp.py", "--stdio"]
+
+[mcp_servers.cwd-relative-command]
+# ruleid: mcp-config-hidden-path-command-toml
+cwd = "/home/support/.codex/.cache/.sys"
+command = "./fixture-sync.js"
+
+[mcp_servers.node-options]
+command = "node"
+args = ["server.js"]
+# ruleid: mcp-config-hidden-path-command-toml
+env = { NODE_OPTIONS = "--require ~/.codex/.cache/.sys/.fixture-loader.js" }
+
+[mcp_servers.node-options-table]
+command = "node"
+args = ["server.js"]
+
+[mcp_servers.node-options-table.env]
+# ruleid: mcp-config-hidden-path-command-toml
+NODE_OPTIONS = "--import=$HOME/.npm/.sys/fixture-hook.mjs"
+
+[mcp_servers.cwd-hidden-packaged]
+# ok: mcp-config-hidden-path-command-toml
+cwd = "~/.codex/.cache/.sys"
+command = "uvx"
+args = ["example-org-notes-mcp==1.4.0"]
+
+[mcp_servers.cwd-hidden-no-script]
+command = "python3"
+# ok: mcp-config-hidden-path-command-toml
+cwd = "~/.codex/.cache/.sys"
+args = ["-m", "example_org_notes_mcp"]
+
+[mcp_servers.cwd-single-dot]
+command = "python3"
+# ok: mcp-config-hidden-path-command-toml
+cwd = "~/.cache"
+args = ["fixture-mcp.py"]
+
+[mcp_servers.node-options-no-loader.env]
+# ok: mcp-config-hidden-path-command-toml
+NODE_OPTIONS = "--max-old-space-size=4096 --enable-source-maps"
+
+[mcp_servers.pythonpath.env]
+# ok: mcp-config-hidden-path-command-toml
+PYTHONPATH = "~/.codex/.cache/.sys"
+
+[mcp_servers]
+# ruleid: mcp-config-hidden-path-command-toml
+inline = { command = "bash", args = ["-c", "exec python3 ~/.config/.cache/.sys/.fixture-mcp.py"] }
+dotted.command = "node"
+# ruleid: mcp-config-hidden-path-command-toml
+dotted.args = ["$HOME/.npm/.sys/fixture.cjs"]
+# ruleid: mcp-config-hidden-path-command-toml
+dotted-cmd.command = "${HOME}/.local/share/.fixture/.sync"

@@ -1,0 +1,28 @@
+# Commands Codex may run without asking while it fixes a failed build.
+
+prefix_rule(
+    pattern = ["npm", ["test", "ci"]],
+    justification = "Install dependencies and run the test suite.",
+)
+
+prefix_rule(
+    pattern = ["npx", "vitest", "run"],
+    match = ["npx vitest run test/permissions.test.ts"],
+)
+
+prefix_rule(
+    pattern = ["curl", "-sSL"],
+    justification = "Download the failed run's log.",
+)
+
+prefix_rule(
+    pattern = [["ssh", "scp"]],
+    decision = "prompt",
+    justification = "The runner debug box needs a person to look first.",
+)
+
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "forbidden",
+    justification = "Open a pull request instead of pushing.",
+)

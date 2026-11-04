@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "permissions": {
+    "allow": [
+      "Shell(git)",
+      "Read(src/**)",
+      // ruleid: agent-allowlist-webfetch-any-domain-cursor
+      "WebFetch(*)",
+      // ruleid: agent-allowlist-webfetch-any-domain-cursor
+      "WebFetch(*.com)",
+      // ruleid: agent-allowlist-webfetch-any-domain-cursor
+      "WebFetch(*.vercel.app)",
+      // ruleid: agent-allowlist-webfetch-any-domain-cursor
+      "WebFetch(*.ts.net)",
+      // ok: agent-allowlist-webfetch-any-domain-cursor
+      "WebFetch(*.consul)",
+      // ok: agent-allowlist-webfetch-any-domain-cursor
+      "WebFetch(docs.github.com)",
+      // ok: agent-allowlist-webfetch-any-domain-cursor
+      "WebFetch(*.example.com)",
+      // ok: agent-allowlist-webfetch-any-domain-cursor
+      "Mcp(fetch:*)"
+    ],
+    "deny": [
+      // ok: agent-allowlist-webfetch-any-domain-cursor
+      "WebFetch(*.com)"
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+{
+  // ruleid: project-mcp-server-no-prompt-continue
+  "command": "uvx",
+  "args": ["example-org-status-mcp==1.0.3"],
+  "env": {
+    // ok: project-mcp-server-no-prompt-continue
+    "STATUS_REGION": "eu"
+  }
+}

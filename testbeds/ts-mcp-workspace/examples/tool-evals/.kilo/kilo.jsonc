@@ -1,0 +1,16 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  // Kilo codebase index for the eval suite (see ../README.md).
+  "indexing": {
+    "enabled": true,
+    "provider": "ollama",
+    "ollama": {
+      "baseUrl": "http://127.0.0.1:11434"
+    },
+    "model": "nomic-embed-text",
+    "vectorStore": "qdrant",
+    "qdrant": {
+      "url": "https://qdrant.evals.example.invalid:6333"
+    }
+  }
+}

@@ -1,0 +1,133 @@
+rules:
+  - id: agent-frontmatter-command-runs-local-script
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This skill, slash command, or subagent declares a hook (or an inline MCP server's
+      headersHelper) in its frontmatter that runs a script from the repository. Claude Code
+      registers a skill's hooks as soon as the skill is invoked, by a person or by Claude itself,
+      and keeps running them for the rest of the session, also in `claude -p` and Agent SDK runs
+      in folders nobody trusted; a subagent's hooks and inline servers run whenever the subagent
+      does once the folder is trusted. Nothing asks before each run. Anyone who can change the
+      script or this file, through a pull request, a compromised dependency, or a worm that
+      writes into the repo, runs code with the developer's credentials on every machine that
+      uses the project. Point the hook at a tool installed outside the repo at a pinned version,
+      or protect this file and its script with CODEOWNERS review like any code that runs on
+      checkout.
+    # Frontmatter hooks and inline mcpServers checked against the Claude Code docs (hooks,
+    # skills, sub-agents, permissions) for v2.1.309, 2026-10-22. Skills, including plugin
+    # skills, and .claude/commands files take hooks; plugin subagents ignore hooks and
+    # mcpServers, so a plugin's agents/ folder is left out.
+    paths:
+      include:
+        - "SKILL.md"
+        - ".claude/agents/**"
+        - ".claude/commands/**"
+        - "commands/**/*.md"
+      # opencode and Kilo Code folders: Claude Code never reads them, and the plural commands/
+      # dirs under them would otherwise match commands/**/*.md. agent-skill-load-time-shell-opencode
+      # covers their ``!`cmd` `` injection.
+      exclude:
+        - ".opencode/**"
+        - ".kilo/**"
+        - ".kilocode/**"
+    patterns:
+      # The frontmatter: from a leading --- line to the next --- line.
+      - pattern-regex: \A(?:\x{FEFF})?---[ \t]*\r?\n(?s:.*?)\r?\n---[ \t]*(?:\r?\n|\z)
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  # Shell form: a hook's command, inside the top-level hooks: block.
+                  - patterns:
+                      - pattern-regex: (?m)^hooks[ \t]*:[^\r\n]*\r?\n(?:(?:[ \t]+[^\r\n]*|\#[^\r\n]*|[ \t]*)\r?\n)*
+                      - pattern-regex: |-
+                          (?m)(?:^[ \t]*(?:-[ \t]+)?|(?<flow>[{,])[ \t]*)command[ \t]*:[ \t]+(?<CMD>"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\r\n]|'')*'|(?(flow)[^,}\r\n]*[^,}\s]|[^\r\n]*?\S(?=[ \t]+#|[ \t]*\r?$)))
+                  # A subagent's inline MCP server headersHelper, inside the mcpServers: block.
+                  - patterns:
+                      - pattern-regex: (?m)^mcpServers[ \t]*:[^\r\n]*\r?\n(?:(?:[ \t]+[^\r\n]*|-[ \t][^\r\n]*|\#[^\r\n]*|[ \t]*)\r?\n)*
+                      - pattern-regex: |-
+                          (?m)(?:^[ \t]*(?:-[ \t]+)?|(?<flow>[{,])[ \t]*)headersHelper[ \t]*:[ \t]+(?<CMD>"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\r\n]|'')*'|(?(flow)[^,}\r\n]*[^,}\s]|[^\r\n]*?\S(?=[ \t]+#|[ \t]*\r?$)))
+              - metavariable-regex:
+                  metavariable: $CMD
+                  # Verbose mode: whitespace is ignored and # starts a comment.
+                  regex: |-
+                    (?x)
+                    # --- repo-script command test (begin): build.py keeps this block identical in
+                    # agent-hook-runs-local-script; edit both together. ---
+                    # Any of: the command is a relative path (.cursor/hooks/x.sh, ./x, scripts/x.py;
+                    # tools installed under node_modules/.bin are left to SCA, like npx); a path under
+                    # the project directory variable each agent exports ($VAR, ${VAR}, PowerShell's
+                    # $env:VAR, cmd's %VAR%); or an interpreter given a relative script (node
+                    # .github/setup.js, bash -c './x.sh', node --import tsx x.ts). Windows paths use
+                    # backslashes, which JSON and double-quoted YAML escape, so a separator is /, \ or \\.
+                    # Matched text keeps JSON escapes, so quotes may arrive as \". The regex is
+                    # anchored at the start, hence the .* prefixes.
+                    (?(DEFINE) (?<sep> / | \\\\? ) )
+                      (^\s*\\?["']?(?!(\.(?&sep))?node_modules(?&sep))(\.{1,2}(?&sep)|\.?[\w-]+(?&sep)))
+                    | (.*(\$\{?|\$env:|%)(CLAUDE|GEMINI|CURSOR)_PROJECT_DIR(\}|%)?\\?["']?(?&sep))
+                    | (.*(^|[\s;&|("'])(node|bun|deno|python3?|bash|sh|zsh|pwsh|powershell|ruby|perl|php|tsx|ts-node|uv\s+run|npx\s+tsx)(\s+run)?(\s+(--(import|require|loader|experimental-loader)[\s=]\S+|-r\s+\S+|-(?i:executionpolicy|ep)\s+\S+|-\S+))*\s+\\?["']?(\.{1,2}(?&sep))?([\w.-]+(?&sep))*[\w.-]+\.(sh|bash|zsh|[cm]?js|[cm]?ts|py|rb|pl|ps1|php)\b)
+                    # --- repo-script command test (end) ---
+          # Exec form: command: <interpreter> with args: [<script>, ...] in the same handler.
+          - patterns:
+              - pattern-regex: (?m)^hooks[ \t]*:[^\r\n]*\r?\n(?:(?:[ \t]+[^\r\n]*|\#[^\r\n]*|[ \t]*)\r?\n)*
+              - pattern-regex: |-
+                  (?xm)
+                  (?(DEFINE)
+                  (?<prog>
+                  # --- exec-form interpreters (begin): build.py keeps this block identical in
+                  # agent-hook-runs-local-script; edit both together. ---
+                  node | bun | deno | python3? | bash | sh | zsh | pwsh | powershell | ruby | perl | php
+                  | tsx | ts-node
+                  # --- exec-form interpreters (end) ---
+                  )
+                    # A key line of the same handler, or a comment line; never a list item, so
+                    # the scan stops at the next handler.
+                    (?<key> [ \t]+ (?: [\w-]+ [ \t]* : | \# ) [^\r\n]* \r?\n )
+                    # command: <program> as the whole value, plain or quoted.
+                    (?<exe> [ \t]* (?:-[ \t]+)? command [ \t]* : [ \t]* ["']? (?&prog) ["']? [ \t]* (?:\r?\n|\z) )
+                    # args: a one-line flow list, or a block list indented at least as far.
+                    (?<args> (?<ai>[ \t]*) (?:-[ \t]+)? args [ \t]* : [ \t]*
+                      (?: \[ [^\]\r\n]* \] [ \t]* (?:\r?\n|\z)
+                        | \r?\n (?: \k<ai> [ \t]* [-\#] [^\r\n]* (?:\r?\n|\z) )+ ) )
+                  )
+                  ^ (?: (?&exe) (?&key)*? (?&args) | (?&args) (?&key)*? (?&exe) )
+              # One element of the list.
+              - pattern-regex: (?m)(?:[\[,]|^[ \t]*-)[ \t]*["']?\K(?<ARG>[^"',\]\r\n]*[^"',\]\s])
+              - metavariable-regex:
+                  metavariable: $ARG
+                  regex: |-
+                    (?x)
+                    # --- exec-form script argument (begin): build.py keeps this block identical in
+                    # agent-hook-runs-local-script; edit both together. ---
+                    # One argv element: a script file with a relative path, any ./ or ../ path, or a
+                    # path under the project directory variable. A separator is /, \ or \\.
+                    (?(DEFINE) (?<sep> / | \\\\? ) )
+                    ^(?: (\.{1,2}(?&sep))? ([\w.-]+(?&sep))* [\w.-]+\.(sh|bash|zsh|[cm]?js|[cm]?ts|py|rb|pl|ps1|php)
+                      | \.{1,2}(?&sep).+
+                      | (\$\{?|\$env:|%)(CLAUDE|GEMINI|CURSOR)_PROJECT_DIR(\}|%)?\\?["']?(?&sep).+ )$
+                    # --- exec-form script argument (end) ---
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+        - "ASI04 - Agentic Supply Chain Vulnerabilities"
+      mitre-atlas:
+        - "AML.T0081 - Modify AI Agent Configuration"
+      cwe:
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      technology: [claude-code]
+      references:
+        - https://code.claude.com/docs/en/hooks#hooks-in-skills-and-agents
+        - https://code.claude.com/docs/en/skills#frontmatter-reference
+        - https://code.claude.com/docs/en/sub-agents#hooks-in-subagent-frontmatter
+        - https://code.claude.com/docs/en/permissions#what-runs-before-you-trust-a-folder
+        - https://www.sonarsource.com/blog/mini-shai-hulud-targets-ai-coding-agents/
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md

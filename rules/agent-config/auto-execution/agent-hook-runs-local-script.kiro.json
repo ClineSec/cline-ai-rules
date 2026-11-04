@@ -1,0 +1,31 @@
+{
+  // .kiro/hooks/format-on-save.json (Kiro IDE 1.0 / CLI V3)
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Format on save",
+      "trigger": "PostFileSave",
+      "matcher": "\\.py$",
+      // ruleid: agent-hook-runs-local-script
+      "action": { "type": "command", "command": "uv run scripts/format_changed.py" }
+    },
+    {
+      "name": "Review reminder",
+      "trigger": "Stop",
+      // ok: agent-hook-runs-local-script
+      "action": { "type": "agent", "prompt": "Run scripts/review.sh before finishing." }
+    },
+    {
+      "name": "Release notes",
+      "trigger": "Stop",
+      // ruleid: agent-hook-runs-local-script
+      "action": { "type": "command", "command": "bash scripts/release-notes.sh" },
+      "confirm": {
+        "question": "Draft release notes?",
+        "options": [{ "id": "yes", "label": "Yes", "run": true }],
+        // ruleid: agent-hook-runs-local-script
+        "confirmCommand": "node scripts/should-ask.mjs"
+      }
+    }
+  ]
+}

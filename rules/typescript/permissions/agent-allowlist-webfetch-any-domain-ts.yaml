@@ -1,0 +1,111 @@
+rules:
+  - id: agent-allowlist-webfetch-any-domain-ts
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      This Claude Agent SDK allow list lets the agent fetch any web address without any check:
+      a bare WebFetch entry matches every fetch, and WebFetch(domain:*) or a wildcard such as
+      WebFetch(domain:*.com) covers domains anyone can register. The SDK applies allowedTools
+      entries as Claude Code allow rules before canUseTool runs, so nothing reviews those
+      fetches. A prompt injection in a file, issue, web page, or tool result the agent reads
+      can then have it read a secret (an environment variable, a token in its prompt, source
+      code) and send it out in the address of a request to a server the attacker runs, such
+      as https://attacker.example/?d=<secret>. Allow only the hosts the agent needs
+      (WebFetch(domain:docs.example.com)), or check each URL's host in canUseTool or a
+      PreToolUse hook.
+    patterns:
+      - pattern-either:
+          # allowedTools: [...] in query options, a subagent, or a helper's options object.
+          - pattern: '{..., allowedTools: [..., "$V", ...], ...}'
+          # A list kept in a named const (ALLOWED_TOOLS, RESEARCH_TOOLS; not a deny list) and
+          # passed in.
+          - patterns:
+              - pattern-either:
+                  - pattern: const $NAME = [..., "$V", ...]
+                  - pattern: 'const $NAME: $T = [..., "$V", ...]'
+                  - pattern: let $NAME = [..., "$V", ...]
+              - metavariable-regex:
+                  metavariable: $NAME
+                  regex: (?i)^(?![\w.]*(?:disallow|deny|denied|block|forbid|exclude|risk|danger|unsafe))[\w.]*(?:allow|tools?$)
+              # A file that starts the agent CLI with the list is the -cli twin's finding.
+              - pattern-not-regex: (?s)\A(?=.*?--allowedTools).*
+              - pattern-not-regex: (?s)\A(?=.*?--allowed-tools).*
+      # Bypass mode approves everything already; agent-sdk-bypass-permissions-ts reports it.
+      - pattern-not-inside: '{..., permissionMode: <... "bypassPermissions" ...>, ...}'
+      # A deny rule wins over any allow, so a bare WebFetch in disallowedTools of the same
+      # options covers every fetch.
+      - pattern-not-inside: '{..., disallowedTools: [..., "WebFetch", ...], ...}'
+      - focus-metavariable: $V
+      # A bare WebFetch (or WebFetch()) entry, or a domain: rule for any host.
+      - metavariable-regex:
+          metavariable: $V
+          regex: |-
+            (?x)
+            # --- web fetch any host (begin): build.py keeps this block identical in the
+            # agent-allowlist-webfetch-any-domain rules; edit every copy together. ---
+            (?(DEFINE)
+              # A DNS label as written, and one with a * in it. In Claude Code and Cursor rules a *
+              # other than a leading *. matches text within one label.
+              (?<wflit> [A-Za-z0-9_-]++ )
+              (?<wfwild> [A-Za-z0-9_-]*+ \* [A-Za-z0-9_*-]*+ )
+              # Where a host pattern ends: a port, path, closing bracket, quote, separator, or the end.
+              (?<wfend> (?= [:/)"'`\s,;\]}] | $ ) )
+              # Top-level names that public DNS never answers (.local is mDNS; the private names of
+              # scripts/gen_mcp_remote_host.py plus the RFC 2606 / 6761 reserved names), so a wildcard
+              # under one can't reach an attacker's server.
+              (?<wfpriv> (?i: local | localhost | internal | lan | home | corp | intranet | private
+                | consul | proxy | lab | wg | monitor | hammernet | test | invalid | example | onion
+                | arpa ) (?&wfend) )
+              # Country-code second levels that anyone can register under (co.uk, com.au).
+              (?<wfcc2> (?i: co | com | net | org | ne | or ) \. [A-Za-z]{2} )
+              # Tunnels and free app and page hosts, where anyone can get a subdomain and read its
+              # request logs (scripts/gen_mcp_remote_host.py's services plus free static page hosts).
+              (?<wfshared> (?i: trycloudflare\.com | ngrok-free\.(?:app|dev|pizza) | ngrok\.(?:app|dev|io|pizza)
+                | loca\.lt | localtunnel\.me | lhr\.life | lhr\.rocks | serveo\.net | pinggy(?:-free)?\.link
+                | tunnelmole\.net | bore\.pub | loclx\.io | devtunnels\.ms | app\.github\.dev
+                | oast\.(?:pro|live|site|online|fun|me) | oastify\.com | burpcollaborator\.net
+                | onrender\.com | fly\.dev | herokuapp\.com | vercel\.app | netlify\.app | railway\.app
+                | workers\.dev | deno\.dev | deno\.net | replit\.app | koyeb\.app | hf\.space | modal\.run
+                | github\.io | gitlab\.io | pages\.dev | web\.app | firebaseapp\.com | glitch\.me | surge\.sh
+                # Tailscale Funnel publishes any tailnet's node under ts.net.
+                | ts\.net ) )
+              # A host pattern that matches hosts anyone can own: every host (*, *.*), a wildcard in the
+              # registrable label (*.com, *example.com, docs.*.com, *.co.uk), or any subdomain of a tunnel
+              # or free hosting domain (*.trycloudflare.com, *.up.railway.app). A wildcard under a domain
+              # someone owns (*.example.com, api-*.example.com, example.*) or a private name (*.local) is
+              # scoped.
+              (?<anyhost>
+                  (?= \.*+ \* ) [*.]++ (?&wfend)
+                | (?: (?: (?&wflit) | (?&wfwild) ) \. )*? (?&wfwild) \. (?! (?&wfpriv) )
+                  (?: (?&wfcc2) | (?&wflit) ) \.?+ (?&wfend)
+                | \* \. (?: (?&wflit) \. )*? (?&wfshared) \.?+ (?&wfend) )
+            )
+            # --- web fetch any host (end) ---
+            ^ \s*+ WebFetch (?: \( \s*+ \) | \( domain: (?&anyhost) \) )? \s*+ $
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0086 - Exfiltration via AI Agent Tool Invocation"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      # LOW: a headless SDK app has to allow the tools it uses, and many research agents
+      # exist to read the web; the allow is still a request nobody reviews.
+      confidence: LOW
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-agent-sdk, anthropic]
+      references:
+        - https://code.claude.com/docs/en/agent-sdk/permissions
+        - https://code.claude.com/docs/en/permissions#webfetch
+        - https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk/v/0.3.309

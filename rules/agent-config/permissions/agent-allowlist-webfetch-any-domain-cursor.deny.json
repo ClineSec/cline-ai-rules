@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      // ok: agent-allowlist-webfetch-any-domain-cursor
+      "WebFetch(*)"
+    ],
+    // Deny rules take precedence over allow rules.
+    "deny": [
+      // ok: agent-allowlist-webfetch-any-domain-cursor
+      "WebFetch(*)"
+    ]
+  }
+}

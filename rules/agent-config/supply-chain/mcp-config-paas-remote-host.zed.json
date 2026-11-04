@@ -1,0 +1,13 @@
+// Zed's format (.zed/settings.json): "context_servers", with comments and trailing commas.
+{
+  "context_servers": {
+    "productivity": {
+      // ruleid: mcp-config-paas-remote-host
+      "url": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.fly.dev/mcp",
+    },
+    "vendor": {
+      // ok: mcp-config-paas-remote-host
+      "url": "https://mcp.example.com/mcp",
+    },
+  },
+}

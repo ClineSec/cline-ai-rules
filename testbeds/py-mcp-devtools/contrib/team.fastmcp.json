@@ -1,0 +1,18 @@
+{
+  "$schema": "https://gofastmcp.com/public/schemas/fastmcp.json/v1.json",
+  "source": {
+    "path": "notes_server.py",
+    "entrypoint": "notes"
+  },
+  "environment": {
+    "dependencies": ["fastmcp>=4.1.3"]
+  },
+  "deployment": {
+    "transport": "http",
+    "host": "0.0.0.0",
+    "port": 8812,
+    "env": {
+      "NOTES_DIR": "/srv/devtools/notes"
+    }
+  }
+}

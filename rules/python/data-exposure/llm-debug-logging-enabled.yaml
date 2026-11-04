@@ -1,0 +1,265 @@
+rules:
+  - id: llm-debug-logging-enabled
+    # Prompt and completion logging switched on in committed code. Verified 2026-10-24:
+    # - LangChain: langchain_core 1.7.0 globals.set_debug(True) makes every run add a
+    #   ConsoleCallbackHandler (callbacks/manager.py _configure), which prints chain inputs and
+    #   outputs, LLM prompts and responses, and tool input and output (tracers/stdout.py).
+    #   langchain_core 0.3.86 also honors the legacy `langchain.debug = True` (langchain
+    #   0.3.30 module attribute); 1.x ignores it, but it states the same intent. LangGraph 1.2.17
+    #   Pregel reads the same global (get_debug) and prints every step's updates and state
+    #   (messages included) when compile(debug=True), invoke/stream(debug=True),
+    #   create_react_agent(debug=True) (langgraph-prebuilt 1.1.1), or langchain 1.4.7
+    #   create_agent(debug=True) is set.
+    #   verbose=True on the legacy chains and agents (langchain 0.3.30 and langchain-classic
+    #   1.0.8): LLMChain (and ConversationChain, a subclass) sends "Prompt after formatting:"
+    #   plus the formatted prompt to run_manager.on_text(..., verbose=self.verbose), which
+    #   StdOutCallbackHandler prints; AgentExecutor prints each action's log (the model's
+    #   reasoning and tool input) and every tool observation. initialize_agent and
+    #   AgentExecutor.from_agent_and_tools pass verbose to the executor, and load_qa_chain /
+    #   load_qa_with_sources_chain / load_summarize_chain to their inner LLMChain. Chain.verbose
+    #   defaults to the global get_verbose(), so set_verbose(True) and the legacy
+    #   `langchain.verbose = True` turn all of this on. A chat model's own verbose=True is not
+    #   reported: StdOutCallbackHandler has no LLM-event output, so it prints nothing.
+    # - LiteLLM 1.106.3: `litellm.set_verbose = True` (deprecated, still read) makes
+    #   utils.print_verbose print each call's kwargs, messages included, and streamed chunks;
+    #   _turn_on_debug() sets the package loggers to DEBUG, which log the request body as a
+    #   curl command (litellm_logging._print_llm_call_debugging_log); a call's
+    #   litellm_request_debug=True logs that same request at WARNING. The proxy CLI's
+    #   --detailed_debug sets DEBUG. LITELLM_LOG=DEBUG sets DEBUG in the proxy and the
+    #   handler level in the SDK.
+    # - OpenTelemetry GenAI (opentelemetry-instrumentation-openai-v2 2.4b0,
+    #   opentelemetry-util-genai 1.3b0): OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT
+    #   (true, or span_only / event_only / span_and_event under gen_ai_latest_experimental)
+    #   records prompts, completions, tool arguments and results; off by default.
+    # - OpenAI Agents SDK 0.24.0 (_debug.py): OPENAI_AGENTS_DONT_LOG_MODEL_DATA and
+    #   OPENAI_AGENTS_DONT_LOG_TOOL_DATA default to true; any value other than 1 / true turns
+    #   on logging of model and tool inputs and outputs to the openai.agents logger.
+    #   trace_include_sensitive_data defaults to true, so setting it is not reported.
+    # - A logging call (info and above, not debug) whose argument is the whole message list
+    #   the same function sends to a chat-completion call.
+    # A switch inside an `if` on a debug / dev / local / verbose / test condition, or inside a
+    # function named for debugging, is a deliberate debug path and stays quiet.
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Prompt and completion content is logged: LangChain's global debug mode (`set_debug(True)`,
+      `langchain.debug = True`) or a `ConsoleCallbackHandler`, `verbose=True` on a legacy
+      chain or agent (`LLMChain`, `ConversationChain`, `AgentExecutor`, or LangChain's global
+      `set_verbose(True)`), which prints the formatted prompt or every step's reasoning and
+      tool result, LangGraph `debug=True`, LiteLLM
+      verbose or debug logging (`litellm.set_verbose = True`, `_turn_on_debug()`,
+      `litellm_request_debug=True`, `--detailed_debug`, `LITELLM_LOG=DEBUG`), OpenTelemetry
+      GenAI message-content capture, the OpenAI Agents SDK's model or tool data logging, or a
+      log call given the whole message list sent to the model. Every user message, system
+      prompt, retrieved document, tool result, and answer then goes to stdout or the
+      application logs (or the tracing backend), which are kept longer and read by more
+      people and systems than the conversation itself, so personal data, credentials pasted
+      into a chat, and the system prompt leak through log access. Leave these switches off in
+      committed code, turn them on only behind an explicit debug setting, and log message
+      counts, token usage, and IDs instead of message content.
+    paths:
+      exclude:
+        - "tests/"
+        - "test_*.py"
+        - "*_test.py"
+        - "conftest.py"
+    patterns:
+      - pattern-either:
+          # LangChain's global debug switch and its console tracer.
+          - pattern: langchain_core.globals.set_debug(True)
+          - pattern: langchain.globals.set_debug(True)
+          - pattern: langchain_classic.globals.set_debug(True)
+          - pattern: langchain.debug = True
+          # LangChain's global verbose, the default for every legacy chain and agent.
+          - pattern: langchain_core.globals.set_verbose(True)
+          - pattern: langchain.globals.set_verbose(True)
+          - pattern: langchain_classic.globals.set_verbose(True)
+          - pattern: langchain.verbose = True
+          # verbose=True on a legacy chain or agent that prints its prompt or its steps: inline,
+          # through a constant, or in an options dict unpacked into the call.
+          - patterns:
+              - pattern-regex: (?s)\A(?=.*?\blangchain(?:_classic)?\.(?:chains|agents)\b).*
+              - pattern-either:
+                  - patterns:
+                      - pattern: $CHAIN(..., verbose=$ON, ...)
+                      - focus-metavariable: $ON
+                  - pattern: |
+                      $OPTS = {..., "verbose": $ON, ...}
+                      ...
+                      $CHAIN(..., **$OPTS, ...)
+                  - pattern: |
+                      $OPTS = {..., "verbose": $ON, ...}
+                      ...
+                      def $FN(...):
+                        ...
+                        <... $CHAIN(..., **$OPTS, ...) ...>
+                  - pattern: |
+                      $OPTS = dict(..., verbose=$ON, ...)
+                      ...
+                      $CHAIN(..., **$OPTS, ...)
+                  - pattern: |
+                      $OPTS = dict(..., verbose=$ON, ...)
+                      ...
+                      def $FN(...):
+                        ...
+                        <... $CHAIN(..., **$OPTS, ...) ...>
+              - metavariable-regex:
+                  metavariable: $CHAIN
+                  regex: ^(?:[\w.]*\.)?(?:LLMChain|ConversationChain|AgentExecutor(?:\.from_agent_and_tools)?|initialize_agent|load_qa_chain|load_qa_with_sources_chain|load_summarize_chain)$
+              - metavariable-pattern:
+                  metavariable: $ON
+                  pattern: "True"
+              - focus-metavariable: $ON
+          - patterns:
+              - pattern-regex: (?s)\A(?=.*?langchain).*
+              - pattern-either:
+                  - pattern: ConsoleCallbackHandler(...)
+                  - pattern: $MOD.ConsoleCallbackHandler(...)
+          # LangGraph's debug mode prints every step's state, the message list included.
+          - pattern: langgraph.prebuilt.create_react_agent(..., debug=True, ...)
+          - pattern: langchain.agents.create_agent(..., debug=True, ...)
+          - pattern: langgraph.pregel.Pregel(..., debug=True, ...)
+          - patterns:
+              - pattern-regex: (?s)\A(?=.*?langgraph).*
+              - pattern-either:
+                  - pattern: $G.compile(..., debug=True, ...)
+                  - pattern: $G.invoke(..., debug=True, ...)
+                  - pattern: $G.ainvoke(..., debug=True, ...)
+                  - pattern: $G.stream(..., debug=True, ...)
+                  - pattern: $G.astream(..., debug=True, ...)
+                  - pattern: $G.batch(..., debug=True, ...)
+                  - pattern: $G.abatch(..., debug=True, ...)
+          # LiteLLM verbose and debug logging.
+          - pattern: litellm.set_verbose = True
+          - pattern: litellm._turn_on_debug()
+          - pattern: litellm.turn_on_debug()
+          - pattern: litellm._logging._turn_on_debug()
+          - pattern: litellm._logging.turn_on_debug()
+          - patterns:
+              - pattern-either:
+                  - pattern: $F(..., litellm_request_debug=$ON, ...)
+                  - pattern: '{..., "litellm_request_debug": $ON, ...}'
+              - metavariable-regex:
+                  metavariable: $ON
+                  regex: ^True$
+              - focus-metavariable: $ON
+          # The LiteLLM proxy started with --detailed_debug from Python: an argv element, or a
+          # command line that starts with litellm.
+          - pattern: '"--detailed_debug"'
+          # (f-string fragments bind separately, so this reads the line, skipping comments.)
+          - pattern-regex: (?m)^[^#\n]*?(?:\b[fFrR])?["']\K(?:\S*python3? -m )?litellm [^"'\n]*?--detailed_debug(?![\w-])
+          # Environment switches set from code before the SDK reads them, or kept in a dict of
+          # defaults that is applied to os.environ or passed as a child process's env.
+          - patterns:
+              - pattern-either:
+                  - pattern: os.environ[$K] = $V
+                  - pattern: os.environ.setdefault($K, $V)
+                  - pattern: os.putenv($K, $V)
+                  - pattern: '{..., $K: $V, ...}'
+                  # ({..., $K: $V, ...} doesn't match a dict that also unpacks another one.)
+                  - pattern: '{..., **$BASE, ..., $K: $V, ...}'
+                  - pattern: os.environ.update(..., $KW=$V, ...)
+              - metavariable-comparison:
+                  comparison: >-
+                    (str($K) == "LITELLM_LOG" and re.match("(?i)debug$", str($V)))
+                    or (str($K) == "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT" and re.match("(?i)(true|span_only|event_only|span_and_event)$", str($V)))
+                    or (re.match("OPENAI_AGENTS_DONT_LOG_(MODEL|TOOL)_DATA$", str($K)) and re.match("(?i)(0|false|no|off)$", str($V)))
+              - focus-metavariable: $V
+          # The whole message list sent to a chat-completion call, logged by the same function.
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      def $FN(...):
+                        ...
+                        <... $LLM(..., messages=$MSGS, ...) ...>
+                        ...
+                  - pattern-inside: |
+                      async def $FN(...):
+                        ...
+                        <... $LLM(..., messages=$MSGS, ...) ...>
+                        ...
+                  - pattern-inside: |
+                      def $FN(...):
+                        ...
+                        <... $LLM(..., input=$MSGS, ...) ...>
+                        ...
+                  - pattern-inside: |
+                      async def $FN(...):
+                        ...
+                        <... $LLM(..., input=$MSGS, ...) ...>
+                        ...
+              - metavariable-regex:
+                  metavariable: $LLM
+                  regex: >-
+                    ^(?:[\w.]+\.(?:chat\.completions\.(?:create|parse|stream)|messages\.(?:create|stream)|responses\.(?:create|stream|parse)|chat\.(?:complete|complete_async|stream))|(?:litellm\.)?a?completion|ollama\.(?:chat|achat))$
+              - metavariable-regex:
+                  metavariable: $MSGS
+                  regex: ^[A-Za-z_][\w.]*$
+              - pattern-either:
+                  - pattern: $LOG.$LVL($MSGS, ...)
+                  - pattern: $LOG.$LVL($FMT, ..., $MSGS, ...)
+                  - pattern: $LOG.$LVL(json.dumps($MSGS, ...), ...)
+                  - pattern: $LOG.$LVL($FMT, ..., json.dumps($MSGS, ...), ...)
+                  - pattern: $LOG.$LVL(f"...{$MSGS}...", ...)
+                  - pattern: $LOG.$LVL(f"...{json.dumps($MSGS)}...", ...)
+                  - pattern: $LOG.$LVL($FMT % $MSGS, ...)
+                  - pattern: $LOG.$LVL($FMT.format(..., $MSGS, ...), ...)
+                  - pattern: '$LOG.$LVL(..., extra={..., $EK: $MSGS, ...}, ...)'
+              - metavariable-regex:
+                  metavariable: $LOG
+                  regex: ^(?:logging|(?:[\w.]*\.)?_*(?:\w*_)?(?i:logger|log))$
+              - metavariable-regex:
+                  metavariable: $LVL
+                  regex: ^(?:info|warning|warn|error|critical|exception|fatal)$
+      # A switch flipped only behind an explicit debug / dev condition is a debug path.
+      - pattern-not-inside:
+          patterns:
+            - pattern-inside: |
+                if $COND:
+                  ...
+            - metavariable-regex:
+                metavariable: $COND
+                regex: (?i).*(?:debug|dev|local|verbose|trace|test)
+      - pattern-not-inside:
+          patterns:
+            - pattern-inside: |
+                def $DBG(...):
+                  ...
+            - metavariable-regex:
+                metavariable: $DBG
+                regex: (?i).*(?:debug|verbose)
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM02:2026 - Sensitive Information Disclosure"
+        - "LLM02:2025 - Sensitive Information Disclosure"
+      cwe:
+        - "CWE-532: Insertion of Sensitive Information into Log File"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [langchain, langgraph, litellm, opentelemetry, openai-agents, openai, anthropic]
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM02_SensitiveInformationDisclosure.md
+        - https://cwe.mitre.org/data/definitions/532.html
+        - https://github.com/langchain-ai/langchain/blob/langchain-core%3D%3D1.7.0/libs/core/langchain_core/globals.py
+        - https://github.com/langchain-ai/langchain/blob/langchain-core%3D%3D1.7.0/libs/core/langchain_core/callbacks/manager.py
+        - https://github.com/langchain-ai/langchain/blob/langchain-core%3D%3D1.7.0/libs/core/langchain_core/tracers/stdout.py
+        - https://github.com/langchain-ai/langchain/blob/langchain-core%3D%3D0.3.86/libs/core/langchain_core/globals.py
+        - https://github.com/langchain-ai/langchain/blob/langchain%3D%3D1.4.7/libs/langchain_v1/langchain/agents/factory.py
+        - https://github.com/langchain-ai/langchain/blob/langchain%3D%3D0.3.30/libs/langchain/langchain/chains/llm.py
+        - https://github.com/langchain-ai/langchain/blob/langchain%3D%3D0.3.30/libs/langchain/langchain/chains/base.py
+        - https://github.com/langchain-ai/langchain/blob/langchain-classic%3D%3D1.0.8/libs/langchain/langchain_classic/agents/agent.py
+        - https://github.com/langchain-ai/langchain/blob/langchain-core%3D%3D1.7.0/libs/core/langchain_core/callbacks/stdout.py
+        - https://github.com/langchain-ai/langgraph/blob/1.2.17/libs/langgraph/langgraph/pregel/main.py
+        - https://github.com/langchain-ai/langgraph/blob/prebuilt%3D%3D1.1.1/libs/prebuilt/langgraph/prebuilt/chat_agent_executor.py
+        - https://github.com/BerriAI/litellm/blob/v1.106.3/litellm/_logging.py
+        - https://github.com/BerriAI/litellm/blob/v1.106.3/litellm/utils.py
+        - https://github.com/BerriAI/litellm/blob/v1.106.3/litellm/litellm_core_utils/litellm_logging.py
+        - https://github.com/BerriAI/litellm/blob/v1.106.3/litellm/proxy/proxy_server.py
+        - https://pypi.org/project/opentelemetry-instrumentation-openai-v2/2.4b0/
+        - https://pypi.org/project/opentelemetry-util-genai/1.3b0/
+        - https://github.com/openai/openai-agents-python/blob/v0.24.0/src/agents/_debug.py
+        - https://github.com/openai/openai-agents-python/blob/v0.24.0/src/agents/run_config.py

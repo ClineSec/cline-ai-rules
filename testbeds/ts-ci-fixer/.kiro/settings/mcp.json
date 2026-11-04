@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "ci-logs": {
+      "command": "npx",
+      "args": ["-y", "@example-org/ci-logs-mcp@2.3.0", "--org", "example-org"],
+      "env": { "CI_LOGS_TOKEN": "${CI_LOGS_TOKEN}" },
+      "autoApprove": ["*"]
+    },
+    "ci-logs-dev": {
+      "command": "tsx",
+      "args": ["./src/mcp/ci-logs.ts"],
+      "disabled": true
+    },
+    "flake-history": {
+      "url": "https://mcp.example.com/flake-history",
+      "autoApprove": ["get_flake_rate", "list_flaky_tests"],
+      "disabledTools": ["quarantine_test"]
+    }
+  }
+}

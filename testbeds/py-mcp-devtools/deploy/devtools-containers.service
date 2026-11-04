@@ -1,0 +1,15 @@
+[Unit]
+Description=devtools container helpers MCP server (contrib, standalone fastmcp)
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+User=devtools
+Group=docker
+WorkingDirectory=/srv/devtools
+Environment=FASTMCP_LOG_LEVEL=INFO DOCKER_MCP_PORT=8811
+ExecStart=/srv/devtools/.venv/bin/fastmcp run contrib/docker_server.py:docker --transport http --host 0.0.0.0 --port 8811
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

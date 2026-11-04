@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "buildbox": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "BUILDBOX_DATABASE_URL",
+        "-e", "BUILDBOX_REPO=/workspace",
+        "-v", "${PWD}:/workspace",
+        "ghcr.io/example-org/buildbox-mcp:1.8.0", "buildbox"
+      ]
+    },
+    "buildbox-fetch": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "BUILDBOX_DATABASE_URL",
+        "-e", "BUILDBOX_REPO=/workspace",
+        "-v", "${PWD}:/workspace",
+        "--mount", "type=bind,src=${HOME},dst=/root,readonly",
+        "ghcr.io/example-org/buildbox-mcp:1.8.0", "buildbox"
+      ]
+    },
+    "build-logs": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${HOME:-/root}"]
+    }
+  }
+}

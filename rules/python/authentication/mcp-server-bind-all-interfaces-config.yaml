@@ -1,0 +1,190 @@
+rules:
+  - id: mcp-server-bind-all-interfaces-config
+    # A fastmcp server told to listen on every interface from outside its code: FASTMCP_HOST
+    # set in a dotenv file, a shell, PowerShell, or cmd script, a Makefile, a Procfile, a CI
+    # job, or a systemd unit, or `fastmcp run --host 0.0.0.0` in one of them. Compose services are covered by
+    # mcp-server-bind-all-interfaces-config-compose, `docker run` by -docker-run, and
+    # fastmcp.json by -fastmcp-json. Binds written in Python are mcp-server-exposed-without-auth.
+    # Sources: PrefectHQ fastmcp 4.1.3 settings.py (env prefix FASTMCP_, host defaults to
+    # 127.0.0.1, and a .env file in the working directory is read too) and cli/cli.py and
+    # cli/run.py (fastmcp run --host, no short form; --transport/-t; the host is dropped for
+    # stdio). fastmcp 2.0.0 to 2.13.x read FASTMCP_SERVER_HOST (FASTMCP_HOST from 2.8.0; the
+    # old name was dropped in 2.14.0). MCP SDK FastMCP 1.2.0 to 1.12.2 read FASTMCP_HOST;
+    # 1.12.3 and later pass host from the constructor, so the variable has no effect there,
+    # and SDK 2.x reads no environment. The TypeScript fastmcp (punkpeye 4.23.5) reads
+    # FASTMCP_HOST too, unless start() or its own --host flag sets the host.
+    # Dockerfiles, Containerfiles, and container entrypoint scripts are left out on purpose:
+    # inside a container the server must bind 0.0.0.0 for a published port to reach it, and
+    # whether that port is exposed is decided where the container runs, not in the image.
+    # A FASTMCP_HOST in a file that also sets the transport to stdio is not reported (the host
+    # is unused with stdio).
+    languages: [regex]
+    severity: INFO
+    message: >-
+      This makes a fastmcp MCP server listen on every network interface of the machine it runs
+      on, so anyone who can reach that machine on the server's port can list and call its tools
+      and do whatever they can do. Nothing here shows whether the server requires auth, and
+      fastmcp has none by default. Bind 127.0.0.1 (the default) for local use. For a server
+      other machines must reach, require auth in the server (fastmcp `auth=`) or put it
+      behind an authenticating proxy, and say so in a comment.
+    paths:
+      include:
+        - "*.sh"
+        - "*.bash"
+        - "*.zsh"
+        - "Makefile"
+        - "GNUmakefile"
+        - "*.mk"
+        - "justfile"
+        - "Justfile"
+        - ".justfile"
+        - "Procfile"
+        - "Procfile.*"
+        - ".github/workflows/*.yml"
+        - ".github/workflows/*.yaml"
+        - ".gitlab-ci.yml"
+        - ".circleci/config.yml"
+        - "azure-pipelines.yml"
+        - "bitbucket-pipelines.yml"
+        - "Jenkinsfile"
+        - ".env"
+        - ".env.*"
+        - "*.env"
+        - "*.service"
+        - "*.ps1"
+        - "*.cmd"
+        - "*.bat"
+      # Container entrypoints and scripts named for Docker run inside the container (see the
+      # comment at the top). Patterns name files, not every path segment, so a project folder
+      # called something-docker is still scanned.
+      exclude:
+        - "*entrypoint*"
+        - "*docker*.sh"
+        - "*docker*.bash"
+        - "*docker*.env"
+        - "*Docker*.env"
+        - ".env.docker*"
+        - "docker/"
+        - ".docker/"
+    pattern-either:
+      # FASTMCP_HOST assigned: a dotenv line, export, a YAML env: key, a systemd Environment=
+      # line, PowerShell $env:, cmd set, a Makefile variable, or an inline prefix before a
+      # command.
+      - patterns:
+          - pattern-regex: |-
+              (?xm)
+              (?(DEFINE)
+                (?<q> " (?:[^"\\\n] | \\.)*+ " | ' [^'\n]*+ ' )
+                (?<addr> 0\.0\.0\.0 | :: | \[::\] )
+                (?<val> ["']?+ (?: (?&addr) | \$\{ \w++ :?[-=] ["']?+ (?&addr) ["']?+ \} ) ["']?+
+                  (?= [\s;&|)`\\] | $ ) )
+                (?<name> FASTMCP_(?:SERVER_)?HOST ) )
+              ^ (?<! \\\n ) (?<! \\\r\n ) [ \t]*+
+              (?: # A YAML env: map entry (CI files).
+                  (?: - [ \t]++ )?+ (?&name) [ \t]*+ : [ \t]++ (?&val)
+                  # A systemd Environment= line, which may hold several assignments.
+                | Environment [ \t]*+ = [ \t]*+ (?: [^\n\#]*? [\s"'] )?? ["']?+ (?&name) = (?&val)
+                  # PowerShell ($env:FASTMCP_HOST = "0.0.0.0") and cmd (set FASTMCP_HOST=...).
+                | (?: [^\n"'\#;]*+ (?: (?&q) [^\n"'\#;]*+ )*+ ; [ \t]*+ )*? \$env: (?&name) [ \t]*+ = [ \t]*+ (?&val)
+                | (?i: set ) [ \t]++ "?+ (?&name) = (?&val)
+                  # Shell, dotenv, and Makefile assignments, alone or before a command, maybe
+                  # after a key such as run: or web:, a Makefile recipe prefix, or earlier
+                  # commands on the line (; && || | then do).
+                | (?: (?<=\t) [@+-]{1,2} | [\w.-]++ [ \t]*+ : [ \t]++ )?+
+                  (?: [^\n"'\#;&|]*+ (?: (?&q) [^\n"'\#;&|]*+ )*+ [;&|(]++ [ \t]*+
+                      (?: (?:then|do|else|\{) [ \t]++ )?+ )*?
+                  # A shell case arm's label: lan) export ...
+                  (?: \(? [^\s()|;&"'$]++ (?: \| [^\s()|;&"'$]++ )*+ \) [ \t]++ )?+
+                  (?: (?: export | declare [ \t]++ -x | readonly | env ) [ \t]++ )?+
+                  (?: (?! (?&name) = ) [A-Za-z_]\w*+ = (?: (?&q) | [^\s"'\#;&|]*+ ) [ \t]++ )*+
+                  (?&name) [ \t]*+ [:?+]?= [ \t]*+ (?&val) )
+          # The file sets the transport to stdio on a line of its own, which never binds the
+          # host.
+          - pattern-not-regex: (?sm)\A(?=.*?^[ \t]*+(?:-[ \t]++)?(?:export[ \t]++)?[A-Za-z_]*(?i:transport)\w*[ \t]*+(?:[:?]?=|:)[ \t]*+["']?+(?:stdio|\$\{\w++:?-stdio\})["']?+[ \t]*+(?:\#[^\n]*+)?$).*
+      # fastmcp run ... --host 0.0.0.0, run directly, through uv run, uvx, pipx run, or
+      # python -m fastmcp.cli, in command position. A command in a quoted string is read only
+      # where the string is a command itself (run: "...", CMD="...", sh -c "..."). Lines that
+      # continue a docker or podman command are skipped (covered by -docker-run).
+      - pattern-regex: |-
+          (?xm)
+          (?(DEFINE)
+            (?<q> " (?:[^"\\\n] | \\.)*+ " | ' [^'\n]*+ ' )
+            (?<lone> " (?![^"\n]*") | ' (?![^'\n]*') )
+            (?<ws> [ \t]++ | [ \t]*+ \\\r?\n [ \t]*+ )
+            (?<addr> 0\.0\.0\.0 | :: | \[::\] )
+            # The rest of one command: words, quoted strings, \-newline continuations. It
+            # stops at a newline, a comment, and ; & | separators. Each step is atomic and
+            # takes a whole word, so a very long line costs one step per word, not per
+            # character (per-character steps hit PCRE's match limit on lines of about 50 KB,
+            # and OpenGrep then drops every finding in the file).
+            (?<g> (?> (?&q) | \\\r?\n | \\[^\r\n] | [^\s"'\#;&|\\]++ | [^\n"'\#;&|\\] )*? )
+            # Everything before the program on its line. Quoted strings are skipped whole
+            # unless they hold a command; a docker or podman command is never walked past.
+            (?<pre> (?> (?<= : | :\s | = | -c\s | -lc\s | -ec\s | \beval\s ) ["']
+              | (?&q) | (?&lone) | \\[^\r\n] | (?<=\S)\#
+              # A run of plain words in one step (a program never starts inside one); it stops
+              # before then/do/else and before docker or podman.
+              | (?: (?! (?:then|do|else|docker|podman) [ \t] ) [^\s"'\#\\;&|(`]++ [ \t]*+ )++
+              | (?! (?<![\w-]) (?:docker|podman) [ \t] ) [^\n"'\#\\] )*? )
+            # Option words of uv run / uvx / pipx run that come before the program.
+            (?<opts> (?: (?&ws) -[\w-]++ (?: = [^\s;&|]++ | (?&ws) [^\s;&|-][^\s;&|]*+ )? )*? ) )
+          ^ (?<! \\\n ) (?<! \\\r\n ) (?&pre)
+          (?: ^ (?: \t [@+-]{1,2}
+                  | [ \t]*+ (?: - [ \t]++ )?+
+                    (?: Exec(?:Start|StartPre|Reload)? = [@!+:-]*+ | [\w.-]++ [ \t]*+ : [ \t]++ )?+
+                    # A shell case arm's label: lan) fastmcp run ...
+                    (?: \(? [^\s()|;&"'$]++ (?: \| [^\s()|;&"'$]++ )*+ \) [ \t]++ )?+ )
+            | (?<=[;&|(`]) [ \t]*+
+            | (?<![\w-]) (?:then|do|else) [ \t]++
+            | (?<= : ["'] | :\s["'] | =["'] | c\s["'] | \beval\s["'] ) )
+          # Assignments and wrappers before the program. A FASTMCP_TRANSPORT=stdio prefix
+          # can't be stepped over, so a stdio run isn't reported.
+          (?: (?! [A-Za-z_]*(?i:transport)\w*+ = ["']?+ stdio\b )
+              [A-Za-z_]\w*+ = (?: (?&q) | [^\s"'\#;&|]*+ ) [ \t]++
+            | (?: sudo | env | exec | nohup | time | command | setsid ) [ \t]++ )*+
+          \K
+          (?: uv (?&ws) run (?&opts) (?&ws)
+            | uvx (?&opts) (?&ws)
+            | pipx (?&ws) run (?&opts) (?&ws)
+            | ["']?+ (?: [\w.~${}-]*+ / )*+ python[\d.]*+ (?&ws) -m (?&ws) (?= fastmcp\.cli\b ) )?
+          ["']?+ (?: [\w.~${}-]*+ / )*+ fastmcp (?: \.cli | [=@][\w.=]++ )?+ ["']?+ (?&ws) run (?= \s | $ )
+          # A run with --transport stdio never binds the host.
+          (?! (?&g) (?<=\s) (?: --transport | -t ) (?: = | (?&ws) ) ["']?+ stdio \b )
+          (?&g) (?<=\s) --host (?: = | (?&ws) )
+          ["']?+ (?: (?&addr) | \$\{ \w++ :?[-=] ["']?+ (?&addr) ["']?+ \} ) ["']?+
+          (?= [\s;&|)`"'\\] | $ )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI03 - Identity and Privilege Abuse"
+      owasp-mcp:
+        - "MCP07:2025 - Insufficient Authentication & Authorization"
+        - "MCP09:2025 - Shadow MCP Servers"
+      owasp-aisvs:
+        - "v1.01-C10.2.1 - Authentication & Authorization"
+        - "v1.01-C10.3.1 - Secure Transport"
+      mitre-atlas:
+        - "AML.T0132 - Misconfigured or Publicly Exposed AI Services"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-1327: Binding to an Unrestricted IP Address"
+      confidence: LOW
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, fastmcp]
+      references:
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/settings.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/cli/cli.py
+        - https://github.com/punkpeye/fastmcp/blob/v4.23.5/src/FastMCP.ts
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/cli/run.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v2.13.0/src/fastmcp/settings.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v1.12.2/src/mcp/server/fastmcp/server.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v1.30.0/src/mcp/server/fastmcp/server.py
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP07-2025%E2%80%93Insufficient-Authentication%26Authorization.md
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP09-2025%E2%80%93Shadow-MCP-Servers.md
+        - https://cwe.mitre.org/data/definitions/1327.html

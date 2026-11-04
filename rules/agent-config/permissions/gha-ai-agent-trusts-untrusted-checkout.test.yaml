@@ -1,0 +1,102 @@
+# Fixture for gha-ai-agent-trusts-untrusted-checkout.
+name: pr-agent-review
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+env:
+  # ok: gha-ai-agent-trusts-untrusted-checkout
+  HELPDESK_ENV: ci
+jobs:
+  gemini-review:
+    runs-on: ubuntu-latest
+    env:
+      # ruleid: gha-ai-agent-trusts-untrusted-checkout
+      GEMINI_CLI_TRUST_WORKSPACE: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: gemini -p "Review the diff against main" --approval-mode default
+
+  copilot-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the PR
+        run: gh pr checkout ${{ github.event.pull_request.number }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+      # ruleid: gha-ai-agent-trusts-untrusted-checkout
+      - run: copilot -p "Review this pull request" --trust-folder
+      - env:
+          # ruleid: gha-ai-agent-trusts-untrusted-checkout
+          GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP: "true"
+        run: copilot -p "List the changed files"
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      - run: copilot -p "Review this pull request" --trust-folder-notes
+
+  codex-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+      # ruleid: gha-ai-agent-trusts-untrusted-checkout
+      - run: |
+          codex exec --dangerously-bypass-hook-trust \
+            "Summarize the change"
+      - uses: openai/codex-action@v1
+        with:
+          safety-strategy: unsafe
+          prompt: "Summarize the change"
+          # ruleid: gha-ai-agent-trusts-untrusted-checkout
+          codex-args: '["--dangerously-bypass-hook-trust"]'
+      # ruleid: gha-ai-agent-trusts-untrusted-checkout
+      - run: cursor-agent -p "Summarize the change" --approve-mcps
+      # ruleid: gha-ai-agent-trusts-untrusted-checkout
+      - run: echo "GEMINI_CLI_TRUST_WORKSPACE=true" >> "$GITHUB_ENV"
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      - run: echo "GEMINI_CLI_TRUST_WORKSPACE=false" >> "$GITHUB_ENV"
+      # ruleid: gha-ai-agent-trusts-untrusted-checkout
+      - run: >-
+          gemini
+          --skip-trust
+          -p "Summarize the change"
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      - run: |
+          gemini -p "Summarize the change" > summary.md
+          --skip-trust-check-is-not-a-command
+
+  # The PR is checked out into a subdirectory; the agent runs on the base branch.
+  subdir:
+    runs-on: ubuntu-latest
+    env:
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      GEMINI_CLI_TRUST_WORKSPACE: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr-head
+      - run: gemini -p "Review the files in pr-head/ as data"
+
+  # Base-branch checkout only.
+  base:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      - run: gemini --skip-trust -p "Label the pull request"
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      - run: echo "gemini --skip-trust is documented for headless runs"
+
+  same-repo:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      - run: gemini --skip-trust -p "Review the diff"

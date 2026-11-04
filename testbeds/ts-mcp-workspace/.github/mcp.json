@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "workspace": {
+      "type": "local",
+      "command": "npm",
+      "args": ["run", "--silent", "start"],
+      "tools": ["*"]
+    },
+    "hosted": {
+      "type": "http",
+      "url": "https://workspace-mcp.example.invalid/mcp",
+      "tools": ["workspace_search_code", "workspace_git_log"]
+    }
+  }
+}

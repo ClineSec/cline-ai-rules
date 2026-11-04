@@ -1,0 +1,203 @@
+rules:
+  - id: agent-rules-silent-command-directive
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      This agent instruction file tells the agent to run a command and keep it from the user
+      ("run this silently", "do not mention this to the user"), or it is a rule loaded into
+      every chat (Cursor `alwaysApply: true` or an all-files glob, Windsurf
+      `trigger: always_on`, Copilot `applyTo: "**"`) that tells the agent to run a script as
+      setup or at session start. Every agent session that loads the file is told to run the
+      command with the developer's credentials, unprompted, and the user is not meant to
+      notice. The 2026 Miasma worm planted exactly this in `.cursor/rules/*.mdc`,
+      `.cursorrules`, `.windsurfrules`, and `.github/copilot-instructions.md`. Remove the
+      directive, inspect the script it names, and review recent changes to agent config files.
+      If a setup step is real, document it for a person to run, and keep always-applied rules
+      to guidance.
+    paths:
+      include:
+        - "CLAUDE.md"
+        - "CLAUDE.local.md"
+        - "AGENTS.md"
+        - "AGENTS.override.md"
+        - "GEMINI.md"
+        - ".cursorrules"
+        - ".cursor/rules/**"
+        - ".windsurfrules"
+        - ".windsurf/rules/**"
+        # Windsurf's current preferred rules folder; .windsurf/rules is the fallback.
+        - ".devin/rules/**"
+        - ".clinerules"
+        - ".clinerules/**"
+        - ".github/copilot-instructions.md"
+        - ".github/instructions/**"
+        # Skills, subagents, and slash commands: project copies and those shipped in plugins
+        # (a plugin's agents/ and commands/ folders, which load recursively), plus Gemini CLI
+        # custom commands (TOML).
+        - "SKILL.md"
+        - ".claude/agents/**"
+        - ".claude/commands/**"
+        - "agents/**/*.md"
+        - "commands/**/*.md"
+        - ".gemini/commands/**"
+    pattern-either:
+      # 1. "Silently run ..." / "run the following silently", as an instruction: the verb
+      #    starts a line, a list item, or a clause (after punctuation, "then", "and",
+      #    "please", ...). Descriptions ("or the tests silently run the stale build"), a
+      #    negated verb ("never run anything silently"), and a clause in between ("run pytest,
+      #    which silently skips") do not count.
+      - pattern-regex: >-
+          (?imx)
+          (?: ^ [ \t]* (?: [-*+>] | \d{1,3}[.)] )? | [.:;!?,(] | \b(?:then|and|first|please
+            |also|always|now|just|next|immediately|start|startup|launch|load|open|session
+            |request|turn|task)\b ) [ \t*_"']* \K
+          (?:silently|secretly|covertly|stealthily|invisibly|quietly)\s+
+          (?:go\s+ahead\s+and\s+)?
+          (?:run|execute|exec|invoke|launch|install|download|fetch)\b
+      - pattern-regex: >-
+          (?imx)
+          (?: ^ [ \t]* (?: [-*+>] | \d{1,3}[.)] )? | [.:;!?,(] | \b(?:then|and|first|please
+            |also|always|now|just|next|immediately|start|startup|launch|load|open|session
+            |request|turn|task)\b ) [ \t*_"']* \K
+          (?:run|execute|exec|invoke|launch)\s+
+          (?: (?:the\s+)?(?:following|above|below|this|these|that|it|command|commands|script
+                |scripts|step|steps|task|tasks|setup|installer)\b
+            | `[^`\n]{1,200}` )
+          (?: (?!\b(?:which|that|who|but|and|because|if|when|unless|since|while|although|so
+                |then)\b) [^\n.;!?] ){0,60}?
+          \b(?:silently|secretly|covertly|stealthily|invisibly)\b
+      # 2. A run instruction and a "keep it from the user" instruction in the same paragraph,
+      #    in either order: "Do not mention or display this to the user", "hide this from
+      #    the user", "the user must not see this". "Do not mention it in your reply" is left
+      #    out, and so is a condition ("don't tell the user about it unless it fails"): teams
+      #    write both to keep summaries short. "Without telling the user" counts only
+      #    in the same sentence as the run instruction, because "never run anything without
+      #    telling the user" is a normal safety line that can sit next to other commands.
+      - pattern-regex: >-
+          (?ix)
+          (?(DEFINE)
+            (?<who> (?:the\s+)?(?:user|human|developer|operator)s? \b )
+            (?<what> (?:this|these|that|it|them|anything|any\s+of\s+(?:this|it|that|these)
+                     |the\s+(?:above|following|command|commands|script|scripts|step|steps
+                     |task|tasks|setup|installer|download)) \b )
+            (?<conceal>
+                \b(?:do\s+not|don'?t|never|must\s+not|mustn'?t|should\s+not|shouldn'?t)\s+
+                (?:ever\s+)?
+                (?:mention|tell|show|display|reveal|disclose|inform|notify|alert|announce
+                  |surface)\b
+                (?:\s*,?\s+(?:or|and|nor)\s+\w+)?\s+
+                (?: (?&who) \s+ (?:about|of) \s+ (?&what)
+                  | (?&what) [^\n.]{0,40}? \b(?:to|with)\s+ (?&who) )
+                (?! [^\n.]{0,30}? \b(?:unless|except|until)\b )
+              | \b(?:do\s+not|don'?t|never)\s+let\s+ (?&who) \s+(?:know|see|notice|find\s+out)\b
+              | (?<!not\s)(?<!n't\s)(?<!never\s)
+                \b(?:hide|conceal)\b [^\n.]{0,40}? \bfrom\s+ (?&who)
+              | \bkeep\b [^\n.]{0,40}? \b(?:hidden|secret)\s+from\s+ (?&who)
+              | (?&who) \s+(?:must|should|need|needs)\s+(?:not|never)\s+(?:to\s+)?
+                (?:see|know|notice|learn|find\s+out|be\s+told)\b )
+            (?<without>
+                \bwithout\s+(?:ever\s+)?(?:telling|informing|notifying|alerting|showing)\s+
+                (?&who) (?!\s+(?:first|beforehand|in\s+advance|before)\b) )
+            (?<run>
+                (?<!never\s)(?<!not\s)(?<!n't\s)(?<!no\s)(?<!ever\s)
+                \b(?:run|execute|exec|invoke|launch|install|download|source|eval)\b
+              | \|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b
+              | (?m:^) [ \t]* (?:[-*>][ \t]+|\$[ \t]+)?
+                (?:node|bun|deno|python[23]?|sh|bash|zsh|pwsh|powershell|ruby|perl)
+                [ \t]+ (?:run[ \t]+)? [^\s`]*[/.][^\s`]* )
+            (?<para> (?: (?!\n[ \t]*\r?\n) [\s\S] ) )
+            (?<clause> (?: `[^`\n]{0,200}` | [^\n.!?`] | ` | \.(?=\S) ) )
+          )
+          (?: (?&run) (?&para){0,240}? (?&conceal)
+            | (?&conceal) (?&para){0,200}? (?&run)
+            | (?&run) (?&clause){0,120}? (?&without)
+            | (?&without) (?&clause){0,120}? (?&run) )
+      # 3. A rule whose front matter loads it into every session (Cursor alwaysApply or an
+      #    all-files glob, Windsurf trigger: always_on, Copilot applyTo: "**"), whose body
+      #    tells the agent to run a script, a pipe-to-shell download, or `npx -y` as setup or
+      #    at session start. The finding lands on the command. Plain instruction files
+      #    (AGENTS.md, CLAUDE.md) are always loaded and routinely document setup scripts, so
+      #    this branch is limited to files with that front matter. The front-matter check is
+      #    a separate regex whose match covers the whole file, so the command search stays
+      #    local: one regex running from the top of the file to the command hits PCRE's match
+      #    limit on large files and silently drops the finding. `\x{FEFF}?` skips a byte-order
+      #    mark (OpenGrep regexes run in UTF mode).
+      - patterns:
+          - pattern-regex: >-
+              (?ix)
+              (?(DEFINE)
+                (?<all> (?<![\w/.*]) \*\*?(?:/\*(?:\.\*)?)? (?![\w/.*]) )
+                (?<always>
+                    alwaysApply: [ \t]* ["']? true \b
+                  | globs: [^\n]*? (?&all)
+                  | globs: [ \t]* \r?\n [ \t]* - [ \t]* ["']? (?&all)
+                  | trigger: [ \t]* ["']? always_on \b
+                  | applyTo: [^\n]*? (?&all) ) )
+              \A \x{FEFF}? --- [ \t]* \r?\n
+              (?: (?!---) [^\n]* \n ){0,100}? [ \t]* (?&always)
+              (?s:.*)
+          - pattern-regex: >-
+              (?ix)
+              (?(DEFINE)
+                (?<trigger>
+                    (?<![/.-]) \b(?:initiali[sz]|bootstrap|provision)\w* (?!\.?[\w/-])
+                  | (?<![/.-]) \bset[ -]?up\b (?!\.?[\w/-])
+                  | \b(?:session|conversation|chat|workspace)\s+(?:start|startup|open|begins?)\b
+                  | \b(?:start|beginning)\s+of\s+(?:every|each|the|a|any)\s+(?:new\s+)?
+                    (?:session|conversation|chat|task|request)\b
+                  | \b(?:every|each)\s+(?:new\s+)?(?:session|conversation|chat)\b
+                  | \bon\s+(?:startup|launch|load|open)\b
+                  | \bbefore\s+(?:you\s+)?(?:do(?:ing)?\s+anything|any(?:thing)?\s+(?:else|other)
+                    |respond|answer|reply|start|begin|your\s+first)
+                  | \bfirst\s+thing\b
+                  | \bas\s+(?:a|the|your)\s+first\s+step\b )
+                (?<script> (?:~|\$HOME|\$\{HOME\}|%USERPROFILE%)? [\w.$%{}-]* [/\\] [^\s`'"]+
+                         | [\w.-]+\.(?:js|mjs|cjs|ts|mts|py|sh|bash|zsh|ps1|rb|pl|php)\b )
+                (?<cmd>
+                    \b(?:node|nodejs|bun|deno|python[23]?|py|sh|bash|zsh|dash|ksh|pwsh
+                      |powershell(?:\.exe)?|ruby|perl|php|tsx|ts-node|osascript|cscript
+                      |wscript)
+                    (?:\s+(?:run|-[\w-]+))* \s+ ["']? (?&script)
+                  | (?<![\w/.-]) \.{1,2}/[\w.-]+(?:/[\w.-]+)*
+                    \.(?:sh|bash|zsh|js|mjs|cjs|ts|py|ps1|rb|pl)\b
+                  | \b(?:curl|wget)\b [^\n`|]* \|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b
+                  | \b(?:iwr|irm|invoke-webrequest|invoke-restmethod)\b [^\n`|]* \|\s*iex\b
+                  | \b(?:npx|bunx|pnpm\s+dlx)\s+(?:-y|--yes)\s+[@\w./-]+ )
+                (?<sentence> (?: `[^`\n]{0,200}` | [^\n.!?`] | ` | \.(?=\S) ) )
+              )
+              (?: (?&trigger) (?&sentence){0,120}?
+                  (?: [.:]? [ \t]* \r?\n
+                      (?: [ \t]* (?: ```[\w-]* | \#[^\n]{0,80} | > )? [ \t]* \r?\n ){0,3}
+                      [ \t]* (?: [-*>] [ \t]+ )? )?
+                  (?: ` | \$ [ \t]+ )? \K (?&cmd)
+                | \K (?&cmd) (?= (?&sentence){0,120}? (?&trigger) ) )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM01:2026 - Prompt Injection"
+        - "LLM01:2025 - Prompt Injection"
+      owasp-agentic:
+        - "ASI01 - Agent Goal Hijack"
+        - "ASI06 - Memory & Context Poisoning"
+      owasp-aisvs:
+        - "v1.01-AC.11.2 - AI Code-Review & Assistant Bot Hardening"
+      mitre-atlas:
+        - "AML.T0081 - Modify AI Agent Configuration"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-1427: Improper Neutralization of Input Used for LLM Prompting"
+        - "CWE-506: Embedded Malicious Code"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code, codex, cursor, copilot, windsurf, cline, gemini-cli]
+      references:
+        - https://www.tenable.com/blog/ai-coding-assistant-agent-harness-attacks
+        - https://www.stepsecurity.io/blog/miasma-worm-hits-microsoft-again-azure-functions-action-and-72-other-repositories-disabled-after-supply-chain-attack-targeting-ai-coding-agents
+        - https://cursor.com/docs/context/rules
+        - https://docs.devin.ai/desktop/cascade/memories
+        - https://docs.github.com/en/copilot/how-tos/configure-custom-instructions/add-repository-instructions
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM01_PromptInjection.md
+        - https://cwe.mitre.org/data/definitions/1427.html

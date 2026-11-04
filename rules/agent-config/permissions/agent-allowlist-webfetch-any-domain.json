@@ -1,0 +1,91 @@
+{
+  "general": {
+    // ruleid: agent-allowlist-webfetch-any-domain
+    "defaultApprovalMode": "auto_edit"
+  },
+  "permissions": {
+    "allow": [
+      "Read",
+      // ruleid: agent-allowlist-webfetch-any-domain
+      "WebFetch",
+      // ruleid: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*)",
+      // ruleid: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*.*)",
+      // ruleid: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*.com)",
+      // ruleid: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*.co.uk)",
+      // ruleid: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*example.com)",
+      // ruleid: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:docs.*.io)",
+      // ruleid: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*.up.railway.app)",
+      // ruleid: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*.trycloudflare.com)",
+      // ruleid: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*.github.io)",
+      // ruleid: agent-allowlist-webfetch-any-domain
+      "WebFetch()",
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:docs.example.com)",
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*.example.com)",
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:api-*.example.com)",
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:example.*)",
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*.example.co.uk)",
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*.local)",
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*.internal)",
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*.railway.app.example.com)",
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:example-org.github.io)",
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebSearch",
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetchDocs",
+      // ok: agent-allowlist-webfetch-any-domain
+      "mcp__fetch__fetch"
+    ],
+    // A narrow ask or deny leaves the rest of the allow in place.
+    "ask": [
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:docs.example.com)"
+    ],
+    "deny": [
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*.com)"
+    ]
+  },
+  "tools": {
+    "allowed": [
+      "read_file",
+      // ruleid: agent-allowlist-webfetch-any-domain
+      "web_fetch",
+      // ruleid: agent-allowlist-webfetch-any-domain
+      "web_fetch(https://docs.example.com)",
+      // ok: agent-allowlist-webfetch-any-domain
+      "google_web_search",
+      // ok: agent-allowlist-webfetch-any-domain
+      "run_shell_command(git status)"
+    ],
+    "core": [
+      // ok: agent-allowlist-webfetch-any-domain
+      "web_fetch"
+    ]
+  },
+  // ruleid: agent-allowlist-webfetch-any-domain
+  "allowedTools": ["read_file", "web_fetch"],
+  "notes": {
+    // ok: agent-allowlist-webfetch-any-domain
+    "allow": ["WebFetch"],
+    // ok: agent-allowlist-webfetch-any-domain
+    "defaultApprovalMode": "auto_edit"
+  }
+}

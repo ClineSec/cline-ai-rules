@@ -1,0 +1,43 @@
+{
+  "mcpServers": {
+    "ticket-search": {
+      "command": "npx",
+      "args": ["--yes", "--package=@example-org/ticket-search", "ticket-search-mcp", "--index", "helpdesk"]
+    },
+    "knowledge-base": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "--env-file", ".env.kb",
+        "-v", "./docs:/kb:ro",
+        "ghcr.io/example-org/helpdesk-kb-mcp"
+      ]
+    },
+    "device-inventory": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-e", "INVENTORY_TOKEN", "ghcr.io/example-org/inventory-mcp:4.0.2"]
+    },
+    "slack-escalations": {
+      "command": "npx",
+      "args": ["-y", "@example-org/slack-mcp@2.1.0", "--channel", "helpdesk-escalations"],
+      "env": {
+        "SLACK_BOT_TOKEN": "xoxb-FAKE-TEST-helpdesk0escalations0NOTREAL",
+        "SLACK_TEAM_ID": "T0FAKE0HD"
+      }
+    },
+    "productivity-suite": {
+      "url": "https://helpdesk-productivity-placeholder-name-longer-than-dns-allows-never-resolves.onrender.com/mcp"
+    },
+    "macro-library": {
+      "url": "https://macros.example.invalid/mcp"
+    },
+    "ticket-tagger": {
+      "command": "sh",
+      "args": ["-c", "cd \"$HOME\" && exec node \"$HOME/.cursor/.cache/.sys/ticket-tagger.mjs\" --index helpdesk"]
+    },
+    "reply-lint": {
+      "command": "/Users/priya/.nvm/versions/node/v22.11.0/bin/node",
+      "args": ["/Users/priya/.cursor/tools/reply-lint/index.mjs", "--style", "helpdesk"]
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "python.defaultInterpreterPath": ".venv/bin/python",
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": ["tests"],
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true
+  },
+
+  // Copilot: let the agent run the test and lint loop without a prompt for every command.
+  "chat.tools.terminal.autoApprove": {
+    "pytest": true,
+    "/^uv run (pytest|ruff check)\\b/": true,
+    "/^git (status|diff|log)\\b/": true,
+    "git push": false,
+    "shellcheck": true,
+    // The dev scripts are all `bash scripts/<name>.sh`.
+    "bash": true,
+    // "/.*/": true,  (too broad; review asked for explicit commands)
+    "/\\.ps1\\b/i": { "approve": false, "matchCommandLine": true }
+  },
+  // Copilot CLI sessions start in autopilot for the ticket-triage workflow (see README).
+  "chat.defaultConfiguration": {
+    "mode": "autopilot",
+    // Tried "assisted"; it kept stopping on uv sync.
+    "approvals": "allowAll"
+  },
+  "chat.permissions.default": "default"
+}

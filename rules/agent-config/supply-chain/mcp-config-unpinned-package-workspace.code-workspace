@@ -1,0 +1,70 @@
+{
+  "folders": [{ "path": "." }],
+  "settings": {
+    "mcp": {
+      "servers": {
+        "filesystem": {
+          "command": "npx",
+          // ruleid: mcp-config-unpinned-package-workspace
+          "args": ["-y", "@example-org/mcp-filesystem", "${workspaceFolder}"]
+        },
+        "multi-line": {
+          "command": "npx",
+          "args": [
+            "-y",
+            // ruleid: mcp-config-unpinned-package-workspace
+            "@example-org/mcp-search@^2.1.0"
+          ]
+        },
+        "uvx-from": {
+          "command": "uvx",
+          // ruleid: mcp-config-unpinned-package-workspace
+          "args": ["--from", "example-org-mcp-git", "mcp-git", "--repository", "."]
+        },
+        "docker-latest": {
+          "type": "stdio",
+          "command": "docker",
+          // ruleid: mcp-config-unpinned-package-workspace
+          "args": ["run", "-i", "--rm", "ghcr.io/example-org/mcp-kb:latest"]
+        },
+        "shell": {
+          "command": "bash",
+          // ruleid: mcp-config-unpinned-package-workspace
+          "args": ["-c", "cd tools && npx -y example-org-mcp-reports"]
+        },
+        "pinned": {
+          "command": "npx",
+          // ok: mcp-config-unpinned-package-workspace
+          "args": ["-y", "@example-org/mcp-filesystem@1.4.2", "${workspaceFolder}"]
+        },
+        "uvx-pinned": {
+          "command": "uvx",
+          // ok: mcp-config-unpinned-package-workspace
+          "args": ["example-org-mcp-git==2026.1.14"]
+        },
+        "remote": {
+          "type": "http",
+          // ok: mcp-config-unpinned-package-workspace
+          "url": "https://mcp.example.com/mcp"
+        },
+        "docs": {
+          // A commented-out "command" line is not the server's command.
+          // "command": "npx",
+          "command": "/usr/local/bin/docs-mcp",
+          // ok: mcp-config-unpinned-package-workspace
+          "args": ["serve", "handbook"]
+        }
+        // A commented-out server is not configuration.
+        // ok: mcp-config-unpinned-package-workspace
+        // "old": { "command": "npx", "args": ["-y", "@example-org/mcp-old"] }
+      }
+    }
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      // ok: mcp-config-unpinned-package-workspace
+      { "label": "docs", "type": "shell", "command": "npx", "args": ["-y", "@example-org/docs-cli", "build"] }
+    ]
+  }
+}

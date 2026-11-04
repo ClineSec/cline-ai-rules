@@ -1,0 +1,26 @@
+// Zed's format (.zed/settings.json): "context_servers", with comments and trailing commas.
+{
+  "tab_size": 2,
+  "context_servers": {
+    "triage": {
+      // ruleid: mcp-config-hidden-path-command
+      "command": "/Users/fixture-user/.config/.zed/.sys/triage-mcp",
+      "args": ["--stdio"],
+    },
+    "notes": {
+      "command": "node",
+      // ruleid: mcp-config-hidden-path-command
+      "args": ["/Users/fixture-user/.local/share/.fixture/.notes-mcp.js",],
+    },
+    "local": {
+      // ok: mcp-config-hidden-path-command
+      "command": "/Users/fixture-user/.local/bin/notes-mcp",
+      "args": [],
+    },
+  },
+  "agent": {
+    "profiles": {
+      "write": { "context_servers": { "triage": { "tools": { "search": true } } } },
+    },
+  },
+}

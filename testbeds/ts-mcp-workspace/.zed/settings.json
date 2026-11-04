@@ -1,0 +1,34 @@
+// Zed project settings for workspace-mcp contributors.
+{
+  "tab_size": 2,
+  "languages": {
+    "TypeScript": { "formatter": "language_server" }
+  },
+  "context_servers": {
+    // Written before Zed flattened the command object; Zed still migrates it on load.
+    "workspace": {
+      "source": "custom",
+      "command": {
+        "path": "pnpm",
+        "args": ["--silent", "start"],
+        "env": { "WORKSPACE_ROOT": "." }
+      }
+    },
+    // The 1.x compat server; switch it on when testing old clients.
+    "workspace-compat": {
+      "enabled": false,
+      "command": "node",
+      "args": ["dist/src/compat/lowlevel.js"]
+    },
+    "hosted": {
+      "url": "https://workspace-mcp.example.invalid/mcp"
+    }
+  },
+  "agent_servers": {
+    // An ACP agent for trying the tools from Zed's agent panel; not an MCP server.
+    "workspace-agent": {
+      "command": "node",
+      "args": ["dist/src/agent/acp.js"]
+    }
+  }
+}

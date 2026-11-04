@@ -1,0 +1,108 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      // ruleid: agent-allowlist-network-exfil-commands
+      "Bash(curl:*)",
+      // ruleid: agent-allowlist-network-exfil-commands
+      "Bash(wget *)",
+      // ruleid: agent-allowlist-network-exfil-commands
+      "Bash(nslookup:*)",
+      // ruleid: agent-allowlist-network-exfil-commands
+      "Bash(dig +short *)",
+      // ruleid: agent-allowlist-network-exfil-commands
+      "Bash(curl -s https://status.example.com/*)",
+      // ruleid: agent-allowlist-network-exfil-commands
+      "Bash(/usr/bin/nc *)",
+      // ruleid: agent-allowlist-network-exfil-commands
+      "Bash(curl*)",
+      // ruleid: agent-allowlist-network-exfil-commands
+      "PowerShell(Invoke-WebRequest *)",
+      // ruleid: agent-allowlist-network-exfil-commands
+      "Shell(curl)",
+      // ruleid: agent-allowlist-network-exfil-commands
+      "Shell(ssh:*)",
+      // ok: agent-allowlist-network-exfil-commands
+      "Bash(curl:*status.example.com*)",
+      // ruleid: agent-allowlist-network-exfil-commands
+      "Bash(curl :*)",
+      // ok: agent-allowlist-network-exfil-commands
+      "Bash(curl https://status.example.com/healthz)",
+      // ok: agent-allowlist-network-exfil-commands
+      "Bash(curl --version)",
+      // ok: agent-allowlist-network-exfil-commands
+      "Bash(hostname)",
+      // ok: agent-allowlist-network-exfil-commands
+      "Bash(ssh-keygen -l:*)",
+      // ok: agent-allowlist-network-exfil-commands
+      "Bash(ncu:*)",
+      // ok: agent-allowlist-network-exfil-commands
+      "Bash(npm run fetch-fixtures:*)",
+      // ok: agent-allowlist-network-exfil-commands
+      "Bash(git pull:*)",
+      // ok: agent-allowlist-network-exfil-commands
+      "Shell(curl:--version)",
+      // ok: agent-allowlist-network-exfil-commands
+      "WebFetch(domain:docs.example.com)",
+      // ok: agent-allowlist-network-exfil-commands
+      "Bash(*)"
+    ],
+    "deny": [
+      // ok: agent-allowlist-network-exfil-commands
+      "Bash(curl:*)",
+      // ok: agent-allowlist-network-exfil-commands
+      "Bash(wget:*)"
+    ],
+    "ask": [
+      // ok: agent-allowlist-network-exfil-commands
+      "Bash(ssh:*)"
+    ]
+  },
+  "tools": {
+    "allowed": [
+      // ruleid: agent-allowlist-network-exfil-commands
+      "run_shell_command(curl)",
+      // ruleid: agent-allowlist-network-exfil-commands
+      "ShellTool(dig +short)",
+      // ok: agent-allowlist-network-exfil-commands
+      "run_shell_command(git status)",
+      // ok: agent-allowlist-network-exfil-commands
+      "run_shell_command(curlie-docs)",
+      // ok: agent-allowlist-network-exfil-commands
+      "web_fetch"
+    ],
+    "exclude": [
+      // ok: agent-allowlist-network-exfil-commands
+      "run_shell_command(curl)"
+    ],
+    "core": [
+      // ok: agent-allowlist-network-exfil-commands
+      "run_shell_command(ping)"
+    ]
+  },
+  // ruleid: agent-allowlist-network-exfil-commands
+  "allowedTools": ["run_shell_command(wget)"],
+  "terminalAllowlist": [
+    "npm test",
+    // ruleid: agent-allowlist-network-exfil-commands
+    "curl",
+    // ruleid: agent-allowlist-network-exfil-commands
+    "ssh deploy@build.example.com",
+    // ruleid: agent-allowlist-network-exfil-commands
+    "nslookup:*",
+    // ok: agent-allowlist-network-exfil-commands
+    "git status",
+    // ok: agent-allowlist-network-exfil-commands
+    "curl:--version",
+    // ok: agent-allowlist-network-exfil-commands
+    "hostnamectl status"
+  ],
+  "mcpAllowlist": [
+    // ok: agent-allowlist-network-exfil-commands
+    "curl"
+  ],
+  "notes": {
+    // ok: agent-allowlist-network-exfil-commands
+    "allow": ["Bash(curl:*)"]
+  }
+}

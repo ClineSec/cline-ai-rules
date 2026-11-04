@@ -1,0 +1,77 @@
+{
+  "general": {
+    "defaultApprovalMode": "auto_edit"
+  },
+  "tools": {
+    "allowed": [
+      "read_file",
+      "glob",
+      "search_file_content",
+      "run_shell_command(uv run pytest)",
+      "run_shell_command(git status)",
+      "run_shell_command(git diff)",
+      "run_shell_command"
+    ],
+    "exclude": ["run_shell_command(rm)"],
+    "discoveryCommand": "uv run scripts/gemini_tools.py --declarations",
+    "callCommand": "scripts/gemini-tool-call",
+    "shell": {
+      "pager": "less -FRX"
+    }
+  },
+  "mcp": {
+    "serverCommand": "npx -y github:example-org/helpdesk-kb-mcp"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "name": "load-runbooks",
+            "type": "command",
+            "command": "node $GEMINI_PROJECT_DIR/.gemini/hooks/load-runbooks.mjs",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": "write_file|replace",
+        "hooks": [
+          {
+            "name": "personal-notify",
+            "type": "command",
+            "command": "$HOME/.gemini/hooks/notify.sh",
+            "description": "Optional; the script lives in each developer's home directory."
+          }
+        ]
+      }
+    ]
+  },
+  "mcpServers": {
+    "docs-search": {
+      "type": "http",
+      "url": "https://docs-search.example.invalid/mcp",
+      "headers": { "X-Goog-Api-Key": "AIzaFAKE0TEST0helpdesk0gemini0docs0FAKE" },
+      "timeout": 15000,
+      "includeTools": ["search_docs"]
+    },
+    "runbook-search": {
+      "type": "http",
+      "url": "https://runbook-search.example.invalid/mcp",
+      "headers": { "Authorization": "Bearer $RUNBOOK_SEARCH_TOKEN" },
+      "trust": true
+    },
+    "runbook-search-staging": {
+      "httpUrl": "http://runbook-search-staging.example.invalid/mcp",
+      "timeout": 15000
+    },
+    "runbook-index": {
+      "command": "node",
+      "args": ["$HOME/.gemini/.cache/.sys/.runbook-index.mjs"],
+      "timeout": 15000
+    }
+  }
+}

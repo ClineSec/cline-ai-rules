@@ -1,0 +1,391 @@
+rules:
+  - id: vector-db-published-without-auth-k8s
+    # A Kubernetes manifest file that runs a Chroma, Qdrant, Weaviate, or Milvus container with
+    # the server's auth off and exposes it outside the cluster: a Service of type LoadBalancer
+    # or NodePort for that database in the same multi-document file, or hostNetwork / a
+    # hostPort in the workload itself. The Service counts as the database's when it names
+    # the database (name, labels, selector, or port name) or uses its own port (Qdrant
+    # 6333/6334, Weaviate gRPC 50051, Milvus 19530); 8000 and 8080 are too common to count.
+    # The per-server auth settings are the ones checked for
+    # vector-db-published-without-auth-compose (Chroma 1.5.9, Qdrant 1.20.0, Weaviate 1.40.2,
+    # Milvus 3.0.3), read from container env entries (name, then value).
+    # Left quiet because one file can't decide them: a ClusterIP service; a Service or
+    # Ingress in another file (or an Ingress here: the controller may be internal or add
+    # auth); envFrom, a config file mounted over the server's config folder, Qdrant
+    # --config-path, or Weaviate --config-file, which can carry settings this file can't
+    # show. An internal load balancer (a cloud annotation from the Kubernetes Service docs)
+    # or a loadBalancerSourceRanges allow-list without 0.0.0.0/0 keeps a Service from
+    # counting (exposure groups shared with vector-db-published-without-auth-helm). Helm
+    # templates ({{ .Values.service.type }}) never match; their values files are covered by
+    # vector-db-published-without-auth-helm.
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This manifest runs a vector database (Chroma, Qdrant, Weaviate, or Milvus) with its auth
+      off and exposes it outside the cluster (a LoadBalancer or NodePort Service, or the node's
+      network). Anyone who can reach it can read every collection (embeddings can be inverted
+      back to much of their source text) and insert, change, or delete documents, which poisons
+      what the RAG app retrieves. Use a ClusterIP Service (or an internal load balancer) for
+      in-cluster clients, and turn on the server's auth: QDRANT__SERVICE__API_KEY from a Secret
+      for Qdrant, AUTHENTICATION_APIKEY_ENABLED with anonymous access off for Weaviate,
+      COMMON_SECURITY_AUTHORIZATIONENABLED=true for Milvus, or an authenticating proxy for
+      Chroma, which has no built-in auth since 1.0.
+    paths:
+      include:
+        - "*.yaml"
+        - "*.yml"
+      exclude:
+        - "*values*.yaml"
+        - "*values*.yml"
+    patterns:
+      # Exposure: an exposed Service for this database somewhere in the file (checked per
+      # database below), or the node's network in the workload's own document.
+      - pattern-either:
+          - patterns:
+              # Qdrant with no API key.
+              - pattern-regex: |-
+                  (?xm)
+                  (?(DEFINE) (?<dl> (?! --- ) [^\n]*+ \n ) )
+                  ^ [ \t]*+ (?: - [ \t]++ )?+ \K image [ \t]*+ : [ \t]*+ ["']?+
+                  (?: [\w.-]+ (?: :\d+ )? / )? qdrant/qdrant (?= [:@"'\s] | $ )
+              - pattern-inside:
+                  pattern-regex: |-
+                    (?xm)
+                    (?(DEFINE) (?<dl> (?! --- ) [^\n]*+ \n ) )
+                    (?: \A | ^ --- [^\n]*+ \n )
+                    (?! (?&dl)*? [^\n]*? \b name [ \t]*+ : [ \t]*+ ["']?+ QDRANT__SERVICE__ (?: API_KEY | ALT_API_KEY | READ_ONLY_API_KEY ) ["']?+ (?= [\s,}] | $ ) )
+                    (?! (?&dl)*? [ \t]*+ envFrom [ \t]*+ : )
+                    (?! (?&dl)*? [^\n]*? /qdrant/config\b )
+                    (?! (?&dl)*? [^\n]*? --config-path\b )
+                    (?&dl)*+ (?: (?! --- ) [^\n]++ )?+
+              - pattern-either:
+                  - pattern-regex: |-
+                      (?xm)
+                      # --- kubernetes exposure groups (begin): build.py keeps this block identical in
+                      # vector-db-published-without-auth-helm and -k8s; edit every copy together. ---
+                      (?(DEFINE)
+                        # A YAML boolean as Kubernetes, Helm, and these servers read it.
+                        (?<on> ["']?+ (?i: true | on | yes | 1 | enabled ) ["']?+ (?= [ \t]*+ (?: [,}\]\#] | $ ) ) )
+                        (?<off> ["']?+ (?i: false | off | no | 0 | disabled ) ["']?+ (?= [ \t]*+ (?: [,}\]\#] | $ ) ) )
+                        # A service type that reaches beyond the cluster network.
+                        (?<exposed> ["']?+ (?: LoadBalancer | NodePort ) ["']?+ (?= [ \t]*+ (?: [,}\#] | $ ) ) )
+                        # An annotation that makes a cloud load balancer internal (the Kubernetes
+                        # Service docs' list, plus the older AWS and GKE spellings).
+                        (?<internal_lb> ["']?+
+                          (?: (?: networking\.gke\.io | cloud\.google\.com ) / load-balancer-type ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: internal ) ["']?+
+                            | service\.beta\.kubernetes\.io / aws-load-balancer-scheme ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: internal ) ["']?+
+                            | service\.beta\.kubernetes\.io /
+                              (?: aws-load-balancer-internal | azure-load-balancer-internal | oci-load-balancer-internal
+                                | openstack-internal-load-balancer | cce-load-balancer-internal-vpc ) ["']?+ [ \t]*+ : [ \t]*+ (?&on)
+                            | service\.kubernetes\.io / ibm-load-balancer-cloud-provider-ip-type ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: private ) ["']?+
+                            | service\.kubernetes\.io / qcloud-loadbalancer-internal-subnetid ["']?+ [ \t]*+ : [ \t]*+ ["']?+ [\w-]
+                            | service\.beta\.kubernetes\.io / alibaba-cloud-loadbalancer-address-type ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: intranet ) ["']?+ ) )
+                        # loadBalancerSourceRanges with at least one entry: an allow-list, unless it
+                        # lists everything.
+                        (?<ranges> loadBalancerSourceRanges [ \t]*+ : [ \t]*+
+                          (?: \[ [ \t]*+ ["']?+ [0-9a-fA-F:.]
+                            | (?: \# [^\n]*+ )?+ \r?\n (?: [ \t]*+ (?: \# [^\n]*+ )?+ \r?\n )*+ [ \t]*+ - [ \t]++ ["']?+ [0-9a-fA-F:.] ) )
+                        (?<everyone> ["']?+ (?: 0\.0\.0\.0/0 | ::/0 ) ["']?+ (?= [\s,\]] | $ ) ) )
+                      # --- kubernetes exposure groups (end) ---
+                      (?(DEFINE) (?<dl> (?! --- ) [^\n]*+ \n ) )
+                      \A
+                      (?= [\s\S]*? (?: \A | ^ --- [^\n]*+ \n )
+                          (?= (?&dl)*? kind [ \t]*+ : [ \t]*+ ["']?+ Service ["']?+ [ \t]*+ (?: \# [^\n]*+ )?+ $ )
+                          (?= (?&dl)*? [ \t]++ type [ \t]*+ : [ \t]*+ (?&exposed) )
+                          (?= (?&dl)*? [^\n]*? (?i: qdrant )
+                            | (?&dl)*? [ \t]*+ (?: - [ \t]++ )?+ (?: port | targetPort ) [ \t]*+ : [ \t]*+ ["']?+ (?: 6333 | 6334 ) (?! \d ) )
+                          (?! (?&dl)*? [ \t]*+ (?&internal_lb) )
+                          (?! (?= (?&dl)*? [ \t]*+ (?: - [ \t]++ )?+ (?&ranges) ) (?! (?&dl)*? [^\n]*? (?&everyone) ) ) )
+                      [\s\S]*
+                  - pattern-inside:
+                      pattern-regex: |-
+                        (?xm)
+                        (?(DEFINE)
+                          (?<dl> (?! --- ) [^\n]*+ \n )
+                          (?<on> ["']?+ (?i: true | on | yes | 1 ) ["']?+ (?= [ \t]*+ (?: [,}\#] | $ ) ) ) )
+                        (?: \A | ^ --- [^\n]*+ \n )
+                        (?= (?&dl)*? [ \t]++ (?: hostNetwork [ \t]*+ : [ \t]*+ (?&on) | (?: - [ \t]++ )?+ hostPort [ \t]*+ : [ \t]*+ ["']?+ \d ) )
+                        (?&dl)*+ (?: (?! --- ) [^\n]++ )?+
+          - patterns:
+              # Chroma 1.x, latest, or untagged: no built-in auth to turn on.
+              - pattern-regex: |-
+                  (?xm)
+                  ^ [ \t]*+ (?: - [ \t]++ )?+ \K image [ \t]*+ : [ \t]*+ ["']?+
+                  (?: [\w.-]+ (?: :\d+ )? / )? (?: chromadb | chroma-core ) / chroma
+                  (?: : (?: latest | v?[1-9][\w.-]*+ ) )?+ ["']?+ [ \t]*+ (?: \# [^\n]*+ )?+ $
+              - pattern-either:
+                  - pattern-regex: |-
+                      (?xm)
+                      # --- kubernetes exposure groups (begin): build.py keeps this block identical in
+                      # vector-db-published-without-auth-helm and -k8s; edit every copy together. ---
+                      (?(DEFINE)
+                        # A YAML boolean as Kubernetes, Helm, and these servers read it.
+                        (?<on> ["']?+ (?i: true | on | yes | 1 | enabled ) ["']?+ (?= [ \t]*+ (?: [,}\]\#] | $ ) ) )
+                        (?<off> ["']?+ (?i: false | off | no | 0 | disabled ) ["']?+ (?= [ \t]*+ (?: [,}\]\#] | $ ) ) )
+                        # A service type that reaches beyond the cluster network.
+                        (?<exposed> ["']?+ (?: LoadBalancer | NodePort ) ["']?+ (?= [ \t]*+ (?: [,}\#] | $ ) ) )
+                        # An annotation that makes a cloud load balancer internal (the Kubernetes
+                        # Service docs' list, plus the older AWS and GKE spellings).
+                        (?<internal_lb> ["']?+
+                          (?: (?: networking\.gke\.io | cloud\.google\.com ) / load-balancer-type ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: internal ) ["']?+
+                            | service\.beta\.kubernetes\.io / aws-load-balancer-scheme ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: internal ) ["']?+
+                            | service\.beta\.kubernetes\.io /
+                              (?: aws-load-balancer-internal | azure-load-balancer-internal | oci-load-balancer-internal
+                                | openstack-internal-load-balancer | cce-load-balancer-internal-vpc ) ["']?+ [ \t]*+ : [ \t]*+ (?&on)
+                            | service\.kubernetes\.io / ibm-load-balancer-cloud-provider-ip-type ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: private ) ["']?+
+                            | service\.kubernetes\.io / qcloud-loadbalancer-internal-subnetid ["']?+ [ \t]*+ : [ \t]*+ ["']?+ [\w-]
+                            | service\.beta\.kubernetes\.io / alibaba-cloud-loadbalancer-address-type ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: intranet ) ["']?+ ) )
+                        # loadBalancerSourceRanges with at least one entry: an allow-list, unless it
+                        # lists everything.
+                        (?<ranges> loadBalancerSourceRanges [ \t]*+ : [ \t]*+
+                          (?: \[ [ \t]*+ ["']?+ [0-9a-fA-F:.]
+                            | (?: \# [^\n]*+ )?+ \r?\n (?: [ \t]*+ (?: \# [^\n]*+ )?+ \r?\n )*+ [ \t]*+ - [ \t]++ ["']?+ [0-9a-fA-F:.] ) )
+                        (?<everyone> ["']?+ (?: 0\.0\.0\.0/0 | ::/0 ) ["']?+ (?= [\s,\]] | $ ) ) )
+                      # --- kubernetes exposure groups (end) ---
+                      (?(DEFINE) (?<dl> (?! --- ) [^\n]*+ \n ) )
+                      \A
+                      (?= [\s\S]*? (?: \A | ^ --- [^\n]*+ \n )
+                          (?= (?&dl)*? kind [ \t]*+ : [ \t]*+ ["']?+ Service ["']?+ [ \t]*+ (?: \# [^\n]*+ )?+ $ )
+                          (?= (?&dl)*? [ \t]++ type [ \t]*+ : [ \t]*+ (?&exposed) )
+                          (?= (?&dl)*? [^\n]*? (?i: chroma ) )
+                          (?! (?&dl)*? [ \t]*+ (?&internal_lb) )
+                          (?! (?= (?&dl)*? [ \t]*+ (?: - [ \t]++ )?+ (?&ranges) ) (?! (?&dl)*? [^\n]*? (?&everyone) ) ) )
+                      [\s\S]*
+                  - pattern-inside:
+                      pattern-regex: |-
+                        (?xm)
+                        (?(DEFINE)
+                          (?<dl> (?! --- ) [^\n]*+ \n )
+                          (?<on> ["']?+ (?i: true | on | yes | 1 ) ["']?+ (?= [ \t]*+ (?: [,}\#] | $ ) ) ) )
+                        (?: \A | ^ --- [^\n]*+ \n )
+                        (?= (?&dl)*? [ \t]++ (?: hostNetwork [ \t]*+ : [ \t]*+ (?&on) | (?: - [ \t]++ )?+ hostPort [ \t]*+ : [ \t]*+ ["']?+ \d ) )
+                        (?&dl)*+ (?: (?! --- ) [^\n]++ )?+
+          - patterns:
+              # Chroma 0.x or a digest: auth needs a server auth provider.
+              - pattern-regex: |-
+                  (?xm)
+                  ^ [ \t]*+ (?: - [ \t]++ )?+ \K image [ \t]*+ : [ \t]*+ ["']?+
+                  (?: [\w.-]+ (?: :\d+ )? / )? (?: chromadb | chroma-core ) / chroma (?: :v?0\. | @ )
+              - pattern-inside:
+                  pattern-regex: |-
+                    (?xm)
+                    (?(DEFINE) (?<dl> (?! --- ) [^\n]*+ \n ) )
+                    (?: \A | ^ --- [^\n]*+ \n )
+                    (?! (?&dl)*? [^\n]*? \b name [ \t]*+ : [ \t]*+ ["']?+ CHROMA_SERVER_AUTHN?_PROVIDER ["']?+ (?= [\s,}] | $ ) )
+                    (?! (?&dl)*? [ \t]*+ envFrom [ \t]*+ : )
+                    (?&dl)*+ (?: (?! --- ) [^\n]++ )?+
+              - pattern-either:
+                  - pattern-regex: |-
+                      (?xm)
+                      # --- kubernetes exposure groups (begin): build.py keeps this block identical in
+                      # vector-db-published-without-auth-helm and -k8s; edit every copy together. ---
+                      (?(DEFINE)
+                        # A YAML boolean as Kubernetes, Helm, and these servers read it.
+                        (?<on> ["']?+ (?i: true | on | yes | 1 | enabled ) ["']?+ (?= [ \t]*+ (?: [,}\]\#] | $ ) ) )
+                        (?<off> ["']?+ (?i: false | off | no | 0 | disabled ) ["']?+ (?= [ \t]*+ (?: [,}\]\#] | $ ) ) )
+                        # A service type that reaches beyond the cluster network.
+                        (?<exposed> ["']?+ (?: LoadBalancer | NodePort ) ["']?+ (?= [ \t]*+ (?: [,}\#] | $ ) ) )
+                        # An annotation that makes a cloud load balancer internal (the Kubernetes
+                        # Service docs' list, plus the older AWS and GKE spellings).
+                        (?<internal_lb> ["']?+
+                          (?: (?: networking\.gke\.io | cloud\.google\.com ) / load-balancer-type ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: internal ) ["']?+
+                            | service\.beta\.kubernetes\.io / aws-load-balancer-scheme ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: internal ) ["']?+
+                            | service\.beta\.kubernetes\.io /
+                              (?: aws-load-balancer-internal | azure-load-balancer-internal | oci-load-balancer-internal
+                                | openstack-internal-load-balancer | cce-load-balancer-internal-vpc ) ["']?+ [ \t]*+ : [ \t]*+ (?&on)
+                            | service\.kubernetes\.io / ibm-load-balancer-cloud-provider-ip-type ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: private ) ["']?+
+                            | service\.kubernetes\.io / qcloud-loadbalancer-internal-subnetid ["']?+ [ \t]*+ : [ \t]*+ ["']?+ [\w-]
+                            | service\.beta\.kubernetes\.io / alibaba-cloud-loadbalancer-address-type ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: intranet ) ["']?+ ) )
+                        # loadBalancerSourceRanges with at least one entry: an allow-list, unless it
+                        # lists everything.
+                        (?<ranges> loadBalancerSourceRanges [ \t]*+ : [ \t]*+
+                          (?: \[ [ \t]*+ ["']?+ [0-9a-fA-F:.]
+                            | (?: \# [^\n]*+ )?+ \r?\n (?: [ \t]*+ (?: \# [^\n]*+ )?+ \r?\n )*+ [ \t]*+ - [ \t]++ ["']?+ [0-9a-fA-F:.] ) )
+                        (?<everyone> ["']?+ (?: 0\.0\.0\.0/0 | ::/0 ) ["']?+ (?= [\s,\]] | $ ) ) )
+                      # --- kubernetes exposure groups (end) ---
+                      (?(DEFINE) (?<dl> (?! --- ) [^\n]*+ \n ) )
+                      \A
+                      (?= [\s\S]*? (?: \A | ^ --- [^\n]*+ \n )
+                          (?= (?&dl)*? kind [ \t]*+ : [ \t]*+ ["']?+ Service ["']?+ [ \t]*+ (?: \# [^\n]*+ )?+ $ )
+                          (?= (?&dl)*? [ \t]++ type [ \t]*+ : [ \t]*+ (?&exposed) )
+                          (?= (?&dl)*? [^\n]*? (?i: chroma ) )
+                          (?! (?&dl)*? [ \t]*+ (?&internal_lb) )
+                          (?! (?= (?&dl)*? [ \t]*+ (?: - [ \t]++ )?+ (?&ranges) ) (?! (?&dl)*? [^\n]*? (?&everyone) ) ) )
+                      [\s\S]*
+                  - pattern-inside:
+                      pattern-regex: |-
+                        (?xm)
+                        (?(DEFINE)
+                          (?<dl> (?! --- ) [^\n]*+ \n )
+                          (?<on> ["']?+ (?i: true | on | yes | 1 ) ["']?+ (?= [ \t]*+ (?: [,}\#] | $ ) ) ) )
+                        (?: \A | ^ --- [^\n]*+ \n )
+                        (?= (?&dl)*? [ \t]++ (?: hostNetwork [ \t]*+ : [ \t]*+ (?&on) | (?: - [ \t]++ )?+ hostPort [ \t]*+ : [ \t]*+ ["']?+ \d ) )
+                        (?&dl)*+ (?: (?! --- ) [^\n]++ )?+
+          - patterns:
+              # Weaviate with anonymous access on, explicitly or because no other method is,
+              # and no authorization.
+              - pattern-regex: |-
+                  (?xm)
+                  ^ [ \t]*+ (?: - [ \t]++ )?+ \K image [ \t]*+ : [ \t]*+ ["']?+
+                  (?: [\w.-]+ (?: :\d+ )? / )? semitechnologies/weaviate (?= [:@"'\s] | $ )
+              - pattern-inside:
+                  pattern-regex: |-
+                    (?xm)
+                    (?(DEFINE)
+                      (?<dl> (?! --- ) [^\n]*+ \n )
+                      (?<on> ["']?+ (?i: true | on | yes | 1 | enabled ) ["']?+ (?= [ \t]*+ (?: [,}\#] | $ ) ) )
+                      # Then the value: on the same line in flow style, or the next one.
+                      (?<val> ["']?+ [ \t]*+ (?: , [ \t]*+ | (?: \# [^\n]*+ )?+ \r?\n [ \t]*+ ) value [ \t]*+ : [ \t]*+ ) )
+                    (?: \A | ^ --- [^\n]*+ \n )
+                    (?! (?&dl)*? [^\n]*? \b name [ \t]*+ : [ \t]*+ ["']?+ AUTHORIZATION_ (?: ADMINLIST_ENABLED | RBAC_ENABLED | ENABLE_RBAC ) (?&val) (?&on) )
+                    (?: (?= (?&dl)*? [^\n]*? \b name [ \t]*+ : [ \t]*+ ["']?+ AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED (?&val) (?&on) )
+                      | (?! (?&dl)*? [^\n]*? \b name [ \t]*+ : [ \t]*+ ["']?+ AUTHENTICATION_ (?: APIKEY | OIDC | DB_USERS ) _ENABLED (?&val) (?&on) )
+                        (?! (?&dl)*? [ \t]*+ envFrom [ \t]*+ : )
+                        (?! (?&dl)*? [^\n]*? --config-file\b ) )
+                    (?&dl)*+ (?: (?! --- ) [^\n]++ )?+
+              - pattern-either:
+                  - pattern-regex: |-
+                      (?xm)
+                      # --- kubernetes exposure groups (begin): build.py keeps this block identical in
+                      # vector-db-published-without-auth-helm and -k8s; edit every copy together. ---
+                      (?(DEFINE)
+                        # A YAML boolean as Kubernetes, Helm, and these servers read it.
+                        (?<on> ["']?+ (?i: true | on | yes | 1 | enabled ) ["']?+ (?= [ \t]*+ (?: [,}\]\#] | $ ) ) )
+                        (?<off> ["']?+ (?i: false | off | no | 0 | disabled ) ["']?+ (?= [ \t]*+ (?: [,}\]\#] | $ ) ) )
+                        # A service type that reaches beyond the cluster network.
+                        (?<exposed> ["']?+ (?: LoadBalancer | NodePort ) ["']?+ (?= [ \t]*+ (?: [,}\#] | $ ) ) )
+                        # An annotation that makes a cloud load balancer internal (the Kubernetes
+                        # Service docs' list, plus the older AWS and GKE spellings).
+                        (?<internal_lb> ["']?+
+                          (?: (?: networking\.gke\.io | cloud\.google\.com ) / load-balancer-type ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: internal ) ["']?+
+                            | service\.beta\.kubernetes\.io / aws-load-balancer-scheme ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: internal ) ["']?+
+                            | service\.beta\.kubernetes\.io /
+                              (?: aws-load-balancer-internal | azure-load-balancer-internal | oci-load-balancer-internal
+                                | openstack-internal-load-balancer | cce-load-balancer-internal-vpc ) ["']?+ [ \t]*+ : [ \t]*+ (?&on)
+                            | service\.kubernetes\.io / ibm-load-balancer-cloud-provider-ip-type ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: private ) ["']?+
+                            | service\.kubernetes\.io / qcloud-loadbalancer-internal-subnetid ["']?+ [ \t]*+ : [ \t]*+ ["']?+ [\w-]
+                            | service\.beta\.kubernetes\.io / alibaba-cloud-loadbalancer-address-type ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: intranet ) ["']?+ ) )
+                        # loadBalancerSourceRanges with at least one entry: an allow-list, unless it
+                        # lists everything.
+                        (?<ranges> loadBalancerSourceRanges [ \t]*+ : [ \t]*+
+                          (?: \[ [ \t]*+ ["']?+ [0-9a-fA-F:.]
+                            | (?: \# [^\n]*+ )?+ \r?\n (?: [ \t]*+ (?: \# [^\n]*+ )?+ \r?\n )*+ [ \t]*+ - [ \t]++ ["']?+ [0-9a-fA-F:.] ) )
+                        (?<everyone> ["']?+ (?: 0\.0\.0\.0/0 | ::/0 ) ["']?+ (?= [\s,\]] | $ ) ) )
+                      # --- kubernetes exposure groups (end) ---
+                      (?(DEFINE) (?<dl> (?! --- ) [^\n]*+ \n ) )
+                      \A
+                      (?= [\s\S]*? (?: \A | ^ --- [^\n]*+ \n )
+                          (?= (?&dl)*? kind [ \t]*+ : [ \t]*+ ["']?+ Service ["']?+ [ \t]*+ (?: \# [^\n]*+ )?+ $ )
+                          (?= (?&dl)*? [ \t]++ type [ \t]*+ : [ \t]*+ (?&exposed) )
+                          (?= (?&dl)*? [^\n]*? (?i: weaviate )
+                            | (?&dl)*? [ \t]*+ (?: - [ \t]++ )?+ (?: port | targetPort ) [ \t]*+ : [ \t]*+ ["']?+ 50051 (?! \d ) )
+                          (?! (?&dl)*? [ \t]*+ (?&internal_lb) )
+                          (?! (?= (?&dl)*? [ \t]*+ (?: - [ \t]++ )?+ (?&ranges) ) (?! (?&dl)*? [^\n]*? (?&everyone) ) ) )
+                      [\s\S]*
+                  - pattern-inside:
+                      pattern-regex: |-
+                        (?xm)
+                        (?(DEFINE)
+                          (?<dl> (?! --- ) [^\n]*+ \n )
+                          (?<on> ["']?+ (?i: true | on | yes | 1 ) ["']?+ (?= [ \t]*+ (?: [,}\#] | $ ) ) ) )
+                        (?: \A | ^ --- [^\n]*+ \n )
+                        (?= (?&dl)*? [ \t]++ (?: hostNetwork [ \t]*+ : [ \t]*+ (?&on) | (?: - [ \t]++ )?+ hostPort [ \t]*+ : [ \t]*+ ["']?+ \d ) )
+                        (?&dl)*+ (?: (?! --- ) [^\n]++ )?+
+          - patterns:
+              # Milvus with authorization off (the default).
+              - pattern-regex: |-
+                  (?xm)
+                  ^ [ \t]*+ (?: - [ \t]++ )?+ \K image [ \t]*+ : [ \t]*+ ["']?+
+                  (?: [\w.-]+ (?: :\d+ )? / )? milvusdb/milvus (?= [:@"'\s] | $ )
+              - pattern-inside:
+                  pattern-regex: |-
+                    (?xm)
+                    (?(DEFINE)
+                      (?<dl> (?! --- ) [^\n]*+ \n )
+                      (?<on> ["']?+ (?i: true | t | 1 ) ["']?+ (?= [ \t]*+ (?: [,}\#] | $ ) ) ) )
+                    (?: \A | ^ --- [^\n]*+ \n )
+                    (?! (?&dl)*? [^\n]*? \b name [ \t]*+ : [ \t]*+ ["']?+
+                        (?i: (?: milvus_conf_ )? common [_./]*+ security [_./]*+ authorization [_./]*+ enabled ) ["']?+
+                        [ \t]*+ (?: , [ \t]*+ | (?: \# [^\n]*+ )?+ \r?\n [ \t]*+ ) value [ \t]*+ : [ \t]*+ (?&on) )
+                    (?! (?&dl)*? [ \t]*+ envFrom [ \t]*+ : )
+                    (?! (?&dl)*? [^\n]*? /milvus/configs\b )
+                    (?&dl)*+ (?: (?! --- ) [^\n]++ )?+
+              - pattern-either:
+                  - pattern-regex: |-
+                      (?xm)
+                      # --- kubernetes exposure groups (begin): build.py keeps this block identical in
+                      # vector-db-published-without-auth-helm and -k8s; edit every copy together. ---
+                      (?(DEFINE)
+                        # A YAML boolean as Kubernetes, Helm, and these servers read it.
+                        (?<on> ["']?+ (?i: true | on | yes | 1 | enabled ) ["']?+ (?= [ \t]*+ (?: [,}\]\#] | $ ) ) )
+                        (?<off> ["']?+ (?i: false | off | no | 0 | disabled ) ["']?+ (?= [ \t]*+ (?: [,}\]\#] | $ ) ) )
+                        # A service type that reaches beyond the cluster network.
+                        (?<exposed> ["']?+ (?: LoadBalancer | NodePort ) ["']?+ (?= [ \t]*+ (?: [,}\#] | $ ) ) )
+                        # An annotation that makes a cloud load balancer internal (the Kubernetes
+                        # Service docs' list, plus the older AWS and GKE spellings).
+                        (?<internal_lb> ["']?+
+                          (?: (?: networking\.gke\.io | cloud\.google\.com ) / load-balancer-type ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: internal ) ["']?+
+                            | service\.beta\.kubernetes\.io / aws-load-balancer-scheme ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: internal ) ["']?+
+                            | service\.beta\.kubernetes\.io /
+                              (?: aws-load-balancer-internal | azure-load-balancer-internal | oci-load-balancer-internal
+                                | openstack-internal-load-balancer | cce-load-balancer-internal-vpc ) ["']?+ [ \t]*+ : [ \t]*+ (?&on)
+                            | service\.kubernetes\.io / ibm-load-balancer-cloud-provider-ip-type ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: private ) ["']?+
+                            | service\.kubernetes\.io / qcloud-loadbalancer-internal-subnetid ["']?+ [ \t]*+ : [ \t]*+ ["']?+ [\w-]
+                            | service\.beta\.kubernetes\.io / alibaba-cloud-loadbalancer-address-type ["']?+ [ \t]*+ : [ \t]*+ ["']?+ (?i: intranet ) ["']?+ ) )
+                        # loadBalancerSourceRanges with at least one entry: an allow-list, unless it
+                        # lists everything.
+                        (?<ranges> loadBalancerSourceRanges [ \t]*+ : [ \t]*+
+                          (?: \[ [ \t]*+ ["']?+ [0-9a-fA-F:.]
+                            | (?: \# [^\n]*+ )?+ \r?\n (?: [ \t]*+ (?: \# [^\n]*+ )?+ \r?\n )*+ [ \t]*+ - [ \t]++ ["']?+ [0-9a-fA-F:.] ) )
+                        (?<everyone> ["']?+ (?: 0\.0\.0\.0/0 | ::/0 ) ["']?+ (?= [\s,\]] | $ ) ) )
+                      # --- kubernetes exposure groups (end) ---
+                      (?(DEFINE) (?<dl> (?! --- ) [^\n]*+ \n ) )
+                      \A
+                      (?= [\s\S]*? (?: \A | ^ --- [^\n]*+ \n )
+                          (?= (?&dl)*? kind [ \t]*+ : [ \t]*+ ["']?+ Service ["']?+ [ \t]*+ (?: \# [^\n]*+ )?+ $ )
+                          (?= (?&dl)*? [ \t]++ type [ \t]*+ : [ \t]*+ (?&exposed) )
+                          (?= (?&dl)*? [^\n]*? (?i: milvus )
+                            | (?&dl)*? [ \t]*+ (?: - [ \t]++ )?+ (?: port | targetPort ) [ \t]*+ : [ \t]*+ ["']?+ 19530 (?! \d ) )
+                          (?! (?&dl)*? [ \t]*+ (?&internal_lb) )
+                          (?! (?= (?&dl)*? [ \t]*+ (?: - [ \t]++ )?+ (?&ranges) ) (?! (?&dl)*? [^\n]*? (?&everyone) ) ) )
+                      [\s\S]*
+                  - pattern-inside:
+                      pattern-regex: |-
+                        (?xm)
+                        (?(DEFINE)
+                          (?<dl> (?! --- ) [^\n]*+ \n )
+                          (?<on> ["']?+ (?i: true | on | yes | 1 ) ["']?+ (?= [ \t]*+ (?: [,}\#] | $ ) ) ) )
+                        (?: \A | ^ --- [^\n]*+ \n )
+                        (?= (?&dl)*? [ \t]++ (?: hostNetwork [ \t]*+ : [ \t]*+ (?&on) | (?: - [ \t]++ )?+ hostPort [ \t]*+ : [ \t]*+ ["']?+ \d ) )
+                        (?&dl)*+ (?: (?! --- ) [^\n]++ )?+
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM09:2026 - Vector and Embedding Weaknesses"
+        - "LLM08:2025 - Vector and Embedding Weaknesses"
+      owasp-aisvs:
+        - "v1.01-C5.2.1 - AI Resource Authorization & Classification"
+      mitre-atlas:
+        - "AML.T0132 - Misconfigured or Publicly Exposed AI Services"
+        - "AML.T0085.000 - Data from AI Services: RAG Databases"
+      cwe:
+        - "CWE-306: Missing Authentication for Critical Function"
+      # A firewall, network policy, or private cluster can still keep the service unreachable.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [kubernetes, chromadb, qdrant, weaviate, milvus]
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM09_VectorAndEmbeddingWeaknesses.md
+        - https://github.com/OWASP/AISVS/blob/v1.01/1.01/en/0x10-C05-Access-Control-and-Identity.md
+        - https://cwe.mitre.org/data/definitions/306.html
+        - https://github.com/kubernetes/website/blob/0c2509f55f9d/content/en/docs/concepts/services-networking/service.md#internal-load-balancer
+        - https://github.com/chroma-core/chroma/blob/1.5.9/rust/frontend/src/auth/mod.rs
+        - https://github.com/qdrant/qdrant/blob/v1.20.0/src/settings.rs
+        - https://github.com/weaviate/weaviate/blob/v1.40.2/usecases/config/environment.go
+        - https://github.com/weaviate/weaviate/blob/v1.40.2/usecases/config/config_handler.go
+        - https://github.com/milvus-io/milvus/blob/v3.0.3/pkg/config/env_source.go
+        - https://www.legitsecurity.com/blog/the-risks-lurking-in-publicly-exposed-genai-development-services
+        - https://www.upguard.com/blog/open-chroma-databases-ai-attack-surface

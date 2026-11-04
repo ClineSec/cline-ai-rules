@@ -1,0 +1,214 @@
+rules:
+  - id: a2a-server-without-auth
+    # Sources (checked 2026-10-24): a2a-sdk (a2aproject/a2a-python) v1.2.3 and v0.3.26, the A2A
+    # specification v1.0.1, google-adk v2.13.0, and fasta2a v2.1.1.
+    # - 0.3.x builds the server with A2AStarletteApplication, A2AFastAPIApplication or
+    #   A2ARESTFastAPIApplication (a2a.server.apps) and .build(**kwargs), which passes
+    #   middleware= and dependencies= to Starlette or FastAPI. 1.0 removed those classes: routes
+    #   come from create_agent_card_routes, create_jsonrpc_routes and create_rest_routes
+    #   (a2a.server.routes) and go into Starlette(routes=...) or add_a2a_routes_to_fastapi().
+    # - Neither version checks credentials. DefaultServerCallContextBuilder only copies
+    #   request.user from Starlette's AuthenticationMiddleware (UnauthenticatedUser when there
+    #   is none); nothing on the server reads AgentCard.security_schemes (only the client's
+    #   AuthInterceptor does), and the extended agent card is returned to any caller. The spec
+    #   (section 7.4) makes the server authenticate every request.
+    # - ADK's to_a2a() returns a plain Starlette app; its security_schemes= "is not enforced at
+    #   runtime". fasta2a's FastA2A (and agent_to_a2a, which replaced pydantic-ai 1.x's
+    #   Agent.to_a2a()) takes middleware= and says the card's schemes are "said, not enforced".
+    # - gRPC: the servicer is registered with a2a_pb2_grpc.add_A2AServiceServicer_to_server;
+    #   authentication there is a server interceptor or mutual TLS.
+    # "Exposed" is what this file can show: uvicorn told to bind every interface (uvicorn's own
+    # default is 127.0.0.1), or a gRPC insecure port on every interface. Authentication is
+    # looked for anywhere in the file as code: any middleware other than CORS, GZip,
+    # TrustedHost, HTTPSRedirect, and ProxyHeaders, FastAPI dependencies= or security classes,
+    # a custom context builder, gRPC interceptors or client-certificate TLS, a credential
+    # header read, an is_authenticated check, or a call whose name says auth. Auth in another
+    # module or a gateway can't be seen; the message says how to mark that.
+    languages: [python]
+    severity: WARNING
+    message: >-
+      This A2A agent listens on every network interface and the file sets up no
+      authentication, so anyone who can reach the port can send it tasks, read and cancel
+      other callers' tasks, and have it do whatever its skills and tools can do. The A2A SDKs
+      don't check credentials themselves: `security_schemes` on the AgentCard only tells
+      clients what to send, and the extended agent card is served to anyone. Authenticate
+      every request before the A2A routes (Starlette `AuthenticationMiddleware` with a backend
+      that verifies a token, passed in `middleware=` or `app.add_middleware(...)`; FastAPI
+      `dependencies=`; a gRPC server interceptor or mutual TLS), declare the scheme in the
+      card, and bind to 127.0.0.1 for local use. If a gateway authenticates every request
+      before it reaches this server, say so in a `# nosemgrep` comment.
+    patterns:
+      # The file builds an A2A server: it imports the SDK's server apps or routes, ADK's
+      # to_a2a, fasta2a, or the gRPC registration, or turns a pydantic-ai agent into one.
+      - pattern-either:
+          - pattern-inside: |
+              import a2a.server.apps
+              ...
+          - pattern-inside: |
+              import a2a.server.routes
+              ...
+          - pattern-inside: |
+              import a2a.types.a2a_pb2_grpc
+              ...
+          - pattern-inside: |
+              import a2a.grpc.a2a_pb2_grpc
+              ...
+          - pattern-inside: |
+              import google.adk.a2a.utils.agent_to_a2a
+              ...
+          - pattern-inside: |
+              import fasta2a
+              ...
+          - patterns:
+              - pattern-inside: |
+                  import pydantic_ai
+                  ...
+              - pattern-either:
+                  - pattern-inside: |
+                      $APP = $AGENT.to_a2a(...)
+                      ...
+                  - pattern-inside: uvicorn.$U0($AGENT.to_a2a(...), ...)
+      - pattern-either:
+          # uvicorn bound to every interface. The address comes from the argument itself
+          # (also through a module constant), an environment lookup with an all-interfaces
+          # default, an argparse or click --host default, or a parameter default.
+          - patterns:
+              - pattern-either:
+                  - pattern: uvicorn.$U(..., host=$HOSTV, ...)
+                  - pattern: uvicorn.$U(..., **$KW, ...)
+              - metavariable-regex:
+                  metavariable: $U
+                  regex: ^(run|Config)$
+              - pattern-either:
+                  - pattern: uvicorn.$U(..., host=$H, ...)
+                  - patterns:
+                      - pattern-either:
+                          - pattern-inside: |
+                              $HV = os.environ.get($K, $H)
+                              ...
+                          - pattern-inside: |
+                              $HV = os.getenv($K, $H)
+                              ...
+                          - pattern-inside: |
+                              $HV = os.environ.get($K) or $H
+                              ...
+                          - pattern-inside: |
+                              $HV = os.getenv($K) or $H
+                              ...
+                      - pattern: uvicorn.$U(..., host=$HV, ...)
+                  - patterns:
+                      - pattern-inside: |
+                          $PARSER.add_argument("=~/^--(host|bind|listen)$/", ..., default=$H, ...)
+                          ...
+                      - pattern: uvicorn.$U(..., host=$ARGS.$OPT, ...)
+                  - patterns:
+                      - pattern-inside: |
+                          @click.option("=~/^--(host|bind|listen)$/", ..., default=$H, ...)
+                          def $F(...):
+                              ...
+                      - pattern: uvicorn.$U(..., host=$HP, ...)
+                  - patterns:
+                      - pattern-either:
+                          - pattern-inside: |
+                              def $F(..., $HP=$H, ...):
+                                  ...
+                          - pattern-inside: |
+                              def $F(..., $HP: $TY = $H, ...):
+                                  ...
+                      - pattern: uvicorn.$U(..., host=$HP, ...)
+                  # A settings dict assigned earlier: uvicorn.run(app, **SERVE).
+                  - patterns:
+                      - pattern-inside: |
+                          $KWD = {..., "host": $H, ...}
+                          ...
+                      - pattern: uvicorn.$U(..., **$KWD, ...)
+              # Every-interface addresses. A comparison against one isn't a bind.
+              - metavariable-pattern:
+                  metavariable: $H
+                  patterns:
+                    - pattern: '"=~/^(0\.0\.0\.0|::|\[::\])$/"'
+                    - pattern-not-inside: $X == $Y
+                    - pattern-not-inside: $X != $Y
+          # A gRPC server given an insecure port on every interface ("[::]:50051",
+          # f"0.0.0.0:{port}", or a constant holding one).
+          - pattern-either:
+              - pattern: $GS.add_insecure_port("=~/^(\[::\]|0\.0\.0\.0|::):/")
+              - patterns:
+                  - pattern: $GS.add_insecure_port($ADDR)
+                  - metavariable-regex:
+                      metavariable: $ADDR
+                      regex: >-
+                        ^[fF][rR]?["'](?:\[::\]|0\.0\.0\.0|::):
+      # --- authentication signals: no authentication anywhere in the file, as code (a line
+      # whose code part, before any #, has it), one simple regex per signal so a large file
+      # can't hit PCRE's match limit and silently keep the finding ---
+      # Middleware added to the app, unless it is one that never authenticates.
+      - pattern-not-regex: >-
+          (?sm)\A(?=.*?^[^#\n]*?\.add_middleware\s*\(\s*(?!(?:[\w.]*\.)?(?:CORS|GZip|TrustedHost|HTTPSRedirect|ProxyHeaders)Middleware\b)).*
+      # A middleware= argument (Starlette, FastAPI, Mount, .build(), FastA2A), unless it is
+      # empty or lists only middleware that never authenticates.
+      - pattern-not-regex: >-
+          (?sm)\A(?=.*?^[^#\n]*?\bmiddleware\s*=\s*(?!None\b|\[\s*\]|\[\s*(?:(?:[\w.]*\.)?Middleware\s*\(\s*(?:[\w.]*\.)?(?:CORS|GZip|TrustedHost|HTTPSRedirect|ProxyHeaders)Middleware\b(?:[^()\[\]]|\((?:[^()]|\([^()]*\))*\)|\[[^\[\]]*\])*\)\s*,?\s*)+\])).*
+      # @app.middleware("http") and Starlette's @requires(...).
+      - pattern-not-regex: >-
+          (?sm)\A(?=.*?^[ \t]*@[\w.]+\.middleware\s*\().*
+      - pattern-not-regex: >-
+          (?sm)\A(?=.*?^[ \t]*@(?:[\w.]*\.)?requires\s*\().*
+      # FastAPI dependencies on the app, a router, or .build(), and FastAPI security classes.
+      - pattern-not-regex: >-
+          (?sm)\A(?=.*?^[^#\n]*?\bdependencies\s*=\s*(?!None\b|\[\s*\])).*
+      - pattern-not-regex: >-
+          (?sm)\A(?=.*?^[^#\n]*?\b(?:HTTPBearer|HTTPBasic|HTTPDigest|APIKeyHeader|APIKeyQuery|APIKeyCookie|OAuth2\w*Bearer|Security)\s*\().*
+      # A custom call-context builder (0.3 CallContextBuilder, 1.x ServerCallContextBuilder,
+      # GrpcHandler), which can reject a request; the SDK's default one can't.
+      - pattern-not-regex: >-
+          (?sm)\A(?=.*?^[^#\n]*?\bcontext_builder\s*=\s*(?!None\b|(?:[\w.]*\.)?Default\w*ContextBuilder\s*\(\s*\))).*
+      # gRPC: server interceptors, or TLS that requires a client certificate.
+      - pattern-not-regex: >-
+          (?sm)\A(?=.*?^[^#\n]*?\binterceptors\s*=\s*(?!None\b|\[\s*\]|\(\s*\))).*
+      - pattern-not-regex: >-
+          (?sm)\A(?=.*?^[^#\n]*?\brequire_client_auth\s*=\s*True\b).*
+      # The executor or a handler checks the caller.
+      - pattern-not-regex: >-
+          (?sm)\A(?=.*?^[^#\n]*?\.is_authenticated\b).*
+      - pattern-not-regex: >-
+          (?sm)\A(?=.*?^[^#\n]*?(?i:headers\s*(?:\.\s*get\s*\(\s*|\[\s*)["'](?:authorization|[\w-]*(?:api[-_]?key|token|secret)[\w-]*)["'])).*
+      - pattern-not-regex: >-
+          (?sm)\A(?=.*?^[^#\n]*?\bjwt\.decode\s*\().*
+      # A call whose name says auth (an auth backend, require_auth(app), JWTAuthMiddleware),
+      # except "unauthenticated" / "no auth" names and the card's own scheme and flow types,
+      # which describe auth without enforcing it.
+      - pattern-not-regex: >-
+          (?sm)\A(?=.*?^[^#\n]*?(?<![\w.])(?![\w.]*?(?:SecurityScheme|OAuthFlows?|AuthenticationInfo)\s*\()[\w.]*?(?<![Uu]n)(?<![Nn]o)(?<![Nn]o_)(?i:auth)\w*\s*\().*
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI07 - Insecure Inter-Agent Communication"
+        - "ASI03 - Identity and Privilege Abuse"
+      owasp-aisvs:
+        - "v1.01-C5.2.1 - AI Resource Authorization & Classification"
+        - "v1.01-C9.5.5 - Agent Authorization, Delegation, and Continuous Enforcement"
+      mitre-atlas:
+        - "AML.T0132 - Misconfigured or Publicly Exposed AI Services"
+      cwe:
+        - "CWE-306: Missing Authentication for Critical Function"
+        - "CWE-1327: Binding to an Unrestricted IP Address"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [a2a, a2a-sdk, google-adk, fasta2a, pydantic-ai, starlette, fastapi, uvicorn, grpc]
+      references:
+        - https://github.com/a2aproject/A2A/blob/v1.0.1/docs/specification.md#74-server-authentication-responsibilities
+        - https://github.com/a2aproject/a2a-python/blob/v1.2.3/src/a2a/server/routes/common.py
+        - https://github.com/a2aproject/a2a-python/blob/v1.2.3/src/a2a/server/routes/jsonrpc_routes.py
+        - https://github.com/a2aproject/a2a-python/blob/v1.2.3/src/a2a/client/auth/interceptor.py
+        - https://github.com/a2aproject/a2a-python/blob/v1.2.3/docs/migrations/v1_0/README.md
+        - https://github.com/a2aproject/a2a-python/blob/v0.3.26/src/a2a/server/apps/jsonrpc/starlette_app.py
+        - https://github.com/google/adk-python/blob/v2.13.0/src/google/adk/a2a/utils/agent_to_a2a.py
+        - https://github.com/pydantic/fasta2a/blob/v2.1.1/fasta2a/applications.py
+        - https://cwe.mitre.org/data/definitions/306.html

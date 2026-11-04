@@ -1,0 +1,17 @@
+# Local development: the stdio server against your own checkout, for MCP Inspector.
+#   docker compose -f deploy/compose.yaml -f deploy/compose.dev.yaml run --rm -i buildbox
+services:
+  buildbox:
+    build:
+      context: ..
+    container_name: buildbox-mcp-dev
+    command: ["buildbox"]
+    stdin_open: true
+    environment:
+      BUILDBOX_REPO: /workspace
+      BUILDBOX_DATABASE_URL: postgres://buildbox@db:5432/history
+    volumes:
+      - ..:/workspace
+      # git_fetch needs your SSH keys and git config for private remotes.
+      - ${HOME}:/home/dev:ro
+      - ${HOME}/.config/gh:/home/dev/.config/gh:ro

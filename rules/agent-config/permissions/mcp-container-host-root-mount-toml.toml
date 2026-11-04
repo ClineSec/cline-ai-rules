@@ -1,0 +1,46 @@
+model = "gpt-5.5"
+# ok: mcp-container-host-root-mount-toml
+sandbox_workspace_write.writable_roots = ["/"]
+
+[mcp_servers.tree]
+command = "docker"
+# ruleid: mcp-container-host-root-mount-toml
+args = ["run", "-i", "--rm", "-v", "/:/host:ro", "example-org/tree-mcp:1.4.0"]
+
+[mcp_servers.multiline]
+command = "podman"
+args = [
+  "run",
+  "-i",
+  # ok: mcp-container-host-root-mount-toml
+  # "-v", "/:/host",
+  "-v",
+  # ruleid: mcp-container-host-root-mount-toml
+  '/home/fixture-user:/home/user',
+  "example-org/notes-mcp:3.1.0",
+]
+
+[mcp_servers.shell]
+command = "sh"
+# ruleid: mcp-container-host-root-mount-toml
+args = ["-c", "exec docker run -i --rm --mount type=bind,src=/root,dst=/root-home example-org/notes-mcp:3.1.0"]
+
+[mcp_servers]
+# ruleid: mcp-container-host-root-mount-toml
+inline = { command = "docker", args = ["run", "-i", "--volume=/Users:/host/Users", "example-org/notes-mcp:3.1.0"] }
+
+[mcp_servers.unexpanded]
+command = "docker"
+# ok: mcp-container-host-root-mount-toml
+args = ["run", "-i", "--rm", "-v", "${HOME}:/home/user", "example-org/notes-mcp:3.1.0"]
+
+[mcp_servers.filesystem]
+command = "docker"
+# ok: mcp-container-host-root-mount-toml
+args = ["run", "-i", "--rm", "-v", "/:/projects/host:ro", "mcp/filesystem:1.0.2", "/projects"]
+
+[mcp_servers.disabled]
+enabled = false
+command = "docker"
+# ok: mcp-container-host-root-mount-toml
+args = ["run", "-i", "--rm", "-v", "/:/host", "example-org/tree-mcp:1.4.0"]

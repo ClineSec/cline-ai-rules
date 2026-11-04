@@ -1,0 +1,118 @@
+rules:
+  - id: agent-instruction-hidden-unicode
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      This agent instruction file contains invisible Unicode characters: Unicode tag characters
+      (which models read as ASCII text that no editor or diff shows), bidirectional controls
+      that make the text display in a different order than the agent reads it (Trojan Source),
+      zero-width characters, a run of variation selectors that can encode hidden bytes, or a
+      byte-order mark in the middle of the file. A reviewer sees one instruction while the
+      agent receives another, which is how the "Rules File Backdoor" hides directives in rule
+      files. Decode the characters (for example `python3 -c "print(ascii(open('FILE').read()))"`)
+      to see what they say, remove them, and review who last changed the file. Write
+      right-to-left text without explicit bidi controls; one stray character pasted from a web
+      page is still worth deleting.
+    paths:
+      include:
+        - "CLAUDE.md"
+        - "CLAUDE.local.md"
+        - "AGENTS.md"
+        - "AGENTS.override.md"
+        - "GEMINI.md"
+        - ".cursorrules"
+        - ".cursor/rules/**"
+        - ".windsurfrules"
+        - ".windsurf/rules/**"
+        # Windsurf's current preferred rules folder; .windsurf/rules is the fallback.
+        - ".devin/rules/**"
+        - ".clinerules"
+        - ".clinerules/**"
+        - ".github/copilot-instructions.md"
+        - ".github/instructions/**"
+        # Skills, subagents, and slash commands: project copies and those shipped in plugins
+        # (a plugin's agents/ and commands/ folders, which load recursively), plus Gemini CLI
+        # custom commands (TOML).
+        - "SKILL.md"
+        - ".claude/agents/**"
+        - ".claude/commands/**"
+        - "agents/**/*.md"
+        - "commands/**/*.md"
+        - ".gemini/commands/**"
+    # One finding per contiguous run of hidden characters, so a 200-character tag payload is
+    # one finding. The candidates (`hidden`) are Unicode 18.0's Default_Ignorable_Code_Point
+    # set, which includes every bidi control. A run is reported when it holds a `strong`
+    # character or is at least three characters long; shorter runs of the remaining
+    # characters are what legitimate text produces:
+    # - ZWJ (U+200D) joins emoji (woman + ZWJ + laptop) and Indic conjuncts, and an emoji ZWJ
+    #   sequence never puts two hidden characters in a row except VS16 + ZWJ (rainbow flag).
+    # - A single variation selector picks emoji or text style (heart + VS16) or a CJK glyph
+    #   variant. Data hidden in variation selectors (one byte each) is a run of them.
+    # - LRM, RLM and ALM (U+200E, U+200F, U+061C) fix punctuation next to right-to-left text
+    #   and cannot reorder letters. Soft hyphen, combining grapheme joiner and the Hangul
+    #   fillers are rare single characters with no hiding power on their own.
+    # Strong characters, on their own: tag characters other than a subdivision flag's (U+1F3F4
+    # + tags + CANCEL TAG, UTS #51 Annex C), the Trojan Source embeddings, overrides and
+    # isolates, the word joiner and invisible math operators, deprecated format controls,
+    # unassigned default-ignorables, a byte-order mark anywhere but offset 0 (OpenGrep keeps a
+    # leading BOM in the text), ZWSP except after scripts written without spaces (Thai, CJK),
+    # ZWNJ except after a non-Latin letter (Persian, Indic), and Mongolian and Khmer format
+    # characters outside their scripts. Character classes stay on one line: (?x) does not
+    # ignore whitespace inside [...].
+    pattern-regex: |-
+      (?x)
+      (?(DEFINE)
+        # --- hidden Unicode characters (begin): build.py keeps this block identical in
+        # mcp-tool-description-hidden-unicode (+ -ts), via scripts/gen_mcp_hidden_unicode.py ---
+        (?<hidden> [\x{00AD}\x{034F}\x{061C}\x{115F}\x{1160}\x{17B4}\x{17B5}\x{180B}-\x{180F}\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{206F}\x{3164}\x{FE00}-\x{FE0F}\x{FEFF}\x{FFA0}\x{FFF0}-\x{FFF8}\x{1BCA0}-\x{1BCA3}\x{1D173}-\x{1D17A}\x{E0000}-\x{E0FFF}] )
+        (?<strong>
+            [\x{E0000}-\x{E00FF}\x{E01F0}-\x{E0FFF}]
+          | [\x{202A}-\x{202E}\x{2066}-\x{2069}]
+          | [\x{2060}-\x{2065}\x{206A}-\x{206F}]
+          | [\x{FFF0}-\x{FFF8}\x{1BCA0}-\x{1BCA3}\x{1D173}-\x{1D17A}]
+          | (?<!\A) \x{FEFF}
+          | (?<![\p{Thai}\p{Lao}\p{Khmer}\p{Myanmar}\p{Han}\p{Hiragana}\p{Katakana}\p{Tibetan}]) \x{200B}
+          | (?<! (?=[\p{L}\p{M}]) \P{Latin} ) \x{200C}
+          | (?<!\p{Mongolian}) [\x{180B}-\x{180F}]
+          | (?<!\p{Khmer}) [\x{17B4}\x{17B5}] )
+        (?<flag> (?<=\x{1F3F4}) (?: [\x{E0061}-\x{E007A}]{2} | [\x{E0030}-\x{E0039}]{3} )
+          [\x{E0030}-\x{E0039}\x{E0061}-\x{E007A}]{1,4} \x{E007F} (?!(?&hidden)) )
+        # --- hidden Unicode characters (end) ---
+      )
+      (?<! (?!\A\x{FEFF}) (?&hidden) )
+      (?! \A\x{FEFF} | (?&flag) )
+      (?= (?&hidden){3} | (?&hidden)*? (?&strong) )
+      (?&hidden)++
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM01:2026 - Prompt Injection"
+        - "LLM01:2025 - Prompt Injection"
+      owasp-agentic:
+        - "ASI01 - Agent Goal Hijack"
+        - "ASI06 - Memory & Context Poisoning"
+      owasp-aisvs:
+        - "v1.01-C2.1.2 - Prompt Injection Defenses"
+      mitre-atlas:
+        - "AML.T0068 - LLM Prompt Obfuscation"
+        - "AML.T0081 - Modify AI Agent Configuration"
+      cwe:
+        - "CWE-1427: Improper Neutralization of Input Used for LLM Prompting"
+        - "CWE-451: User Interface (UI) Misrepresentation of Critical Information"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code, codex, cursor, copilot, windsurf, cline, gemini-cli]
+      references:
+        - https://www.pillar.security/blog/new-vulnerability-in-github-copilot-and-cursor-how-hackers-can-weaponize-code-agents
+        - https://embracethered.com/blog/posts/2024/hiding-and-finding-text-with-unicode-tags/
+        - https://trojansource.codes/
+        - https://www.cve.org/CVERecord?id=CVE-2021-42574
+        - https://paulbutler.org/2025/smuggling-arbitrary-data-through-an-emoji/
+        - https://www.unicode.org/charts/PDF/UE0000.pdf
+        - https://www.unicode.org/reports/tr51/#Sample_Valid_Emoji_Tag_Sequences
+        - https://www.unicode.org/Public/18.0.0/ucd/DerivedCoreProperties.txt
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM01_PromptInjection.md
+        - https://cwe.mitre.org/data/definitions/1427.html

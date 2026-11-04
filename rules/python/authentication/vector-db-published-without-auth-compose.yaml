@@ -1,0 +1,328 @@
+rules:
+  - id: vector-db-published-without-auth-compose
+    # Compose services running a Chroma, Qdrant, Weaviate, or Milvus server that publish a
+    # port on every interface of the Docker host (or share the host's network) with the
+    # server's auth off. Docker publishes ports past the host firewall (ufw, firewalld).
+    # Servers checked 2026-10-25 from source:
+    # - Chroma 1.5.9: the open-source server has no built-in auth since 1.0.0 (frontend auth is
+    #   the no-op `()`; the migration log and server-env-vars docs list CHROMA_SERVER_AUTHN_*
+    #   as legacy), so any 1.x image (or an untagged / latest one) is open. 0.4.x and 0.5.x /
+    #   0.6.x images take CHROMA_SERVER_AUTH_PROVIDER / CHROMA_SERVER_AUTHN_PROVIDER.
+    # - Qdrant 1.20.0: auth is on when service.api_key, alt_api_key, or read_only_api_key is
+    #   non-empty (common/auth try_create); settings come from config files under config/
+    #   (and --config-path), then QDRANT__SERVICE__API_KEY-style environment variables.
+    # - Weaviate 1.40.2: AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED (on / enabled / 1 / true, any
+    #   case) lets requests without credentials in; with no method enabled (APIKEY, OIDC,
+    #   DB_USERS) the server falls back to anonymous access. AUTHORIZATION_ADMINLIST_ENABLED or
+    #   AUTHORIZATION_RBAC_ENABLED (AUTHORIZATION_ENABLE_RBAC) gives anonymous users no rights.
+    #   A --config-file is read first and the environment overrides it (config_handler.go), so
+    #   with --config-file only an explicit anonymous-access setting decides.
+    # - Milvus 3.0.3: common.security.authorizationEnabled defaults to false; environment
+    #   variables override milvus.yaml / user.yaml with the name lowercased and _ . / removed
+    #   (COMMON_SECURITY_AUTHORIZATIONENABLED), optionally prefixed MILVUS_CONF_.
+    # Settings that can't be seen keep a service quiet: an env_file (except for Chroma 1.x,
+    # which has nothing to set), a config file mounted over the server's config folder, a
+    # Qdrant --config-path, or an environment given as an alias. Ports published on loopback
+    # only, or not at all, are not reported (published-port test shared with
+    # mcp-server-bind-all-interfaces-config-compose).
+    languages: [yaml]
+    severity: WARNING
+    message: >-
+      This compose service runs a vector database (Chroma, Qdrant, Weaviate, or Milvus) with its
+      auth off and publishes its
+      port on every interface of the Docker host (or shares the host's network). Docker opens
+      published ports past the host firewall, so anyone who can reach the host can read every
+      collection (embeddings can be inverted back to much of their source text) and insert,
+      change, or delete documents, which poisons what the RAG app retrieves. Publish on
+      loopback only ("127.0.0.1:6333:6333") or not at all for services that only other
+      containers use, and turn on the server's auth: QDRANT__SERVICE__API_KEY for Qdrant,
+      AUTHENTICATION_APIKEY_ENABLED with anonymous access off for Weaviate,
+      COMMON_SECURITY_AUTHORIZATIONENABLED=true (and a new root password) for Milvus, or an
+      authenticating proxy for Chroma, which has no built-in auth since 1.0.
+    paths:
+      include:
+        - "docker-compose.yml"
+        - "docker-compose.yaml"
+        - "docker-compose.*.yml"
+        - "docker-compose.*.yaml"
+        - "docker-compose-*.yml"
+        - "docker-compose-*.yaml"
+        - "compose.yml"
+        - "compose.yaml"
+        - "compose.*.yml"
+        - "compose.*.yaml"
+    patterns:
+      - pattern-inside: |
+          $SVC:
+            ...
+            image: $IMG
+            ...
+      # A service that publishes a port on every host interface, or uses the host's network.
+      - pattern-either:
+          - patterns:
+              - pattern-inside: |
+                  $SVC:
+                    ...
+                    ports: [..., $P, ...]
+                    ...
+              - metavariable-regex:
+                  metavariable: $P
+                  regex: |-
+                    (?xs)
+                    # --- compose published-port test (begin): build.py keeps this block
+                    # identical in vector-db-published-without-auth-compose; edit both. ---
+                    (?(DEFINE)
+                      (?<all> 0\.0\.0\.0 | :: | \[::\] )
+                      (?<pp> \d++ (?: -\d++ )?+ | \$\{ [^}\n]*+ \} | \$\w++ ) )
+                    ^ (?: ["']?+
+                          (?: (?: (?&all) | \$\{ \w++ :?- (?&all) \} ) : )?+
+                          (?&pp) (?: : (?&pp) )?+ (?: / (?:tcp|udp|sctp) )?+
+                          ["']?+ \z
+                        | (?= .*? \b (?:target|published) [ \t]*+ : )
+                          (?! .*? \b host_ip [ \t]*+ : [ \t]*+ ["']?+ (?! (?&all) ["']?+ \s*+ (?:\n|\z) ) \S ) )
+                    # --- compose published-port test (end) ---
+          - pattern-inside: |
+              $SVC:
+                ...
+                network_mode: host
+                ...
+          - pattern-inside: |
+              $SVC:
+                ...
+                network_mode: "host"
+                ...
+      - pattern: 'image: $IMG'
+      # An environment given as an alias (environment: *env) or with a merge key can't be
+      # read here.
+      - pattern-not-inside:
+          patterns:
+            - pattern: |
+                $SVC:
+                  ...
+                  environment: $ENV
+                  ...
+            - metavariable-regex:
+                metavariable: $ENV
+                regex: (?s)^(?:\*|.*?<<)
+      - pattern-not-inside: |
+          $SVC:
+            ...
+            <<: $BASE
+            ...
+      - pattern-either:
+          # Chroma 1.x, latest, or untagged: no built-in auth to turn on.
+          - patterns:
+              - pattern: 'image: "=~/^(?:[a-zA-Z0-9_.-]+(?::[0-9]+)?[/])?(?:chromadb|chroma-core)[/]chroma(?::(?:latest|v?[1-9][^/]*|[$][{][a-zA-Z0-9_]+:?-v?[1-9][^}]*[}]))?$/"'
+          # Chroma 0.x (or a digest): auth needs a server auth provider.
+          - patterns:
+              - pattern: 'image: "=~/^(?:[a-zA-Z0-9_.-]+(?::[0-9]+)?[/])?(?:chromadb|chroma-core)[/]chroma(?::(?:v?0[.]|[$][{][a-zA-Z0-9_]+:?-v?0[.])|@).*$/"'
+              - pattern-not-inside: |
+                  $SVC:
+                    ...
+                    env_file: $EF
+                    ...
+              - pattern-not-inside:
+                  patterns:
+                    - pattern: |
+                        $SVC:
+                          ...
+                          environment: $ENV
+                          ...
+                    - metavariable-regex:
+                        metavariable: $ENV
+                        regex: |-
+                          (?xs) .*? (?:^|[\s,\[{]) ["']?+ CHROMA_SERVER_AUTHN?_PROVIDER ["']?+
+                          (?: [ \t]*+ : [ \t]*+ | = )
+                          (?! ["']{2} | ["']?+ [ \t]*+ (?: [\#,\]}\n] | \z ) | (?: null | ~ ) (?![\w-]) ) \S
+          # Qdrant with no API key.
+          - patterns:
+              - pattern: 'image: "=~/^(?:[a-zA-Z0-9_.-]+(?::[0-9]+)?[/])?qdrant[/]qdrant(?::.*|@.*)?$/"'
+              - pattern-not-inside: |
+                  $SVC:
+                    ...
+                    env_file: $EF
+                    ...
+              - pattern-not-inside:
+                  patterns:
+                    - pattern: |
+                        $SVC:
+                          ...
+                          environment: $ENV
+                          ...
+                    - metavariable-regex:
+                        metavariable: $ENV
+                        regex: |-
+                          (?xs) .*? (?:^|[\s,\[{]) ["']?+ QDRANT__SERVICE__(?:API_KEY|ALT_API_KEY|READ_ONLY_API_KEY) ["']?+
+                          (?: [ \t]*+ : [ \t]*+ | = )
+                          (?! ["']{2} | ["']?+ [ \t]*+ (?: [\#,\]}\n] | \z ) | (?: null | ~ ) (?![\w-]) ) \S
+              # A config file mounted over the server's config folder (volumes or configs).
+              - pattern-not-inside:
+                  patterns:
+                    - pattern-either:
+                        - pattern: |
+                            $SVC:
+                              ...
+                              volumes: $VOL
+                              ...
+                        - pattern: |
+                            $SVC:
+                              ...
+                              configs: $VOL
+                              ...
+                    - metavariable-regex:
+                        metavariable: $VOL
+                        regex: (?s).*?/qdrant/config\b
+              - pattern-not-inside:
+                  patterns:
+                    - pattern-either:
+                        - pattern: |
+                            $SVC:
+                              ...
+                              command: $CMD
+                              ...
+                        - pattern: |
+                            $SVC:
+                              ...
+                              entrypoint: $CMD
+                              ...
+                    - metavariable-regex:
+                        metavariable: $CMD
+                        regex: (?s).*?--config-path\b
+          # Weaviate with anonymous access on, explicitly or because no other method is.
+          - patterns:
+              - pattern: 'image: "=~/^(?:[a-zA-Z0-9_.-]+(?::[0-9]+)?[/])?semitechnologies[/]weaviate(?::.*|@.*)?$/"'
+              # Authorization on: anonymous users get no rights.
+              - pattern-not-inside:
+                  patterns:
+                    - pattern: |
+                        $SVC:
+                          ...
+                          environment: $ENV
+                          ...
+                    - metavariable-regex:
+                        metavariable: $ENV
+                        regex: |-
+                          (?xs) .*? (?:^|[\s,\[{]) ["']?+ AUTHORIZATION_(?:ADMINLIST_ENABLED|RBAC_ENABLED|ENABLE_RBAC) ["']?+
+                          (?: [ \t]*+ : [ \t]*+ | = ) ["']?+ (?i: on | enabled | 1 | true ) ["']?+ (?= [\s,\]}\#] | \z )
+              - pattern-either:
+                  - patterns:
+                      - pattern-inside: |
+                          $SVC:
+                            ...
+                            environment: $ENV
+                            ...
+                      - metavariable-regex:
+                          metavariable: $ENV
+                          regex: |-
+                            (?xs) .*? (?:^|[\s,\[{]) ["']?+ AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED ["']?+
+                            (?: [ \t]*+ : [ \t]*+ | = ) ["']?+ (?i: on | enabled | 1 | true ) ["']?+ (?= [\s,\]}\#] | \z )
+                  - patterns:
+                      - pattern: 'image: $IMG'
+                      - pattern-not-inside: |
+                          $SVC:
+                            ...
+                            env_file: $EF
+                            ...
+                      - pattern-not-inside:
+                          patterns:
+                            - pattern: |
+                                $SVC:
+                                  ...
+                                  environment: $ENV
+                                  ...
+                            - metavariable-regex:
+                                metavariable: $ENV
+                                regex: |-
+                                  (?xs) .*? (?:^|[\s,\[{]) ["']?+ AUTHENTICATION_(?:APIKEY|OIDC|DB_USERS)_ENABLED ["']?+
+                                  (?: [ \t]*+ : [ \t]*+ | = ) ["']?+ (?i: on | enabled | 1 | true ) ["']?+ (?= [\s,\]}\#] | \z )
+                      # A --config-file can turn auth on; it is read before the environment,
+                      # so an explicit anonymous-access setting above still wins.
+                      - pattern-not-inside:
+                          patterns:
+                            - pattern-either:
+                                - pattern: |
+                                    $SVC:
+                                      ...
+                                      command: $CMD
+                                      ...
+                                - pattern: |
+                                    $SVC:
+                                      ...
+                                      entrypoint: $CMD
+                                      ...
+                            - metavariable-regex:
+                                metavariable: $CMD
+                                regex: (?s).*?--config-file\b
+          # Milvus with authorization off (the default).
+          - patterns:
+              - pattern: 'image: "=~/^(?:[a-zA-Z0-9_.-]+(?::[0-9]+)?[/])?milvusdb[/]milvus(?::.*|@.*)?$/"'
+              - pattern-not-inside: |
+                  $SVC:
+                    ...
+                    env_file: $EF
+                    ...
+              - pattern-not-inside:
+                  patterns:
+                    - pattern: |
+                        $SVC:
+                          ...
+                          environment: $ENV
+                          ...
+                    - metavariable-regex:
+                        metavariable: $ENV
+                        regex: |-
+                          (?xs) .*? (?:^|[\s,\[{]) ["']?+ (?i: (?:milvus_conf_)? common [_./]*+ security [_./]*+ authorization [_./]*+ enabled ) ["']?+
+                          (?: [ \t]*+ : [ \t]*+ | = ) ["']?+ (?i: true | t | 1 ) ["']?+ (?= [\s,\]}\#] | \z )
+              # A config file mounted over the server's config folder (volumes or configs).
+              - pattern-not-inside:
+                  patterns:
+                    - pattern-either:
+                        - pattern: |
+                            $SVC:
+                              ...
+                              volumes: $VOL
+                              ...
+                        - pattern: |
+                            $SVC:
+                              ...
+                              configs: $VOL
+                              ...
+                    - metavariable-regex:
+                        metavariable: $VOL
+                        regex: (?s).*?/milvus/configs\b
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM09:2026 - Vector and Embedding Weaknesses"
+        - "LLM08:2025 - Vector and Embedding Weaknesses"
+      owasp-aisvs:
+        - "v1.01-C5.2.1 - AI Resource Authorization & Classification"
+      mitre-atlas:
+        - "AML.T0132 - Misconfigured or Publicly Exposed AI Services"
+        - "AML.T0085.000 - Data from AI Services: RAG Databases"
+      cwe:
+        - "CWE-306: Missing Authentication for Critical Function"
+        - "CWE-1327: Binding to an Unrestricted IP Address"
+      # Many of these files run on a developer's machine, but a published port is still
+      # reachable from the network the machine is on.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [docker-compose, chromadb, qdrant, weaviate, milvus]
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM09_VectorAndEmbeddingWeaknesses.md
+        - https://github.com/OWASP/AISVS/blob/v1.01/1.01/en/0x10-C05-Access-Control-and-Identity.md
+        - https://cwe.mitre.org/data/definitions/306.html
+        - https://github.com/chroma-core/chroma/blob/1.5.9/docs/mintlify/docs/overview/migration.mdx
+        - https://github.com/chroma-core/chroma/blob/1.5.9/rust/frontend/src/auth/mod.rs
+        - https://github.com/qdrant/qdrant/blob/v1.20.0/config/config.yaml
+        - https://github.com/qdrant/qdrant/blob/v1.20.0/src/settings.rs
+        - https://github.com/weaviate/weaviate/blob/v1.40.2/usecases/config/environment.go
+        - https://github.com/weaviate/weaviate/blob/v1.40.2/usecases/config/authentication.go
+        - https://github.com/milvus-io/milvus/blob/v3.0.3/configs/milvus.yaml
+        - https://github.com/milvus-io/milvus/blob/v3.0.3/pkg/config/env_source.go
+        - https://docs.docker.com/engine/network/port-publishing/
+        - https://www.legitsecurity.com/blog/the-risks-lurking-in-publicly-exposed-genai-development-services
+        - https://www.upguard.com/blog/open-chroma-databases-ai-attack-surface

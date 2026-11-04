@@ -1,0 +1,27 @@
+name: Buildbox
+version: 0.2.0
+schema: v1
+mcpServers:
+  # The shared build box: one checkout per engineer under /home, so the server sees them all.
+  - name: buildbox-shared
+    command: docker
+    args:
+      - run
+      - -i
+      - --rm
+      - --volume
+      - /home:/home:ro
+      - -e
+      - BUILDBOX_DATABASE_URL
+      - ghcr.io/example-org/buildbox-mcp:1.8.0
+      - buildbox
+  - name: buildbox-cache
+    command: docker
+    args:
+      - run
+      - -i
+      - --rm
+      - --volume
+      - /var/cache/buildbox:/var/cache/buildbox:ro
+      - ghcr.io/example-org/buildbox-mcp:1.8.0
+      - buildbox

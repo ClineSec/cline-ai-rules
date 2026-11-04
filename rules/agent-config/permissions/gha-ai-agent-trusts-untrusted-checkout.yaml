@@ -1,0 +1,278 @@
+rules:
+  - id: gha-ai-agent-trusts-untrusted-checkout
+    # A workspace-trust switch for an agent CLI in a job that checks out a pull request's code
+    # on a trigger that runs with the base repository's secrets (pull_request_target,
+    # workflow_run, issue_comment). Trusting the workspace makes the CLI load the checkout's
+    # own agent config: Gemini CLI's .gemini/settings.json and .gemini/.env (CVE-2026-12537,
+    # GHSA-wpqr-6v78-jr5g), Codex hooks, Copilot CLI's repository hooks, workspace MCP
+    # servers, and extensions, Cursor's project MCP servers, and for `claude ultrareview`
+    # (which asks for workspace trust since Claude Code 2.1.309) the programs named in the
+    # checkout's git configuration and Claude Code project settings. Those run commands
+    # before the model sees anything. On a schedule or a base-branch checkout, the same switch
+    # is how the vendors document headless runs (Claude Code's docs say to run
+    # `claude ultrareview <PR> --trust-workspace` from a branch you trust), so it is not
+    # reported there.
+    languages: [yaml]
+    severity: ERROR
+    message: >-
+      This job checks out code from a pull request (or the branch behind a workflow_run) on a
+      trigger that runs with the base repository's secrets and token, and then tells an agent
+      CLI to trust that workspace. A trusted workspace loads the checkout's own agent
+      settings, hooks, MCP servers, and .env files (and for `claude ultrareview`, the programs
+      its git configuration and Claude Code project settings name), so whoever opened the pull
+      request can run commands in the job before any prompt is read, and take its secrets. Run the agent on a
+      base-branch checkout (check the PR out into a subdirectory and point the agent at it
+      as data), drop the trust switch, or move the job to a pull_request trigger with no
+      secrets.
+    paths:
+      include:
+        - ".github/workflows/*.yml"
+        - ".github/workflows/*.yaml"
+    patterns:
+      - pattern-inside: |
+          $ONKEY: $ON
+          ...
+          jobs: $_
+      - metavariable-regex:
+          metavariable: $ONKEY
+          regex: ^["']?on["']?$
+      - metavariable-regex:
+          metavariable: $ON
+          regex: (?s).*?(?<![\w-])(?:pull_request_target|workflow_run|issue_comment)(?![\w-])
+      - pattern-either:
+          # The switch in a job that checks out untrusted code into the workspace root: a
+          # checkout of the PR head or merge ref (or the fork repository) with no path:, or
+          # gh pr checkout / git fetch of a pull ref in a run: step.
+          - patterns:
+              - pattern-inside: |
+                  $JOB:
+                    ...
+                    steps: $STEPS
+                    ...
+              - metavariable-pattern:
+                  metavariable: $STEPS
+                  pattern-either:
+                    - patterns:
+                        - pattern: |
+                            uses: $CO
+                            ...
+                            with:
+                              ...
+                              $REFKEY: $REF
+                              ...
+                        - pattern-not: |
+                            uses: $CO
+                            ...
+                            with:
+                              ...
+                              path: $P
+                              ...
+                        - metavariable-regex:
+                            metavariable: $CO
+                            regex: ^["']?actions/checkout@
+                        - metavariable-regex:
+                            metavariable: $REFKEY
+                            regex: ^(?:ref|repository)$
+                        - metavariable-regex:
+                            metavariable: $REF
+                            regex: (?s).*?(?:github\.event\.pull_request\.(?:head\.(?:sha|ref|repo\.full_name)|merge_commit_sha)|github\.head_ref|github\.event\.workflow_run\.head_(?:sha|branch|repository\.full_name)|refs/pull/)
+                    - patterns:
+                        - pattern: 'run: $R'
+                        - metavariable-regex:
+                            metavariable: $R
+                            regex: (?s).*?(?<![\w-])(?:gh\s+pr\s+checkout|git\s+(?:fetch|pull)\s[^\n]*?(?<![\w-])(?:refs/)?pull/)
+              - pattern-either:
+                  # GEMINI_CLI_TRUST_WORKSPACE=true (Gemini CLI 0.65 reads only this name; the
+                  # GEMINI_TRUST_WORKSPACE spelling in the run-gemini-cli guidance does
+                  # nothing), and Copilot CLI's prompt-mode switches for repository hooks,
+                  # workspace MCP servers, and extensions, in a step or job env: block.
+                  # Claude Code 2.1.309's CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK takes any of
+                  # Claude Code's on values (1, true, yes, on, in any casing).
+                  - patterns:
+                      - pattern-inside: |
+                          env:
+                            ...
+                            $E: $V
+                            ...
+                      - pattern: '$E: $V'
+                      - pattern-either:
+                          - patterns:
+                              - pattern: '$E: $V'
+                              - metavariable-regex:
+                                  metavariable: $E
+                                  regex: ^["']?(?:GEMINI_CLI_TRUST_WORKSPACE|GITHUB_COPILOT_PROMPT_MODE_(?:REPO_HOOKS|WORKSPACE_MCP|EXTENSIONS))["']?$
+                              - metavariable-regex:
+                                  metavariable: $V
+                                  regex: ^["']?(?i:true)["']?$
+                          - patterns:
+                              - pattern: '$E: $V'
+                              - metavariable-regex:
+                                  metavariable: $E
+                                  regex: ^["']?CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK["']?$
+                              - metavariable-regex:
+                                  metavariable: $V
+                                  regex: ^["']?(?i:1|true|yes|on)["']?$
+                  # The same in a run: script, or a CLI flag: gemini --skip-trust, codex
+                  # --dangerously-bypass-hook-trust, copilot --trust-folder, cursor-agent
+                  # --trust or --approve-mcps, claude --trust-workspace (Claude Code 2.1.309,
+                  # for `claude ultrareview`; it takes no value).
+                  - patterns:
+                      - pattern: 'run: $V'
+                      - metavariable-regex:
+                          metavariable: $V
+                          regex: |-
+                            (?xm)
+                            (?(DEFINE)
+                              (?<q> " (?:[^"\\\n] | \\.)*+ " | ' [^'\n]*+ ' )
+                              (?<g> (?: (?&q) | \\\r?\n | (?&fold) | \\[^\r\n] | [^\n"'\#;&|\\] )*? )
+                              # A folded scalar (run: >-) or a multi-line quoted one continues a command
+                              # on the next line; a line that starts with a flag or a quote can only be such
+                              # a continuation, since it would not be a command of its own.
+                              (?<fold> \r?\n [ \t]*+ (?= -{1,2}[A-Za-z] | ["'] ) )
+                              (?<end> (?= \\?["'`)\s;&|] | $ ) )
+                              (?<ws> [ \t]++ | [ \t]*+ \\\r?\n [ \t]*+ | [ \t]*+ (?&fold) )
+                              (?<pkgv> (?: @[\w.^~*-]+ )? )
+                              (?<runner> (?: npx | bunx | pnpx | pnpm (?&ws) dlx | yarn (?&ws) dlx | npm (?&ws) exec )
+                                (?: (?&ws) (?: -y | --yes | -- ) )*+ (?&ws) )
+                              (?<pos> (?: ^ [ \t]*+ | (?<=[;&|(`]) [ \t]*+ | (?<![\w-]) (?:then|do|else) [ \t]++ )
+                                      (?: [A-Za-z_]\w*+ = (?: (?&q) | [^\s"'\#;&|]*+ ) [ \t]++
+                                        | (?: sudo | env | exec | nohup | time | timeout )
+                                          (?: [ \t]++ (?: -[^\s;&|]++ | \d+[smhd]? | [A-Za-z_]\w*=[^\s;&|]*+ ) )*+ [ \t]++ )*+
+                                      ["']?+ (?: [\w.~${}-]*+ / )*+ )
+                            )
+                            \A (?s:.*?)
+                            (?: (?<![\w$]) (?:GEMINI_CLI_TRUST_WORKSPACE|GITHUB_COPILOT_PROMPT_MODE_(?:REPO_HOOKS|WORKSPACE_MCP|EXTENSIONS))
+                                = \\?["']? (?i:true) (?![\w])
+                              | (?<![\w$]) CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK = \\?["']? (?i:1|true|yes|on) (?![\w])
+                              | (?&pos)
+                                (?: (?: gemini | (?&runner) @google/gemini-cli (?&pkgv) ) (?&end) (?&g) (?<=\s) --skip-trust
+                                  | (?: codex | (?&runner) @openai/codex (?&pkgv) ) (?&end) (?&g) (?<=\s) --dangerously-bypass-hook-trust
+                                  | (?: copilot | gh (?&ws) copilot | (?&runner) @github/copilot (?&pkgv) ) (?&end) (?&g) (?<=\s) --trust-folder
+                                  | cursor-agent (?&end) (?&g) (?<=\s) (?: --trust | --approve-mcps )
+                                  | (?: claude | (?&runner) @anthropic-ai/claude-code (?&pkgv) ) (?&end) (?&g) (?<=\s) --trust-workspace )
+                                (?&end) )
+                  # openai/codex-action passes codex-args through when safety-strategy is
+                  # unsafe.
+                  - patterns:
+                      - pattern-inside: |
+                          uses: $A
+                          ...
+                      - metavariable-regex:
+                          metavariable: $A
+                          regex: ^["']?openai/codex-action@
+                      - pattern: 'codex-args: $V'
+                      - metavariable-regex:
+                          metavariable: $V
+                          regex: (?s).*?(?<![\w-])--dangerously-bypass-hook-trust(?![\w-])
+          # A workflow-level env: entry applies to every job, so any job's checkout counts.
+          - patterns:
+              - pattern-inside: |
+                  env:
+                    ...
+                    $E: $V
+                    ...
+                  ...
+                  jobs: $JOBS
+              - pattern: '$E: $V'
+              - pattern-either:
+                  - patterns:
+                      - pattern: '$E: $V'
+                      - metavariable-regex:
+                          metavariable: $E
+                          regex: ^["']?(?:GEMINI_CLI_TRUST_WORKSPACE|GITHUB_COPILOT_PROMPT_MODE_(?:REPO_HOOKS|WORKSPACE_MCP|EXTENSIONS))["']?$
+                      - metavariable-regex:
+                          metavariable: $V
+                          regex: ^["']?(?i:true)["']?$
+                  - patterns:
+                      - pattern: '$E: $V'
+                      - metavariable-regex:
+                          metavariable: $E
+                          regex: ^["']?CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK["']?$
+                      - metavariable-regex:
+                          metavariable: $V
+                          regex: ^["']?(?i:1|true|yes|on)["']?$
+              - metavariable-pattern:
+                  metavariable: $JOBS
+                  pattern-either:
+                    - patterns:
+                        - pattern: |
+                            uses: $CO
+                            ...
+                            with:
+                              ...
+                              $REFKEY: $REF
+                              ...
+                        - pattern-not: |
+                            uses: $CO
+                            ...
+                            with:
+                              ...
+                              path: $P
+                              ...
+                        - metavariable-regex:
+                            metavariable: $CO
+                            regex: ^["']?actions/checkout@
+                        - metavariable-regex:
+                            metavariable: $REFKEY
+                            regex: ^(?:ref|repository)$
+                        - metavariable-regex:
+                            metavariable: $REF
+                            regex: (?s).*?(?:github\.event\.pull_request\.(?:head\.(?:sha|ref|repo\.full_name)|merge_commit_sha)|github\.head_ref|github\.event\.workflow_run\.head_(?:sha|branch|repository\.full_name)|refs/pull/)
+                    # gh pr checkout / git fetch of a pull ref in any job's run: step.
+                    - patterns:
+                        - pattern: 'run: $CR'
+                        - metavariable-regex:
+                            metavariable: $CR
+                            regex: (?s).*?(?<![\w-])(?:gh\s+pr\s+checkout|git\s+(?:fetch|pull)\s[^\n]*?(?<![\w-])(?:refs/)?pull/)
+      # A same-repository guard (if: on head.repo or workflow_run.head_repository) keeps
+      # forks out. Each branch re-binds the finding with one narrow pattern-either; a bare
+      # `$KEY: $V` binds every mapping in the file and is slow on large workflows.
+      - pattern-either:
+          - patterns:
+              - pattern-either: [{pattern: 'run: $V'}, {pattern: 'codex-args: $V'}, {patterns: [{pattern-inside: "env:\n  ...\n  $KEY: $V\n  ...\n"}, {pattern: '$KEY: $V'}]}]
+              - pattern-not-inside: |
+                  if: $C
+                  ...
+          - patterns:
+              - pattern-either: [{pattern: 'run: $V'}, {pattern: 'codex-args: $V'}, {patterns: [{pattern-inside: "env:\n  ...\n  $KEY: $V\n  ...\n"}, {pattern: '$KEY: $V'}]}]
+              - pattern-inside: |
+                  if: $C
+                  ...
+              - metavariable-regex:
+                  metavariable: $C
+                  regex: (?s)^(?!.*(?:head\.repo|head_repository)\.(?:full_name|fork))
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+        - "ASI04 - Agentic Supply Chain Vulnerabilities"
+      owasp-aisvs:
+        - "v1.01-AC.11.2 - AI Code-Review & Assistant Bot Hardening"
+      mitre-atlas:
+        - "AML.T0081 - Modify AI Agent Configuration"
+        - "AML.T0112.000 - Machine Compromise: Local AI Agent"
+      cwe:
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+      # Step order is not checked (a checkout after the agent step still fires), and an
+      # agent pointed at a subdirectory with working-directory: is not followed.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [github-actions, gemini-cli, codex, copilot-cli, cursor-cli, claude-code]
+      references:
+        - https://github.com/google-github-actions/run-gemini-cli/security/advisories/GHSA-wpqr-6v78-jr5g
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/docs/cli/trusted-folders.md
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/utils/trust.ts
+        - https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/utils/cli/src/shared_options.rs
+        - https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference
+        - https://cursor.com/docs/cli/reference/parameters
+        - https://code.claude.com/docs/en/ultrareview#trust-the-folder-before-the-review-runs
+        - https://code.claude.com/docs/en/env-vars
+        - https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#21309
+        - https://github.com/anthropics/claude-code-action/blob/v1.0.258/docs/security.md
+        - https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/

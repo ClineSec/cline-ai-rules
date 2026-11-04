@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "permissions": {
+    "allow": [
+      "Read(docs/**)",
+      "Write(docs/**)",
+      "Shell(npm:run docs:build)",
+      "WebFetch(docs.example.com)",
+      "WebFetch(*.preview.example.com)",
+      "WebFetch(*.vercel.app)"
+    ],
+    "deny": ["Read(.env*)", "Shell(curl)"]
+  }
+}

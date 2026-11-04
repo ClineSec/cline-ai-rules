@@ -1,0 +1,6 @@
+{
+  // ok: claude-settings-project-mcp-auto-start
+  "enabledMcpjsonServers": [],
+  // ok: claude-settings-project-mcp-auto-start
+  "allowedMcpServers": [{ "serverName": "github" }]
+}

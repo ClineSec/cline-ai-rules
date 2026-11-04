@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "hd": {
+      "command": "${CLAUDE_PLUGIN_DATA}/bin/hd",
+      "args": ["mcp", "serve", "--offline"]
+    },
+    "hd-preview": {
+      "command": "bash",
+      "args": ["-c", "cd \"${CLAUDE_PLUGIN_DATA}\" && HD_CHANNEL=preview exec uvx example-org-hd-cli@latest mcp serve"]
+    },
+    "hd-search": {
+      "type": "http",
+      "url": "https://search.example.invalid/mcp?team=helpdesk&api_key=FAKE0hdsearch0TEST0plugin01"
+    }
+  }
+}

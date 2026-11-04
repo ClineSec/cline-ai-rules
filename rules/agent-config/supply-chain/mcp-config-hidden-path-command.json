@@ -1,0 +1,251 @@
+{
+  // Every hidden path here names a file that doesn't exist.
+  // ok: mcp-config-hidden-path-command
+  "$comment": "~/.config/.cache/.sys/.fixture-mcp.py is outside any server entry",
+  "mcpServers": {
+    "productivity-suite": {
+      "command": "python3",
+      // ruleid: mcp-config-hidden-path-command
+      "args": ["~/.config/.cache/.sys/.fixture-mcp.py"]
+    },
+    "renamed-script": {
+      "command": "python3",
+      "args": [
+        "-u",
+        // ruleid: mcp-config-hidden-path-command
+        "$HOME/.config/.cache/.sys/fixture_server.py",
+        "--stdio"
+      ]
+    },
+    "program-in-hidden-folder": {
+      // ruleid: mcp-config-hidden-path-command
+      "command": "${HOME}/.local/.cache/fixture-sync"
+    },
+    "hidden-program": {
+      // ruleid: mcp-config-hidden-path-command
+      "command": "/Users/fixture-user/.local/bin/.fixture-sync"
+    },
+    "hidden-script-top-level": {
+      "command": "node",
+      // ruleid: mcp-config-hidden-path-command
+      "args": ["/home/fixture-user/.fixture-sync.mjs"]
+    },
+    "windows-program": {
+      // ruleid: mcp-config-hidden-path-command
+      "command": "%USERPROFILE%\\.config\\.cache\\.sys\\.fixture-mcp.exe"
+    },
+    "windows-script": {
+      "command": "py",
+      // ruleid: mcp-config-hidden-path-command
+      "args": ["C:\\Users\\fixture-user\\AppData\\.cache\\.sys\\fixture.py"]
+    },
+    "windows-forward-slashes": {
+      "command": "node",
+      // ruleid: mcp-config-hidden-path-command
+      "args": ["C:/Users/fixture-user/.config/.sys/fixture.js"]
+    },
+    "shell-line": {
+      "command": "bash",
+      // ruleid: mcp-config-hidden-path-command
+      "args": ["-c", "cd /tmp && exec python3 ~/.config/.cache/.sys/.fixture-mcp.py --stdio"]
+    },
+    "shell-line-quoted": {
+      "command": "sh",
+      // ruleid: mcp-config-hidden-path-command
+      "args": ["-c", "exec node \"$HOME/.npm/.sys/fixture.cjs\""]
+    },
+    "shell-in-command": {
+      // ruleid: mcp-config-hidden-path-command
+      "command": "python3 ~/.config/.cache/.sys/.fixture-mcp.py"
+    },
+    "option-value": {
+      "command": "deno",
+      // ruleid: mcp-config-hidden-path-command
+      "args": ["run", "--allow-all", "--config=./deno.json", "--script=~/.deno/.sys/fixture.ts"]
+    },
+    "uv-run-script": {
+      "command": "uv",
+      // ruleid: mcp-config-hidden-path-command
+      "args": ["run", "--script", "/root/.cache/.sys/fixture.py"]
+    },
+    "wsl": {
+      "command": "wsl",
+      // ruleid: mcp-config-hidden-path-command
+      "args": ["python3", "/mnt/c/Users/fixture-user/.config/.sys/fixture.py"]
+    },
+
+    "uv-installed-tool": {
+      // ok: mcp-config-hidden-path-command
+      "command": "/Users/fixture-user/.local/bin/uvx",
+      "args": ["example-org-tickets-mcp==1.4.0"]
+    },
+    "nvm-node": {
+      // ok: mcp-config-hidden-path-command
+      "command": "~/.nvm/versions/node/v22.11.0/bin/node",
+      // ok: mcp-config-hidden-path-command
+      "args": ["~/.nvm/versions/node/v22.11.0/lib/node_modules/@example-org/notes-mcp/dist/index.js"]
+    },
+    "bun": {
+      // ok: mcp-config-hidden-path-command
+      "command": "${HOME}/.bun/bin/bun",
+      "args": ["x", "@example-org/notes-mcp@2.0.0"]
+    },
+    "cargo-tool": {
+      // ok: mcp-config-hidden-path-command
+      "command": "$HOME/.cargo/bin/example-org-rs-mcp"
+    },
+    "pyenv-shim": {
+      // ok: mcp-config-hidden-path-command
+      "command": "/home/fixture-user/.pyenv/shims/python3",
+      "args": ["-m", "example_org_mcp"]
+    },
+    "volta-npx": {
+      // ok: mcp-config-hidden-path-command
+      "command": "%USERPROFILE%\\.volta\\bin\\npx.exe",
+      "args": ["-y", "@example-org/notes-mcp@2.0.0"]
+    },
+    "script-in-one-dot-folder": {
+      "command": "bash",
+      // ok: mcp-config-hidden-path-command
+      "args": ["~/.claude/scripts/linear-mcp.sh"]
+    },
+    "npx-cache": {
+      "command": "node",
+      // ok: mcp-config-hidden-path-command
+      "args": ["~/.npm/_npx/1a2b3c4d/node_modules/.bin/example-org-mcp.js"]
+    },
+    "venv-in-dot-folder": {
+      // ok: mcp-config-hidden-path-command
+      "command": "~/.mcp-tools/.venv/bin/python",
+      // ok: mcp-config-hidden-path-command
+      "args": ["~/.mcp-tools/.venv/lib/server.py"]
+    },
+    "project-venv": {
+      // ok: mcp-config-hidden-path-command
+      "command": "/Users/fixture-user/code/helpdesk/.venv/bin/python",
+      // ok: mcp-config-hidden-path-command
+      "args": ["/Users/fixture-user/code/helpdesk/.mcp/server.py"]
+    },
+    "dot-file-not-a-script": {
+      "command": "docker",
+      // ok: mcp-config-hidden-path-command
+      "args": ["run", "-i", "--rm", "--env-file", "~/.config/helpdesk/.env", "--env-file", "~/.config/.secrets/.env", "ghcr.io/example-org/mcp:1.0.0"]
+    },
+    "sourcing-rc-file": {
+      "command": "bash",
+      // ok: mcp-config-hidden-path-command
+      "args": ["-c", "source ~/.zshrc && exec npx -y @example-org/notes-mcp@2.0.0"]
+    },
+    "repo-relative": {
+      "command": "python3",
+      // ok: mcp-config-hidden-path-command
+      "args": ["./.config/.cache/fixture.py"]
+    },
+    "outside-home": {
+      // ok: mcp-config-hidden-path-command
+      "command": "/opt/.tools/.bin/fixture-mcp"
+    },
+    "env-is-not-the-command": {
+      "command": "npx",
+      "args": ["-y", "@example-org/notes-mcp@2.0.0"],
+      // ok: mcp-config-hidden-path-command
+      "env": { "NOTES_HOOK": "~/.config/.cache/.sys/.fixture-mcp.py" }
+    },
+    "doom-emacs": {
+      // ok: mcp-config-hidden-path-command
+      "command": "~/.emacs.d/.local/cache/emacs-mcp-stdio.sh"
+    },
+    "dotfiles-checkout": {
+      // ok: mcp-config-hidden-path-command
+      "command": "/Users/fixture-user/.dotfiles/.local/bin/notes-mcp"
+    },
+    "prose-in-args": {
+      "command": "node",
+      // ok: mcp-config-hidden-path-command
+      "args": ["./setup.js", "Copy it to ~/.mcp.json and run install-tools.ps1"]
+    },
+    "windows-user-with-space": {
+      // ruleid: mcp-config-hidden-path-command
+      "command": "C:\\Users\\Fixture User\\.config\\.sys\\fixture.exe"
+    },
+    "lookalike-home": {
+      "command": "node",
+      // ok: mcp-config-hidden-path-command
+      "args": ["/srv/Users-guide/.a/.b/fixture.js"]
+    },
+
+    "cwd-and-relative-script": {
+      "command": "python3",
+      // ruleid: mcp-config-hidden-path-command
+      "cwd": "~/.config/.cache/.sys",
+      "args": ["fixture-mcp.py", "--stdio"]
+    },
+    "cwd-and-relative-command": {
+      // ruleid: mcp-config-hidden-path-command
+      "cwd": "${HOME}/.config/.cache/.sys",
+      "command": "./fixture-sync.js"
+    },
+    "cwd-windows": {
+      "command": "py",
+      // ruleid: mcp-config-hidden-path-command
+      "cwd": "%USERPROFILE%\\.config\\.cache\\.sys",
+      "args": ["fixture.py"]
+    },
+    "node-options-require": {
+      "command": "node",
+      "args": ["server.js"],
+      "env": {
+        // ruleid: mcp-config-hidden-path-command
+        "NODE_OPTIONS": "--require ~/.config/.cache/.sys/.fixture-loader.js"
+      }
+    },
+    "node-options-import": {
+      "command": "node",
+      "args": ["server.js"],
+      "env": {
+        // ruleid: mcp-config-hidden-path-command
+        "NODE_OPTIONS": "--max-old-space-size=4096 --import=$HOME/.npm/.sys/fixture-hook.mjs"
+      }
+    },
+    "cwd-hidden-but-packaged": {
+      // ok: mcp-config-hidden-path-command
+      "cwd": "~/.config/.cache/.sys",
+      "command": "npx",
+      "args": ["-y", "@example-org/notes-mcp@2.0.0"]
+    },
+    "cwd-hidden-no-relative-script": {
+      "command": "python3",
+      // ok: mcp-config-hidden-path-command
+      "cwd": "~/.config/.cache/.sys",
+      "args": ["-m", "example_org_notes_mcp"]
+    },
+    "cwd-single-dot-folder": {
+      "command": "python3",
+      // ok: mcp-config-hidden-path-command
+      "cwd": "~/.cache",
+      "args": ["fixture-mcp.py"]
+    },
+    "cwd-normal-with-relative-script": {
+      "command": "python3",
+      // ok: mcp-config-hidden-path-command
+      "cwd": "/Users/fixture-user/code/helpdesk",
+      "args": ["fixture-mcp.py"]
+    },
+    "node-options-no-loader": {
+      "command": "node",
+      "args": ["server.js"],
+      "env": {
+        // ok: mcp-config-hidden-path-command
+        "NODE_OPTIONS": "--max-old-space-size=4096 --enable-source-maps"
+      }
+    },
+    "pythonpath-dir": {
+      "command": "python3",
+      "args": ["-m", "example_org_mcp"],
+      "env": {
+        // ok: mcp-config-hidden-path-command
+        "PYTHONPATH": "~/.config/.cache/.sys"
+      }
+    }
+  }
+}

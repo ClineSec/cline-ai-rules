@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": ["Read"]
+  },
+  // ruleid: claude-settings-project-mcp-auto-start
+  "enableAllProjectMcpServers": true,
+  // ruleid: claude-settings-project-mcp-auto-start
+  "enabledMcpjsonServers": ["github", "runbooks"],
+  // ok: claude-settings-project-mcp-auto-start
+  "disabledMcpjsonServers": ["filesystem"],
+  "env": {
+    // ok: claude-settings-project-mcp-auto-start
+    "ENABLE_NOTE": "enableAllProjectMcpServers"
+  }
+}

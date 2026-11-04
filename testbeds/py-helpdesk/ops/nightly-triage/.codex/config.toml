@@ -1,0 +1,27 @@
+# Codex settings for the nightly ticket-triage job, which runs from this folder:
+#   cd ops/nightly-triage && codex exec "triage yesterday's open tickets"
+# Codex layers this file over the repo's .codex/config.toml when started here.
+# The runner is a throwaway VM, so the job skips the sandbox and never stops to ask.
+model_reasoning_effort = "low"
+approval_policy = "never"
+default_permissions = ':danger-full-access'
+
+# MCP servers for the triage run. The runner image has no secret store yet (HD-512), so the
+# status page key lives here until it does.
+[mcp_servers.tickets]
+command = "example-org-helpdesk-mcp"
+args = ["--project", "HD", "--read-only"]
+env_vars = ["HD_TICKETS_TOKEN"]
+
+[mcp_servers.status-page]
+url = "https://status.example.invalid/mcp"
+http_headers = { "X-Api-Key" = "FAKE0status0TEST0nightly0key01" }
+env_http_headers = { "Authorization" = "STATUS_PAGE_AUTH_HEADER" }
+
+[mcp_servers]
+# The wiki server only speaks streamable HTTP; mcp-proxy bridges it to stdio for Codex.
+wiki.command = "uvx"
+wiki.args = ["mcp-proxy==0.8.2", "--transport=streamablehttp", "http://wiki.example.invalid/mcp"]
+wiki.env_vars = ["WIKI_TOKEN"]
+# The triage notes server runs next to the job on the runner VM.
+notes = { url = "http://127.0.0.1:8045/mcp" }

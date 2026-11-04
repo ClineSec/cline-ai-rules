@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "tickets": {
+      "command": "uvx",
+      "args": ["--from", "example-org-helpdesk-mcp==1.8.0", "helpdesk-mcp", "--project", "HD"],
+      "env": { "HD_TICKETS_TOKEN": "${env:HD_TICKETS_TOKEN}" },
+      "alwaysAllow": ["get_ticket", "search_tickets", "list_queues", "addInternalNote"],
+      "disabled": false
+    },
+    "runbooks": {
+      "command": "npx",
+      "args": ["-y", "@example-org/runbook-mcp@3.2.1", "./docs/runbooks"],
+      "alwaysAllow": ["search_runbooks", "read_runbook", "get_runbook_history"]
+    }
+  }
+}

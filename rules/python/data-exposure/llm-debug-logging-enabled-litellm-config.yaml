@@ -1,0 +1,44 @@
+rules:
+  - id: llm-debug-logging-enabled-litellm-config
+    # LiteLLM proxy config (config.yaml) with `litellm_settings: set_verbose: true`. Verified
+    # 2026-10-24 against LiteLLM 1.106.3: ProxyConfig.load_config does setattr(litellm, key,
+    # value) for each litellm_settings entry, and with litellm.set_verbose True,
+    # utils.print_verbose prints each call's kwargs (messages included) and streamed chunks to
+    # stdout. The check is `is True`, so a quoted "true" does nothing and isn't reported.
+    # LITELLM_LOG and --detailed_debug in the same deployment are llm-debug-logging-enabled-env.
+    languages: [yaml]
+    severity: WARNING
+    message: >-
+      This LiteLLM proxy config sets `litellm_settings.set_verbose: true`, so the proxy prints
+      every request it forwards (the full message list, system prompt included) and every
+      streamed chunk of the answer to stdout, which ends up in the container logs. Those logs
+      are kept longer and read by more people and systems than the conversations, so personal
+      data, credentials pasted into a chat, and system prompts leak through log access. Remove
+      `set_verbose` from deployed configs and use a local override when debugging.
+    patterns:
+      - pattern-inside: |
+          litellm_settings:
+            ...
+      - pattern: 'set_verbose: $ON'
+      - metavariable-regex:
+          metavariable: $ON
+          regex: ^(?:true|True|TRUE)$
+      - focus-metavariable: $ON
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM02:2026 - Sensitive Information Disclosure"
+        - "LLM02:2025 - Sensitive Information Disclosure"
+      cwe:
+        - "CWE-532: Insertion of Sensitive Information into Log File"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [litellm]
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM02_SensitiveInformationDisclosure.md
+        - https://cwe.mitre.org/data/definitions/532.html
+        - https://github.com/BerriAI/litellm/blob/v1.106.3/litellm/proxy/proxy_server.py
+        - https://github.com/BerriAI/litellm/blob/v1.106.3/litellm/utils.py

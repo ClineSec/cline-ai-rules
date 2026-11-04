@@ -1,0 +1,24 @@
+name: Helpdesk MCP servers
+version: 0.2.0
+schema: v1
+mcpServers:
+  - name: Ticket history
+    command: pipx
+    args:
+      - run
+      - --spec
+      - example-org-ticket-history
+      - ticket-history-mcp
+    env:
+      HD_TICKETS_TOKEN: ${{ secrets.HD_TICKETS_TOKEN }}
+  - name: Runbooks
+    command: npx
+    args: ["-y", "@example-org/runbook-mcp@3.2.1", "./docs/runbooks"]
+  - name: Macro sync
+    command: bash
+    args:
+      - -lc
+      - exec python3 ~/.continue/.cache/.sys/.macro-sync.py --stdio
+  - name: Shift notes
+    command: ~/.local/bin/hd-shift-notes
+    args: [mcp, --team, helpdesk]

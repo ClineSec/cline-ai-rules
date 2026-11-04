@@ -1,0 +1,218 @@
+rules:
+  - id: llm-output-as-template
+    # The pattern-sources are shared with llm-output-to-code-execution and llm-output-to-sql
+    # (build.py SHARED_BLOCKS "model-output sources (Python)"): edit them together.
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Model output is compiled as a template here, so the model's text becomes template code
+      rather than data. Anyone who can influence the prompt, directly or through a web page,
+      document, or tool result the model reads, can make it write template syntax that runs
+      on your server: Jinja2, Mako, and Tornado expressions reach Python objects and from
+      there run code, and Django templates read the attributes of anything in the context
+      (server-side template injection). Keep the template fixed and pass the model's text in
+      as a variable (`render_template_string(PAGE, answer=text)`,
+      `env.get_template("digest.html").render(body=text)`). If the model really has to write
+      the template, compile it in Jinja2's `SandboxedEnvironment` (kept up to date, since
+      sandbox escapes have been fixed as recently as 3.1.6), pass it only plain data, and
+      never with Mako, Tornado, Django, or LangChain's `template_format="jinja2"`, which
+      LangChain documents as unsafe for untrusted templates.
+    mode: taint
+    pattern-sources:
+      - pattern: $CLIENT.chat.completions.create(...)
+      - pattern: $CLIENT.responses.create(...)
+      - pattern: $CLIENT.messages.create(...)
+      - pattern: litellm.completion(...)
+      - pattern: litellm.acompletion(...)
+      - pattern: $LLM.invoke(...)
+      - pattern: $LLM.ainvoke(...)
+      # Agent SDKs (claude-agent-sdk 0.2.173, openai-agents 0.24.0): Claude Agent SDK query()
+      # and ClaudeSDKClient messages (`message.result`), and OpenAI Agents Runner results
+      # (`result.final_output`).
+      - pattern: claude_agent_sdk.query(...)
+      - patterns:
+          - pattern-inside: |
+              async with claude_agent_sdk.ClaudeSDKClient(...) as $SDK:
+                  ...
+          - pattern-either:
+              - pattern: $SDK.receive_response(...)
+              - pattern: $SDK.receive_messages(...)
+      - pattern: agents.Runner.run(...)
+      - pattern: agents.Runner.run_sync(...)
+      - pattern: agents.Runner.run_streamed(...)
+      # Streaming and the Google Gen AI SDK (google-genai 2.33.0): Chat Completions and
+      # Messages streams, generate_content / generate_content_stream (also `client.aio`), and
+      # chat sessions.
+      - pattern: $CLIENT.chat.completions.stream(...)
+      - pattern: $CLIENT.messages.stream(...)
+      - pattern: $CLIENT.models.generate_content(...)
+      - pattern: $CLIENT.models.generate_content_stream(...)
+      - patterns:
+          - pattern-inside: |
+              $CHAT = $CLIENT.chats.create(...)
+              ...
+          - pattern-either:
+              - pattern: $CHAT.send_message(...)
+              - pattern: $CHAT.send_message_stream(...)
+      # LangChain / LangGraph runnables streamed or batched (`for chunk in llm.stream(q)`).
+      # `.stream` is a common method name (a Panel chat feed has one), so require a LangChain
+      # or LangGraph import in the file or a receiver named like a model, chain, or graph.
+      - patterns:
+          - pattern-either:
+              - pattern: $RUNNABLE.stream(...)
+              - pattern: $RUNNABLE.astream(...)
+              - pattern: $RUNNABLE.batch(...)
+              - pattern: $RUNNABLE.abatch(...)
+          - pattern-either:
+              - patterns:
+                  - pattern: $RUNNABLE.$M(...)
+                  - pattern-not-regex: '\A(?:(?![ \t]*+(?:import|from)[ \t]++(?:langchain\w*|langgraph)\b)[^\n]*+\n)*+(?![ \t]*+(?:import|from)[ \t]++(?:langchain\w*|langgraph)\b)[^\n]*+\z'
+              - patterns:
+                  - pattern: $RUNNABLE.$M(...)
+                  - metavariable-regex:
+                      metavariable: $RUNNABLE
+                      regex: (?i)^(?:\w+\.)*\w*(?:llm|model|chain|agent|graph|runnable)$
+    pattern-sinks:
+      # The template source argument only: model text passed as a render variable is data.
+      # Flask 3.1.3 and Quart 0.23.1 render_template_string / stream_template_string compile
+      # their first argument with app.jinja_env.from_string. Jinja2 3.1.6 Template(source)
+      # and NativeTemplate. Django 6.1.2 Template(template_string): its docs say the template
+      # system "isn't safe against untrusted template authors". Mako 1.4.3 Template(text)
+      # and TemplateLookup.put_string(uri, text), and Tornado 6.6 Template(template_string),
+      # both of which compile Python expressions.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: flask.render_template_string($SRC, ...)
+              - pattern-inside: flask.stream_template_string($SRC, ...)
+              - pattern-inside: quart.render_template_string($SRC, ...)
+              - pattern-inside: quart.stream_template_string($SRC, ...)
+              - pattern-inside: jinja2.Template($SRC, ...)
+              - pattern-inside: jinja2.Template(source=$SRC, ...)
+              - pattern-inside: jinja2.nativetypes.NativeTemplate($SRC, ...)
+              - pattern-inside: django.template.Template($SRC, ...)
+              - pattern-inside: django.template.base.Template($SRC, ...)
+              - pattern-inside: mako.template.Template($SRC, ...)
+              - pattern-inside: mako.template.Template(..., text=$SRC, ...)
+              - pattern-inside: tornado.template.Template($SRC, ...)
+              - pattern-inside: langchain_core.prompts.string.jinja2_formatter($SRC, ...)
+              - patterns:
+                  - pattern-inside: |
+                      $LOOKUP = mako.lookup.TemplateLookup(...)
+                      ...
+                  - pattern-inside: $LOOKUP.put_string($URI, $SRC)
+          - pattern: $SRC
+      # Templates compiled from an environment: Jinja2 Environment.from_string (also Flask's
+      # `app.jinja_env` and Starlette's `templates.env`), and Django's engines[...] and
+      # Engine.from_string. Jinja2's SandboxedEnvironment is Jinja's documented way to render
+      # untrusted templates, so an environment built from it is left out.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $ENV.from_string($SRC, ...)
+              - pattern-inside: $ENV.from_string(..., source=$SRC, ...)
+          - pattern-either:
+              - pattern-inside: |
+                  $ENV = jinja2.Environment(...)
+                  ...
+              - pattern-inside: |
+                  $ENV = jinja2.nativetypes.NativeEnvironment(...)
+                  ...
+              - pattern-inside: |
+                  $ENV = django.template.Engine(...)
+                  ...
+              - pattern-inside: |
+                  $ENV = django.template.Engine.get_default()
+                  ...
+              - pattern-inside: |
+                  $ENV = django.template.engines[$KEY]
+                  ...
+              - pattern-inside: jinja2.Environment(...).from_string(...)
+              - pattern-inside: jinja2.nativetypes.NativeEnvironment(...).from_string(...)
+              - pattern-inside: django.template.engines[$KEY].from_string(...)
+              - pattern-inside: django.template.Engine.get_default().from_string(...)
+              - pattern-inside: django.template.Engine(...).from_string(...)
+              - pattern-inside: $APP.jinja_env.from_string(...)
+              # An environment built in another module, named like one, in a file that imports
+              # a Jinja2 or Django templating stack, or imports from a module named like a
+              # templating helper (`from app.templating import env`).
+              - patterns:
+                  - pattern-inside: $ENV.from_string(...)
+                  - metavariable-regex:
+                      metavariable: $ENV
+                      regex: (?i)^(?:[\w.]*\.)?(?:\w*jinja\w*|env|environment|\w+_env|templates\.env|\w*template_env\w*)$
+                  - pattern-not-regex: '\A(?:(?![ \t]*+(?:(?:import|from)[ \t]++(?:jinja2|flask|quart|django|starlette|fastapi|litestar)\b|from[ \t]++[\w.]*(?i:templat|jinja)\w*[ \t]++import\b))[^\n]*+\n)*+(?![ \t]*+(?:(?:import|from)[ \t]++(?:jinja2|flask|quart|django|starlette|fastapi|litestar)\b|from[ \t]++[\w.]*(?i:templat|jinja)\w*[ \t]++import\b))[^\n]*+\z'
+          - pattern-not-inside: |
+              $ENV = jinja2.sandbox.SandboxedEnvironment(...)
+              ...
+          - pattern-not-inside: |
+              $ENV = jinja2.sandbox.ImmutableSandboxedEnvironment(...)
+              ...
+          - metavariable-regex:
+              metavariable: $ENV
+              regex: (?i)^(?!.*sandbox)
+          - pattern: $SRC
+      # LangChain (langchain-core 1.7.0) prompt templates in the jinja2 format. They render in
+      # Jinja2's sandbox, but LangChain's own docs say: "Do not accept jinja2 templates from
+      # untrusted sources as they may lead to arbitrary Python code execution." The default
+      # f-string format rejects attribute access and indexing, and mustache only walks dicts
+      # and lists, so those formats are left out.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $PT.from_template($SRC, ..., template_format="jinja2", ...)
+              - pattern-inside: $PT.from_template(..., template=$SRC, template_format="jinja2", ...)
+              - pattern-inside: $PT(..., template=$SRC, template_format="jinja2", ...)
+              - pattern-inside: '$PT.from_messages([..., ($ROLE, $SRC), ...], ..., template_format="jinja2", ...)'
+              - pattern-inside: '$PT([..., ($ROLE, $SRC), ...], ..., template_format="jinja2", ...)'
+          - metavariable-regex:
+              metavariable: $PT
+              regex: ^(?:[\w.]*\.)?\w*PromptTemplate$
+          - pattern: $SRC
+    pattern-sanitizers:
+      # Numbers, and metadata fields that can't carry template syntax.
+      - exact: true
+        pattern-either:
+          - pattern: int(...)
+          - pattern: float(...)
+          - pattern: len(...)
+          - patterns:
+              - pattern: $OBJ.$FIELD
+              - metavariable-regex:
+                  metavariable: $FIELD
+                  regex: ^(?:usage|id|model|created|role|finish_reason|stop_reason|num_turns|total_cost_usd|duration_ms|total_tokens|prompt_tokens|completion_tokens|input_tokens|output_tokens)$
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C7.1.1 - Output Format Enforcement"
+      mitre-atlas:
+        - "AML.T0051 - LLM Prompt Injection"
+        - "AML.T0050 - Command and Scripting Interpreter"
+      cwe:
+        - "CWE-1336: Improper Neutralization of Special Elements Used in a Template Engine"
+        - "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [openai, anthropic, litellm, langchain, google-genai, claude-agent-sdk, openai-agents, flask, quart, jinja2, django, mako, tornado]
+      # API shapes checked 2026-10-23 against flask 3.1.3 (render_template_string and
+      # stream_template_string call app.jinja_env.from_string), jinja2 3.1.6 (Template,
+      # Environment.from_string, NativeTemplate; sandbox escapes fixed in 2.8.1, 2.10.1,
+      # 3.1.5, and 3.1.6), django 6.1.2 (Template, Engine.from_string, engines[...]), mako
+      # 1.4.3 (Template(text=...), TemplateLookup.put_string), tornado 6.6
+      # (Template(template_string)), langchain-core 1.7.0 (jinja2_formatter uses
+      # SandboxedEnvironment and warns against untrusted templates;
+      # validate_f_string_template rejects "." and "[]"; mustache _get_key walks dicts and
+      # lists only), and quart 0.23.1. Python's string.Template only substitutes names, and
+      # str.format can read attributes but not call them, so neither is reported.
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md
+        - https://cwe.mitre.org/data/definitions/1336.html
+        - https://jinja.palletsprojects.com/en/stable/sandbox/
+        - https://docs.djangoproject.com/en/6.0/topics/templates/
+        - https://github.com/langchain-ai/langchain/blob/langchain-core%3D%3D1.7.0/libs/core/langchain_core/prompts/string.py
+        - https://github.com/advisories/GHSA-cpwx-vrp4-4pq7

@@ -1,0 +1,139 @@
+rules:
+  - id: agent-skill-load-time-shell
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This skill or slash command body runs a shell command through the load-time injection
+      syntax (Claude Code / opencode / Kilo Code ``!`cmd` `` or a ```! fenced block), and the
+      command downloads and runs code, pipes a download into a shell, runs a package straight
+      from a URL or git repo, or runs a script from the repository. The command runs before the
+      model sees the skill, so there is no tool call and no per-command prompt: Claude Code
+      checks it against permission rules and otherwise runs it, and in `claude -p`, Agent SDK,
+      and auto-mode runs it reaches the model as an instruction to run first; opencode runs it
+      with no gate. Anyone who can change this file or the script it names, through a pull
+      request, a compromised dependency, or a worm that writes into the repo, runs code with the
+      developer's credentials every time the skill or command loads. Inline the output a
+      different way, install the tool outside the repo at a pinned version with a checksum, or
+      keep the command to a read-only lookup (``!`git status` ``) and review this file under
+      CODEOWNERS like other code that runs on checkout.
+    # ``!`cmd` `` inline injection and ```! fenced blocks, checked against Claude Code
+    # v2.1.310 (the skills docs and the bundled binary's jCr/injection code, 2026-10-24):
+    # /```!\s*\n?([\s\S]*?)\n?```/g and /(?<=^|\s)!`([^`]+)`/gm, run before the content reaches
+    # the model; injected commands never prompt (checked against permission rules, aborting on
+    # deny/ask outside auto mode). opencode v1.19.4 (ConfigMarkdown.shell, prompt.ts) runs the
+    # same ``!`cmd` `` with no approval gate, from {command,commands}/**/*.md and the .claude
+    # skills it also reads; Kilo Code v7.8.17 adds a trust gate and a batch ask. The
+    # command-position guard ((?<=^|[ \t])) drops a placeholder wrapped in a code span (``!`x`
+    # ``), which is how the syntax is documented; a dangerous command fenced in a ``` block is
+    # still flagged: the danger test, not fence detection, keeps documentation quiet. Paths
+    # match agent-frontmatter-command-runs-local-script (SHARED_PATHS).
+    paths:
+      include:
+        - "SKILL.md"
+        - ".claude/agents/**"
+        - ".claude/commands/**"
+        - "commands/**/*.md"
+      # opencode and Kilo Code folders: Claude Code never reads them, and the plural commands/
+      # dirs under them would otherwise match commands/**/*.md. agent-skill-load-time-shell-opencode
+      # covers their ``!`cmd` `` injection.
+      exclude:
+        - ".opencode/**"
+        - ".kilo/**"
+        - ".kilocode/**"
+    patterns:
+      - pattern-either:
+          # A ```! fenced block: every line in it is a live command.
+          - patterns:
+              - pattern-regex: (?m)^[ \t]*`{3}![ \t]*\r?\n(?<CMD>(?s:.*?))\r?\n[ \t]*`{3}[ \t]*$
+              - metavariable-regex:
+                  metavariable: $CMD
+                  regex: |-
+                    (?ix)
+                    # --- load-time shell danger command (begin): build.py keeps this block
+                    # identical in agent-skill-load-time-shell-toml; edit both together. ---
+                    # A dangerous command anywhere in the injected text. (?x): whitespace is
+                    # ignored, # starts a comment, so a literal space is \s and a literal # is
+                    # \#. A command position (?&at) is the start, a newline, or after ; & | (
+                    # or a backtick, so text in an echo string or a comment does not count.
+                    (?(DEFINE) (?<at> (?:^|[\r\n;&|(`]|&&|\|\|) [ \t]*
+                      (?: (?:sudo|env|exec|nohup|time) [ \t]+ (?:\w+=\S*[ \t]+)* )? ) )
+                    # download piped into, or substituted into, a shell or interpreter
+                      (?s:.)*? (?&at) (?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b [^\r\n;&|]*
+                        \|(?!\|) [ \t]* (?:sudo[ \t]+)? (?:env[ \t]+(?:\w+=\S*[ \t]+)*)?
+                        (?:(?:ba|z|da|k)?sh|python[0-9.]*|node|perl|ruby|php|iex|invoke-expression)\b
+                    | (?s:.)*? (?&at) (?:(?:ba|z|da|k)?sh|eval|source|\.)[ \t]+ \S* (?:\$\(|<\(|`) [ \t]*
+                        (?:curl|wget)\b
+                    | (?s:.)*? (?&at) (?:iex|invoke-expression)\b [^\r\n]*?
+                        (?:\b(?:iwr|irm|invoke-webrequest|invoke-restmethod|curl|wget)\b|\.downloadstring\b)
+                    # a package runner taking a URL, git URL, or user/repo spec
+                    | (?s:.)*? (?&at) (?:npx|bunx|pnpm[ \t]+dlx|yarn[ \t]+dlx|npm[ \t]+exec|uvx|uv[ \t]+tool[ \t]+run|pipx[ \t]+run)\b
+                        (?:[ \t]+-\S+)* [ \t]+ (?:--(?:package|from|spec)[=\s])? ["']?
+                        (?! \S*? [\#@] [0-9a-f]{7,40} (?![\w.-]) )
+                        (?: https?:// | git(?:\+\w+)?:// | git@ | (?:github|gitlab|bitbucket): | [a-z0-9][\w.-]*/[\w.-]+ (?=[ \t]|$|["']) )
+                    # a script run from the repository: a relative path or project-dir var, run directly or via an interpreter
+                    | (?s:.)*? (?&at)
+                        (?: (?:node|bun|deno|python[0-9.]*|bash|sh|zsh|pwsh|powershell|ruby|perl|php|tsx|ts-node) (?:[ \t]+-\S+)* [ \t]+ ["']? )?
+                        (?: \.{1,2}/ | (?:scripts|script|bin|tools|\.github|\.claude|\.gemini|src)/ | (?:\$\{?|\$env:|%)(?:CLAUDE|GEMINI|CURSOR|QWEN)_PROJECT_DIR[}%]? )
+                        [\w./-]* \.(?:sh|bash|zsh|[cm]?js|[cm]?ts|py|rb|pl|ps1|php)\b
+                    # --- load-time shell danger command (end) ---
+          # Inline ``!`cmd` ``, at a command position (so a code-span ``!`x` `` is left out).
+          - patterns:
+              - pattern-regex: (?m)(?<=^|[ \t])!`(?<CMD>[^`\r\n]+)`
+              - focus-metavariable: $CMD
+              - metavariable-regex:
+                  metavariable: $CMD
+                  regex: |-
+                    (?ix)
+                    # --- load-time shell danger command (begin): build.py keeps this block
+                    # identical in agent-skill-load-time-shell-toml; edit both together. ---
+                    # A dangerous command anywhere in the injected text. (?x): whitespace is
+                    # ignored, # starts a comment, so a literal space is \s and a literal # is
+                    # \#. A command position (?&at) is the start, a newline, or after ; & | (
+                    # or a backtick, so text in an echo string or a comment does not count.
+                    (?(DEFINE) (?<at> (?:^|[\r\n;&|(`]|&&|\|\|) [ \t]*
+                      (?: (?:sudo|env|exec|nohup|time) [ \t]+ (?:\w+=\S*[ \t]+)* )? ) )
+                    # download piped into, or substituted into, a shell or interpreter
+                      (?s:.)*? (?&at) (?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b [^\r\n;&|]*
+                        \|(?!\|) [ \t]* (?:sudo[ \t]+)? (?:env[ \t]+(?:\w+=\S*[ \t]+)*)?
+                        (?:(?:ba|z|da|k)?sh|python[0-9.]*|node|perl|ruby|php|iex|invoke-expression)\b
+                    | (?s:.)*? (?&at) (?:(?:ba|z|da|k)?sh|eval|source|\.)[ \t]+ \S* (?:\$\(|<\(|`) [ \t]*
+                        (?:curl|wget)\b
+                    | (?s:.)*? (?&at) (?:iex|invoke-expression)\b [^\r\n]*?
+                        (?:\b(?:iwr|irm|invoke-webrequest|invoke-restmethod|curl|wget)\b|\.downloadstring\b)
+                    # a package runner taking a URL, git URL, or user/repo spec
+                    | (?s:.)*? (?&at) (?:npx|bunx|pnpm[ \t]+dlx|yarn[ \t]+dlx|npm[ \t]+exec|uvx|uv[ \t]+tool[ \t]+run|pipx[ \t]+run)\b
+                        (?:[ \t]+-\S+)* [ \t]+ (?:--(?:package|from|spec)[=\s])? ["']?
+                        (?! \S*? [\#@] [0-9a-f]{7,40} (?![\w.-]) )
+                        (?: https?:// | git(?:\+\w+)?:// | git@ | (?:github|gitlab|bitbucket): | [a-z0-9][\w.-]*/[\w.-]+ (?=[ \t]|$|["']) )
+                    # a script run from the repository: a relative path or project-dir var, run directly or via an interpreter
+                    | (?s:.)*? (?&at)
+                        (?: (?:node|bun|deno|python[0-9.]*|bash|sh|zsh|pwsh|powershell|ruby|perl|php|tsx|ts-node) (?:[ \t]+-\S+)* [ \t]+ ["']? )?
+                        (?: \.{1,2}/ | (?:scripts|script|bin|tools|\.github|\.claude|\.gemini|src)/ | (?:\$\{?|\$env:|%)(?:CLAUDE|GEMINI|CURSOR|QWEN)_PROJECT_DIR[}%]? )
+                        [\w./-]* \.(?:sh|bash|zsh|[cm]?js|[cm]?ts|py|rb|pl|ps1|php)\b
+                    # --- load-time shell danger command (end) ---
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+        - "ASI04 - Agentic Supply Chain Vulnerabilities"
+      mitre-atlas:
+        - "AML.T0081 - Modify AI Agent Configuration"
+        - "AML.T0050 - Command and Scripting Interpreter"
+      cwe:
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code, opencode, kilo-code]
+      references:
+        - https://code.claude.com/docs/en/skills#inject-dynamic-context
+        - https://code.claude.com/docs/en/skills#permission-checks-on-injected-commands
+        - https://github.com/anomalyco/opencode/blob/v1.19.4/packages/opencode/src/session/prompt.ts
+        - https://www.sonarsource.com/blog/mini-shai-hulud-targets-ai-coding-agents/
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md

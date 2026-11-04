@@ -1,0 +1,226 @@
+# Every finding cline-ai-rules must produce in this testbed, and nothing else.
+# Anchors are substrings of the flagged line, so refactors only need the anchor updated.
+findings:
+  - rule: mcp-tool-arg-option-injection-go
+    file: internal/gitops/tools.go
+    line_contains: "args = append(args, rev)"
+    note: >-
+      git_log (an mcp-go handler method registered through AddTools / ServerTool) appends the
+      model's revision to an argv slice spread into exec.CommandContext("git", args...), with
+      no "--" before it, so `--output=/path` is read as an option. The --author value right
+      before it, git_diff (--end-of-options), git_checkout (strings.HasPrefix check),
+      git_blame ("--" before the path), and git_push (the remote checked by a switch with
+      literal cases) stay quiet.
+  - rule: mcp-tool-arg-option-injection-go
+    file: internal/gitops/tools.go
+    line_contains: 'argv := []string{"git", "-C", r.Dir, "fetch", "--prune", remote}'
+    note: >-
+      git_fetch builds the whole argv in a []string literal and hands it to the run helper in
+      run.go, which calls exec.CommandContext(argv[0], argv[1:]...). A remote of
+      `--upload-pack=...` runs a command.
+  - rule: mcp-tool-arg-to-shell-go
+    file: internal/runner/runner.go
+    line_contains: 'cmd := exec.CommandContext(ctx, r.cfg.Shell, "-c", in.Steps)'
+    note: >-
+      go-sdk typed handler (mcp.AddTool); the shell comes from config (BUILDBOX_SHELL) and the
+      pipeline steps are the model's. run_check (a fixed map of argvs) stays quiet.
+  - rule: mcp-tool-arg-to-shell-go
+    file: internal/runner/runner.go
+    line_contains: "if _, err := script.WriteString(in.Script); err != nil {"
+    note: >-
+      run_script writes the model's script to an os.CreateTemp file and runs it with bash.
+      lint_script, which hands the same kind of file to shellcheck, stays quiet, as does
+      tail_log (shellescape.Quote on the unit, an int line count).
+  - rule: mcp-tool-arg-to-shell-go
+    file: internal/runner/probes.go
+    line_contains: "printenv '\"+a.Var+\"'"
+    note: >-
+      Low-level go-sdk Server.AddTool handler that decodes req.Params.Arguments with
+      json.Unmarshal; single quotes don't survive a value containing a quote.
+  - rule: mcp-tool-arg-to-shell-go
+    file: internal/runner/probes.go
+    line_contains: 'out, err := exec.CommandContext(ctx, "/bin/sh", "-c", line).CombinedOutput()'
+    requires: taint-intrafile
+    note: >-
+      disk_usage (an inline go-sdk handler) passes the model's path to the shellOut helper
+      below it; only the cross-function scan follows the call.
+  - rule: mcp-tool-arg-to-sql-go
+    file: internal/history/tools.go
+    line_contains: "rows, err := h.pool.Query(ctx, sb.String())"
+    note: >-
+      build_search writes branch and status into a strings.Builder with fmt.Fprintf and
+      runs it through pgxpool. The status property's mcp.Enum is only a hint: mcp-go
+      validates input schemas only with server.WithInputSchemaValidation(), which
+      cmd/buildbox doesn't set. build_stats (sortColumns lookup, $1, an int limit) and
+      flaky_tests (sqlx with bound arguments) stay quiet.
+  - rule: mcp-tool-arg-to-sql-go
+    file: internal/history/tools.go
+    line_contains: 'return h.report(ctx, fmt.Sprintf("SELECT job, count(*)'
+    note: >-
+      job_report builds the SQL text with fmt.Sprintf and hands it to the package's own
+      report helper; it's reported where the text is built, so default-mode scans catch it.
+  - rule: mcp-tool-arg-to-sql-go
+    file: internal/artifacts/artifacts.go
+    line_contains: "q = q.Select(in.Fields)"
+    note: >-
+      gorm reads a string passed to Select as SQL text, so the model's "fields" can be any
+      expression or subquery. The Where with ? placeholders next to it stays quiet.
+  # Resource templates and prompts (mcp-resource-prompt-params-as-sources): the client fills a
+  # template's URI and a prompt's arguments, and clients let the model choose them.
+  - rule: mcp-tool-arg-to-shell-go
+    file: internal/history/resources.go
+    line_contains: '"zcat "+logDir+"/"+id+".log.gz | tail -n 200"'
+    note: >-
+      mcp-go AddResourceTemplate handler: the {id} variable mcp-go puts in Params.Arguments goes
+      into sh -c.
+  - rule: mcp-tool-arg-to-sql-go
+    file: internal/history/resources.go
+    line_contains: "AND pipeline = '\"+pipeline+\"'"
+    note: >-
+      mcp-go AddPrompt handler concatenating a prompt argument into a pgx query. slowestJobs,
+      which binds $1, stays quiet.
+  - rule: mcp-tool-arg-option-injection-go
+    file: internal/artifacts/prompts.go
+    line_contains: 'exec.CommandContext(ctx, "git", "diff", "--stat", from)'
+    note: >-
+      go-sdk AddPrompt handler: a prompt argument as a git argv item with no "--" before it.
+      releaseNotes puts --end-of-options first and stays quiet.
+  - rule: mcp-container-host-root-mount
+    file: .mcp.json
+    line_contains: '"--mount", "type=bind,src=${HOME},dst=/root,readonly"'
+    note: >-
+      Claude Code expands ${HOME} in .mcp.json, so buildbox-fetch's container gets the whole
+      home folder (read-only) for git credentials. The buildbox server above it mounts only
+      ${PWD} and stays quiet.
+  - rule: mcp-container-host-root-mount-yaml
+    file: .continue/mcpServers/buildbox.yaml
+    line_contains: "- /home:/home:ro"
+    note: >-
+      Continue block mounting every user's home on the shared build box. buildbox-cache mounts
+      one cache folder and stays quiet.
+  - rule: mcp-container-host-root-mount-toml
+    file: .codex/config.toml
+    line_contains: '"-v", "/Users/fixture-dev:/Users/fixture-dev",'
+    note: >-
+      Codex server mounting the developer's whole home at the same path so returned paths line
+      up. buildbox-repo mounts only the pipelines checkout and stays quiet.
+  - rule: mcp-container-host-root-mount-workspace
+    file: buildbox.code-workspace
+    line_contains: '"${userHome}:${userHome}"'
+    note: >-
+      VS Code expands ${userHome} in a workspace file's server args, so buildbox-all-folders
+      sees the whole home folder. The ${workspaceFolder} server stays quiet.
+  - rule: mcp-container-host-root-mount-subagent
+    file: .claude/agents/container-disk-auditor.md
+    line_contains: "- /:/host:ro"
+    note: >-
+      A subagent's inline disk-report server (a generic image, not the filesystem server) with
+      the host root mounted read-only. cache-report mounts one cache folder and stays quiet.
+  - rule: mcp-container-host-root-mount-compose
+    file: deploy/compose.yaml
+    line_contains: "- type: bind"
+    note: >-
+      Long-syntax bind of / into the buildbox-mcp image (the MCP server is named by its
+      image). host-metrics, a node-exporter whose container_name has "mcp" in it, mounts / too
+      and stays quiet, as does db.
+  - rule: mcp-container-host-root-mount-compose
+    file: deploy/compose.dev.yaml
+    line_contains: "- ${HOME}:/home/dev:ro"
+    note: >-
+      A build-only dev service named as an MCP server by its container_name, given the whole
+      home folder for SSH keys. The ${HOME}/.config/gh mount below it stays quiet.
+  - rule: project-mcp-server-no-prompt
+    file: .mcp.json
+    line_contains: '"command": "docker",'
+    note: >-
+      Both docker servers (buildbox and buildbox-fetch) are committed project servers that
+      VS Code starts from .mcp.json without a per-server prompt.
+  - rule: project-mcp-server-no-prompt-yaml
+    file: .continue/mcpServers/buildbox.yaml
+    line_contains: "command: docker"
+    note: buildbox-shared and buildbox-cache, started by Continue without asking.
+  - rule: project-mcp-server-no-prompt-toml
+    file: .codex/config.toml
+    line_contains: 'command = "docker"'
+    note: buildbox and buildbox-repo in the Codex project config, started in a trusted project.
+  - rule: project-mcp-server-no-prompt-workspace
+    file: buildbox.code-workspace
+    line_contains: '"command": "docker",'
+    note: buildbox and buildbox-all-folders in the workspace file's settings.mcp.
+  - rule: project-mcp-server-no-prompt-subagent
+    file: .claude/agents/container-disk-auditor.md
+    line_contains: "command: docker"
+    note: disk-report and cache-report, the subagent's inline servers.
+  - rule: mcp-container-host-root-mount-vscode
+    file: .vscode/mcp.json
+    line_contains: '"-v", "${userHome}:/root:ro",'
+    note: >-
+      VS Code expands ${userHome}, so buildbox-fetch gets the whole home folder. The
+      ${workspaceFolder} mounts stay quiet.
+  - rule: mcp-container-host-root-mount-cline
+    file: .roo/mcp.json
+    line_contains: '"--mount", "type=bind,src=${env:HOME},dst=/root,readonly",'
+    note: Roo Code expands ${env:HOME} in .roo/mcp.json, so the container gets the home folder.
+  - rule: mcp-filesystem-root-too-broad-cline
+    file: .roo/mcp.json
+    line_contains: '"${env:USERPROFILE}"'
+    note: Roo Code expands ${env:USERPROFILE}, so build-logs may read the whole Windows profile.
+  - rule: mcp-container-host-root-mount-gemini
+    file: gemini-extension.json
+    line_contains: '"-v", "$HOME:/root:ro",'
+    note: >-
+      Gemini CLI expands $HOME in an extension's args. The $HOME/.cache/buildbox mount above
+      it is one folder and stays quiet.
+  - rule: mcp-filesystem-root-too-broad-gemini
+    file: gemini-extension.json
+    line_contains: '"args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "$HOME/"]'
+    note: Gemini CLI expands $HOME, so build-logs may read the whole home folder.
+  - rule: mcp-container-host-root-mount-literal
+    file: docs/claude_desktop_config.json
+    line_contains: '"-v", "/Users/fixture-user:/root:ro",'
+    note: >-
+      buildbox-mac spells the home folder out. The buildbox entry's $HOME stays quiet: Claude
+      Desktop passes it to docker as written, so nothing is mounted.
+  - rule: mcp-filesystem-root-too-broad-literal
+    file: docs/claude_desktop_config.json
+    line_contains: '"args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "/Users/fixture-user"]'
+    note: build-logs is given the whole home folder.
+  - rule: project-mcp-server-no-prompt
+    file: .vscode/mcp.json
+    line_contains: '"command": "docker",'
+    note: buildbox and buildbox-fetch, committed project servers in .vscode/mcp.json.
+  - rule: project-mcp-server-no-prompt-roo
+    file: .roo/mcp.json
+    line_contains: '"command": "docker",'
+    note: buildbox, a committed Roo Code project server.
+  - rule: project-mcp-server-no-prompt-roo
+    file: .roo/mcp.json
+    line_contains: '"command": "npx",'
+    note: build-logs, a committed Roo Code project server.
+  - rule: mcp-filesystem-root-too-broad
+    file: .mcp.json
+    line_contains: '"${HOME:-/root}"'
+    note: Claude Code expands ${HOME:-/root}, so build-logs may read the whole home folder.
+  - rule: project-mcp-server-no-prompt
+    file: .mcp.json
+    line_contains: '"command": "npx",'
+    note: build-logs, a committed project server in .mcp.json.
+  - rule: ai-cli-bypass-flag-invocation-py
+    file: scripts/flaky_quarantine.py
+    line_contains: '"--dangerously-skip-permissions",'
+    note: >-
+      The flaky-test fixer runs claude fourth in the argv (after nice -n 10) with approvals off,
+      in a file with a 260-entry test list that used to time the rule out. The plan-mode
+      summary is a near-miss.
+  - rule: agent-hook-remote-exec
+    file: .github/hooks/toolchain.json
+    line_contains: 'golangci-lint/install.sh?version=v2.6.1'
+    note: >-
+      A Copilot CLI sessionStart hook pipes an installer into sh; the quoted & in its URL used
+      to end the match. The status lookup piped into jq is a near-miss.
+  - rule: agent-settings-command-remote-exec
+    file: .claude/settings.json
+    line_contains: 'statusline.sh?shell=bash&theme=buildbox'
+    note: >-
+      The status line pipes a remote script into bash on every refresh; the URL's & sits in
+      single quotes. The headers helper piped into jq is a near-miss.

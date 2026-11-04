@@ -1,0 +1,133 @@
+rules:
+  - id: langchain-load-unsafe-objects
+    languages: [python]
+    severity: WARNING
+    message: >-
+      This revives serialized LangChain objects with LangChain's guards turned off:
+      `allowed_objects="all"` (any class in LangChain's serialization mappings, partner chat
+      models and LLMs included), `secrets_from_env=True` or a `secrets_map` that is the whole
+      environment (any environment variable the payload names), `init_validator=None` (Jinja2
+      prompt templates allowed again), or a hub prompt pulled with `include_model=True` and no
+      pinned commit. A LangChain manifest is executable configuration, not data: whoever can
+      write or change it (a shared prompt store, a cache, a hub prompt, stored run data) can
+      build a chat model whose base URL points at their own host, so the API key and every
+      prompt go there, or copy your credentials into the objects it builds. Pass the narrowest
+      `allowed_objects` that fits (`"messages"` or an explicit list of classes), keep
+      `secrets_from_env=False` and put only the secrets the object needs in `secrets_map`, keep
+      the default `init_validator`, and pin pulled prompts to a reviewed commit
+      (`"owner/name:<commit>"`).
+    # API shapes verified 2026-10-25 against langchain-core 1.7.0, 1.3.3, 1.2.5, 0.3.86 and
+    # 0.3.81 (langchain_core/load/load.py), langchain-classic 1.0.8 (load/, hub.py), and
+    # langsmith 0.14.12 (client.py Client.pull_prompt, _process_prompt_manifest).
+    # - allowed_objects was added in 0.3.81 / 1.2.5 (GHSA-c67j-w6g6-q2cm) with "core" (classes
+    #   under langchain_core) as the default; "messages" came in 0.3.85 / 1.3.3
+    #   (GHSA-pjwx-r37v-7724). Before that, load() revived any Serializable in the trusted
+    #   namespaces, as "all" does now.
+    # - secrets_from_env defaults to False from 1.2.5 on the 1.x line, but still to True on the
+    #   0.3.x line through 0.3.86 (the advisory text says the default changed; the 0.3.x source
+    #   didn't change it). An explicit False is never reported.
+    # - init_validator (0.3.81 / 1.2.5) defaults to a check that rejects
+    #   template_format="jinja2"; None removes it.
+    # - Client.pull_prompt(include_model=True) and langchain(-classic) hub.pull(...,
+    #   include_model=True) call load(..., allowed_objects="all") on the hub manifest.
+    # Not reported: valid_namespaces and additional_import_mappings, which name classes the
+    # application chose (an allowlist, not a bypass); an explicit allowed_objects list; and
+    # load() with the defaults, whose risk depends on where the payload comes from
+    # (langchain-load-untrusted-input reports request data reaching it).
+    pattern-either:
+      # load / loads (and the Reviver they wrap) with a guard turned off.
+      - patterns:
+          - pattern-either:
+              - pattern: $FN(..., allowed_objects="all", ...)
+              - pattern: $FN(..., secrets_from_env=True, ...)
+              - pattern: $FN(..., init_validator=None, ...)
+              - patterns:
+                  - pattern: $FN(..., secrets_map=$SM, ...)
+                  # The whole value is the environment (a regex, because metavariable-pattern
+                  # would also match os.environ["ONE_KEY"] inside a one-entry map).
+                  - metavariable-regex:
+                      metavariable: $SM
+                      regex: (?s)^(?:(?:os\.)?environ(?:\.copy\(\))?|dict\(\s*(?:os\.)?environ\s*[,)].*|\{\s*\*\*(?:os\.)?environ\s*[,}].*)$
+          # metavariable-pattern matches anywhere inside the binding, so first make sure the
+          # binding is a bare (dotted) name. It resolves import aliases.
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^[\w.]+$
+          - metavariable-pattern:
+              metavariable: $FN
+              pattern-either:
+                - pattern: langchain_core.load.load
+                - pattern: langchain_core.load.loads
+                - pattern: langchain_core.load.load.load
+                - pattern: langchain_core.load.load.loads
+                - pattern: langchain_core.load.load.Reviver
+                - pattern: langchain.load.load
+                - pattern: langchain.load.loads
+                - pattern: langchain.load.load.load
+                - pattern: langchain.load.load.loads
+                - pattern: langchain.load.load.Reviver
+                - pattern: langchain_classic.load.load
+                - pattern: langchain_classic.load.loads
+                - pattern: langchain_classic.load.load.load
+                - pattern: langchain_classic.load.load.loads
+                - pattern: langchain_classic.load.load.Reviver
+      # Load options kept in a dict and spread into the call (`loads(text, **RESTORE_OPTIONS)`),
+      # inline or as a constant. The finding sits on the dict. These keys are LangChain's.
+      - pattern: '{..., "allowed_objects": "all", ...}'
+      - pattern: '{..., "secrets_from_env": True, ...}'
+      - pattern: '{..., "init_validator": None, ...}'
+      - pattern: dict(..., allowed_objects="all", ...)
+      - pattern: dict(..., secrets_from_env=True, ...)
+      # Reviver(allowed_objects, secrets_map, valid_namespaces, secrets_from_env, ...) takes its
+      # options positionally too (0.3.81 / 1.2.5 and later).
+      - patterns:
+          - pattern-either:
+              - pattern: $REV("all", ...)
+              - pattern: $REV($AO, $SM, $NS, True, ...)
+          - metavariable-regex:
+              metavariable: $REV
+              regex: ^[\w.]+$
+          - metavariable-pattern:
+              metavariable: $REV
+              pattern-either:
+                - pattern: langchain_core.load.load.Reviver
+                - pattern: langchain.load.load.Reviver
+                - pattern: langchain_classic.load.load.Reviver
+      # LangSmith pull_prompt: secrets_from_env resolves the manifest's secret references from
+      # the environment, and include_model=True revives the manifest with allowed_objects="all".
+      - pattern: $CLIENT.pull_prompt(..., secrets_from_env=True, ...)
+      - patterns:
+          - pattern-either:
+              - pattern: $CLIENT.pull_prompt(..., include_model=True, ...)
+              - pattern: langchain.hub.pull(..., include_model=True, ...)
+              - pattern: langchain_classic.hub.pull(..., include_model=True, ...)
+          # A prompt pinned to a commit ("owner/name:1a2b3c4d") is a reviewed manifest.
+          - pattern-not: $PULL("=~/:[0-9a-fA-F]{8,64}$/", ...)
+          - pattern-not: $PULL(..., prompt_identifier="=~/:[0-9a-fA-F]{8,64}$/", ...)
+          - pattern-not: $PULL(..., owner_repo_commit="=~/:[0-9a-fA-F]{8,64}$/", ...)
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+        - "LLM02:2026 - Sensitive Information Disclosure"
+        - "LLM02:2025 - Sensitive Information Disclosure"
+      owasp-aisvs:
+        - "v1.01-C4.1.2 - AI Workload Sandboxing & Validation"
+      mitre-atlas:
+        - "AML.T0011.000 - User Execution: Unsafe AI Artifacts"
+        - "AML.T0055 - Unsecured Credentials"
+      cwe:
+        - "CWE-502: Deserialization of Untrusted Data"
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      technology: [langchain, langsmith]
+      references:
+        - https://github.com/langchain-ai/langchain/blob/langchain-core%3D%3D1.7.0/libs/core/langchain_core/load/load.py
+        - https://github.com/advisories/GHSA-c67j-w6g6-q2cm
+        - https://github.com/advisories/GHSA-pjwx-r37v-7724
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md
+        - https://cwe.mitre.org/data/definitions/502.html

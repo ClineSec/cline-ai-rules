@@ -1,0 +1,70 @@
+rules:
+  - id: project-mcp-server-no-prompt-subagent
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This project subagent declares its own MCP server that runs a program on the developer's
+      machine, and Claude Code starts it without asking. Servers in a project .mcp.json get a
+      per-server prompt, but an inline server in a .claude/agents/ file is only gated by
+      folder trust: once someone trusts the folder, as most people do for a repository they
+      clone, the server starts every time the subagent runs, including when Claude delegates
+      to it on its own, and again after its command changes. A pull request that adds or edits
+      this file therefore runs that program on every teammate's machine, with their
+      credentials and the agent's tool access. Reference a server each developer configured
+      and approved (mcpServers: [github]) instead of defining it inline, or run it from a
+      pinned package (npx "pkg@1.2.3") and review this file like code that runs on checkout (a
+      CODEOWNERS entry).
+    # Claude Code docs (sub-agents, "Inline server trust") for v2.1.310, and a test on
+    # 2026-10-23 with v2.1.310: after the folder-trust dialog, a .mcp.json server raised "New
+    # MCP server found in this project" and did not start until approved, while the subagent's
+    # inline stdio server started with no prompt when the subagent ran, in auto and manual
+    # permission modes. Plugin subagents ignore mcpServers, so a plugin's agents/ folder is left
+    # out; remote servers (url, no command) run nothing locally.
+    paths:
+      include:
+        - ".claude/agents/**"
+    patterns:
+      # The frontmatter: from a leading --- line to the next --- line.
+      - pattern-regex: \A(?:\x{FEFF})?---[ \t]*\r?\n(?s:.*?)\r?\n---[ \t]*(?:\r?\n|\z)
+      # The top-level mcpServers: block.
+      - pattern-regex: (?m)^mcpServers[ \t]*:[^\r\n]*\r?\n(?:(?:[ \t]+[^\r\n]*|-[ \t][^\r\n]*|\#[^\r\n]*|[ \t]*)\r?\n)*
+      # An inline server's command, in block or flow style; a name alone (- github) references
+      # a server configured elsewhere.
+      - pattern-regex: |-
+          (?m)(?:^[ \t]*(?:-[ \t]+)?|(?<flow>[{,])[ \t]*)command[ \t]*:[ \t]+(?<CMD>"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\r\n]|'')*'|(?(flow)[^,}\r\n]*[^,}\s]|[^\r\n]*?\S(?=[ \t]+#|[ \t]*\r?$)))
+      - metavariable-regex:
+          metavariable: $CMD
+          # Not an empty quoted string.
+          regex: ^(?!""$|''$)
+      - focus-metavariable: $CMD
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-agentic:
+        - "ASI04 - Agentic Supply Chain Vulnerabilities"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-mcp:
+        - "MCP04:2025 - Software Supply Chain Attacks & Dependency Tampering"
+        - "MCP09:2025 - Shadow MCP Servers"
+      owasp-aisvs:
+        - "v1.01-C10.1.2 - Component Integrity"
+      mitre-atlas:
+        - "AML.T0010.005 - AI Supply Chain Compromise: AI Agent Tool"
+      cwe:
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+      # Inline servers are a documented way to keep a server's tools out of the main
+      # conversation; the finding marks a file whose changes run code on checkout, not a mistake.
+      confidence: LOW
+      likelihood: LOW
+      impact: HIGH
+      technology: [mcp, claude-code]
+      references:
+        - https://code.claude.com/docs/en/sub-agents#inline-server-trust
+        - https://code.claude.com/docs/en/permissions#what-runs-before-you-trust-a-folder
+        - https://code.claude.com/docs/en/mcp
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP09-2025%E2%80%93Shadow-MCP-Servers.md
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md

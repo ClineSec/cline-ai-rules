@@ -1,0 +1,431 @@
+rules:
+  - id: llm-output-to-html-java
+    # The pattern-sources, pattern-propagators, and first 5 pattern-sanitizers are shared with
+    # llm-output-to-code-execution-java and llm-output-to-sql-java (build.py SHARED_BLOCKS
+    # "model-output sources (Java)", "lambda propagators (Java)", "value sanitizers (Java)"):
+    # edit them together.
+    languages: [java]
+    severity: ERROR
+    message: >-
+      Model output is sent to the browser as HTML here. Completions are untrusted input: anyone
+      who can influence the prompt, directly or through a web page, document, or tool result the
+      model reads, can make it emit `<img src=x onerror=...>` or a `javascript:` link, which runs
+      in your page with the user's session (XSS, account takeover, data exfiltration). A String
+      returned from a Spring @ResponseBody or @RestController GET handler with no `produces` is
+      served as text/html to a browser that navigates to it, because Spring's string converter
+      takes the content type from the Accept header. Return JSON (a record) or declare
+      `produces = MediaType.TEXT_PLAIN_VALUE`; if the page must show HTML, escape the text
+      (`HtmlUtils.htmlEscape`, OWASP Encoder `Encode.forHtml`) or sanitize it with an allowlist
+      (OWASP Java HTML Sanitizer, `Jsoup.clean`), and render markdown with commonmark's
+      `escapeHtml(true)` and `sanitizeUrls(true)`.
+    mode: taint
+    pattern-sources:
+      # Spring AI ChatClient (spring-ai-client-chat 2.0.2 and 1.1.8): a request spec started with
+      # prompt() on a ChatClient field, parameter, or local, and everything read back from it
+      # (call().content(), entity(...), chatResponse(), stream().content()).
+      - pattern: (ChatClient $CC).prompt(...)
+      - pattern: ChatClient.create(...).prompt(...)
+      - pattern: (ChatClient.Builder $CCB).build().prompt(...)
+      # The same chain on a client the file can't type (built into a `var`, returned by a
+      # getter), and a response spec kept in a variable, in a file that imports Spring AI.
+      - patterns:
+          - pattern-either:
+              - pattern: $SPEC.call().content()
+              - pattern: $SPEC.call().entity(...)
+              - pattern: $SPEC.call().chatResponse()
+              - pattern: $SPEC.call().chatClientResponse()
+              - pattern: $SPEC.call().responseEntity(...)
+              - pattern: $SPEC.stream().content()
+              - pattern: $SPEC.stream().chatResponse()
+              - pattern: $SPEC.stream().chatClientResponse()
+              - pattern: (ChatClient.CallResponseSpec $RS).$GET(...)
+              - pattern: (CallResponseSpec $RS).$GET(...)
+              - pattern: (ChatClient.StreamResponseSpec $RS).$GET(...)
+              - pattern: (StreamResponseSpec $RS).$GET(...)
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++org\.springframework\.ai\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++org\.springframework\.ai\.)[^\n]*+\z'
+      # Spring AI ChatModel and StreamingChatModel (spring-ai-model 2.0.2): call(Prompt) returns
+      # a ChatResponse (getResult().getOutput().getText(), getContent() before 1.0.0-M6), and
+      # call(String) and stream(...) return the text.
+      - patterns:
+          - pattern-either:
+              - pattern: $SAI.call(...)
+              - pattern: $SAI.stream(...)
+          - metavariable-type:
+              metavariable: $SAI
+              types: [ChatModel, StreamingChatModel, OpenAiChatModel, AzureOpenAiChatModel, AnthropicChatModel, OllamaChatModel, VertexAiGeminiChatModel, GoogleGenAiChatModel, MistralAiChatModel, BedrockProxyChatModel, DeepSeekChatModel]
+      # LangChain4j ChatModel (langchain4j-core 1.22.0) and ChatLanguageModel (0.36.2): chat(...)
+      # and generate(...) return the text, a ChatResponse (aiMessage().text()), or a
+      # Response<AiMessage> (content().text()).
+      - patterns:
+          - pattern-either:
+              - pattern: $LC.chat(...)
+              - pattern: $LC.chatAsync(...)
+              - pattern: $LC.generate(...)
+          - metavariable-type:
+              metavariable: $LC
+              types: [ChatModel, ChatLanguageModel, OpenAiChatModel, AzureOpenAiChatModel, AnthropicChatModel, OllamaChatModel, GoogleAiGeminiChatModel, VertexAiGeminiChatModel, MistralAiChatModel, BedrockChatModel]
+      # The same calls on a model the file can't type (`var model = OpenAiChatModel.builder()
+      # ... .build()`), on a receiver named like a model, in a file that imports the framework.
+      - patterns:
+          - pattern-either:
+              - pattern: $MODEL.call(...)
+              - pattern: $MODEL.stream(...)
+          - metavariable-regex:
+              metavariable: $MODEL
+              regex: (?i)^(?:this\.)?\w*(?:model|llm)$
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++org\.springframework\.ai\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++org\.springframework\.ai\.)[^\n]*+\z'
+      - patterns:
+          - pattern-either:
+              - pattern: $MODEL.chat(...)
+              - pattern: $MODEL.chatAsync(...)
+              - pattern: $MODEL.generate(...)
+          - metavariable-regex:
+              metavariable: $MODEL
+              regex: (?i)^(?:this\.)?\w*(?:model|llm)$
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\z'
+      # LangChain4j AI services built in this file (AiServices.create(...) or
+      # AiServices.builder(...)...build()), held in a local or a field: every method called on
+      # the proxy returns model output. Services injected from another file (a Spring Boot
+      # @AiService interface) can't be seen by a single-file scan.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $T $SVC = <... AiServices.$F(...) ...>;
+                  ...
+              - pattern-inside: |
+                  $SVC = <... AiServices.$F(...) ...>;
+                  ...
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    $T $SVC = <... AiServices.$F(...) ...>;
+                    ...
+                  }
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    $CTOR(...) {
+                      ...
+                      this.$SVC = <... AiServices.$F(...) ...>;
+                      ...
+                    }
+                    ...
+                  }
+          - pattern-either:
+              - pattern: $SVC.$CALL(...)
+              - pattern: this.$SVC.$CALL(...)
+      # LangChain4j streaming, in a file that imports LangChain4j: the text a
+      # StreamingChatResponseHandler receives (onPartialResponse, onCompleteResponse; onNext and
+      # onComplete in 0.x) and the TokenStream callbacks of a streaming AI service.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: void $ON($T $P) { ... }
+              - pattern-inside: void $ON($T $P, $CT $CTX) { ... }
+          - metavariable-regex:
+              metavariable: $ON
+              regex: ^(?:onPartialResponse|onCompleteResponse|onNext|onComplete)$
+          - pattern: $P
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\z'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $TS.$ON(($P) -> $BODY)
+              - pattern-inside: $TS.$ON(($P, $CTX) -> $BODY)
+          - metavariable-regex:
+              metavariable: $ON
+              regex: ^(?:onPartialResponse|onPartialResponseWithContext|onCompleteResponse|onIntermediateResponse|onNext|onComplete)$
+          - focus-metavariable: $P
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\z'
+    pattern-propagators:
+      # In --taint-intrafile mode OpenGrep drops taint through a call that takes a lambda
+      # (chatClient.prompt().user(u -> u.text(q)).call()), so carry it from the receiver to the
+      # call's result, and into the parameter of a callback over a tainted stream, Flux,
+      # Optional, or future (`.subscribe(chunk -> ...)`).
+      - patterns:
+          - pattern: $CALL
+          - pattern-either:
+              - pattern: $R.$M(..., ($P) -> $B, ...)
+              - pattern: $R.$M(..., ($P, $Q) -> $B, ...)
+        from: $R
+        to: $CALL
+      - patterns:
+          - pattern-inside: $R.$M(($P) -> $B)
+          - pattern: $P
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(?:map|flatMap|filter|forEach|forEachOrdered|peek|subscribe|doOnNext|doOnSuccess|thenAccept|thenApply|thenCompose|ifPresent|ifPresentOrElse|handle)$
+        from: $R
+        to: $P
+    pattern-sinks:
+      # A Spring MVC or WebFlux handler (in a @RestController, or marked @ResponseBody) that
+      # returns text from a GET mapping without `produces`: StringHttpMessageConverter
+      # (spring-web 7.0.10) supports */* and picks text/html from a browser's Accept header,
+      # and WebFlux's catch-all CharSequence encoder does the same. A handler that declares a
+      # non-HTML `produces`, itself or on its class, is skipped; one that declares text/html is
+      # covered below for every HTTP method.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @RestController
+                  class $CLS { ... }
+              - pattern-inside: |
+                  @ResponseBody
+                  $RT $HANDLER(...) { ... }
+              - pattern-inside: |
+                  @ResponseBody
+                  class $CLS { ... }
+              # A ResponseEntity body is written by the same converters in a plain @Controller.
+              - patterns:
+                  - pattern-inside: |
+                      @Controller
+                      class $CLS { ... }
+                  - pattern-inside: |
+                      $RT $HANDLER(...) { ... }
+                  - metavariable-regex:
+                      metavariable: $RT
+                      regex: ^ResponseEntity<\s*String\s*>$
+          - pattern-either:
+              - pattern-inside: |
+                  @GetMapping
+                  $RT $HANDLER(...) { ... }
+              - pattern-inside: |
+                  @GetMapping(...)
+                  $RT $HANDLER(...) { ... }
+              - pattern-inside: |
+                  @RequestMapping(..., method = RequestMethod.GET, ...)
+                  $RT $HANDLER(...) { ... }
+              - pattern-inside: |
+                  @RequestMapping(..., method = GET, ...)
+                  $RT $HANDLER(...) { ... }
+              - patterns:
+                  - pattern-inside: |
+                      @RequestMapping(...)
+                      $RT $HANDLER(...) { ... }
+                  - pattern-not-inside: |
+                      @RequestMapping(..., method = $METHODS, ...)
+                      $RT $HANDLER(...) { ... }
+          - metavariable-regex:
+              metavariable: $RT
+              regex: ^(?:String|CharSequence|(?:Mono|Flux|ResponseEntity|Optional|CompletableFuture|Callable)<\s*String\s*>)$
+          - pattern-not-inside: |
+              @$MAPPING(..., produces = $PRODUCES, ...)
+              $RT $HANDLER(...) { ... }
+          - pattern-not-inside: |
+              @RequestMapping(..., produces = $PRODUCES, ...)
+              class $CLS { ... }
+          - pattern-inside: return $HTML;
+          - pattern: $HTML
+          # A ResponseEntity that sets its own content type is judged by the sinks below.
+          - metavariable-regex:
+              metavariable: $HTML
+              regex: (?s)^(?!.*\.contentType\()
+      # Any handler that declares an HTML `produces` (a string, MediaType.TEXT_HTML_VALUE, or a
+      # list containing one).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$MAPPING(..., produces = $PRODUCES, ...)
+                  $RT $HANDLER(...) { ... }
+              - patterns:
+                  - pattern-inside: |
+                      @RequestMapping(..., produces = $PRODUCES, ...)
+                      class $CLS { ... }
+                  - pattern-not-inside: |
+                      @$MAPPING(..., produces = $OWN, ...)
+                      $RT $HANDLER(...) { ... }
+          - metavariable-regex:
+              metavariable: $PRODUCES
+              regex: (?i).*(?:text/html|TEXT_HTML|application/xhtml|APPLICATION_XHTML)
+          - pattern-inside: return $HTML;
+          - pattern: $HTML
+          - metavariable-regex:
+              metavariable: $HTML
+              regex: (?s)^(?!.*\.contentType\()
+      # ResponseEntity and WebFlux ServerResponse bodies with an HTML content type.
+      - patterns:
+          - pattern-either:
+              - pattern: $BUILDER.contentType($TYPE).body($HTML)
+              - pattern: $BUILDER.contentType($TYPE).bodyValue($HTML)
+              - pattern: $BUILDER.contentType($TYPE).body(BodyInserters.fromValue($HTML))
+              - pattern: $BUILDER.contentType($TYPE).body($HTML, $CLASS)
+              - pattern: $BUILDER.contentType($TYPE).$M(...).body($HTML)
+              - pattern: $BUILDER.contentType($TYPE).$M(...).bodyValue($HTML)
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: (?i).*(?:text/html|TEXT_HTML|application/xhtml|APPLICATION_XHTML)
+          - focus-metavariable: $HTML
+      - patterns:
+          - pattern-either:
+              - pattern: $BUILDER.header($NAME, $TYPE).body($HTML)
+              - pattern: $BUILDER.header($NAME, $TYPE).bodyValue($HTML)
+          - metavariable-regex:
+              metavariable: $NAME
+              regex: (?i)^(?:"content-type"|HttpHeaders\.CONTENT_TYPE)$
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: (?i).*(?:text/html|TEXT_HTML)
+          - focus-metavariable: $HTML
+      # The servlet API after an HTML content type: response.getWriter().write / print /
+      # println / append / printf (any argument, so a printf format's values count), directly
+      # or through a PrintWriter variable.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $RESP.setContentType($TYPE);
+                  ...
+              - pattern-inside: |
+                  $RESP.setHeader($NAME, $TYPE);
+                  ...
+              - pattern-inside: |
+                  $RESP.addHeader($NAME, $TYPE);
+                  ...
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: (?i).*(?:text/html|TEXT_HTML)
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: $RESP.getWriter().$WRITE(..., $HTML, ...)
+                      - pattern: $RESP.getOutputStream().$WRITE(..., $HTML, ...)
+                  - metavariable-regex:
+                      metavariable: $WRITE
+                      regex: ^(?:write|print|println|append|printf|format)$
+              - patterns:
+                  - pattern-inside: |
+                      $W = $RESP.getWriter();
+                      ...
+                  - pattern: $W.$WRITE(..., $HTML, ...)
+                  - metavariable-regex:
+                      metavariable: $WRITE
+                      regex: ^(?:write|print|println|append|printf|format)$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $WT $W = $RESP.getWriter();
+                          ...
+                      - pattern-inside: |
+                          try ($WT $W = $RESP.getWriter()) {
+                            ...
+                          }
+                  - pattern: $W.$WRITE(..., $HTML, ...)
+                  - metavariable-regex:
+                      metavariable: $WRITE
+                      regex: ^(?:write|print|println|append|printf|format)$
+          - focus-metavariable: $HTML
+    pattern-sanitizers:
+      # Values that can't carry text: numbers, booleans, UUIDs, dates, and enum constants
+      # parsed from the string (Integer.parseInt(x), Tone.valueOf(x); not String.valueOf).
+      - exact: true
+        patterns:
+          - pattern: $NUM.$PARSE(...)
+          - metavariable-regex:
+              metavariable: $NUM
+              regex: ^(?:java\.lang\.)?(?:Integer|Long|Short|Byte|Double|Float|Boolean)$|^(?:java\.util\.)?UUID$|^(?:java\.time\.)?(?:LocalDate|LocalDateTime|LocalTime|Instant|OffsetDateTime|ZonedDateTime|Duration)$
+          - metavariable-regex:
+              metavariable: $PARSE
+              regex: ^(?:parse\w*|valueOf|fromString)$
+      - exact: true
+        patterns:
+          - pattern: $CLS.valueOf(...)
+          - metavariable-regex:
+              metavariable: $CLS
+              regex: ^(?!(?:java\.lang\.)?(?:String|Object|CharSequence|StringBuilder|StringBuffer|Character)$)(?:\w+\.)*[A-Z]\w*$
+      # An allowlist lookup in a constant table (`PERSONAS.get(choice)`, `COMMANDS.getOrDefault(k,
+      # ...)`), and a check against a constant set or an anchored pattern before use
+      # (`if (!ALLOWED.contains(x)) throw ...`, `x.matches("[a-z_]+")`).
+      - patterns:
+          - pattern-either:
+              - pattern: $TABLE.get($KEY)
+              - pattern: $TABLE.getOrDefault($KEY, $DEF)
+          - metavariable-regex:
+              metavariable: $TABLE
+              regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+      - by-side-effect: true
+        patterns:
+          - pattern: $SET.contains($X)
+          - metavariable-regex:
+              metavariable: $SET
+              regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+          - focus-metavariable: $X
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X.matches("$RE")
+              - pattern: Pattern.matches("$RE", $X)
+              - pattern: $PAT.matcher($X).matches()
+          - focus-metavariable: $X
+      # Response metadata that can't carry the model's text: token counts, finish reasons, and
+      # model names (`response.getMetadata().getUsage()`, `chatResponse.tokenUsage()`).
+      - patterns:
+          - pattern: $OBJ.$GET()
+          - metavariable-regex:
+              metavariable: $GET
+              regex: ^(?:getMetadata|metadata|getUsage|tokenUsage|finishReason|getFinishReason|modelName|getModel)$
+      # HTML escapers and allowlist sanitizers: Spring HtmlUtils (spring-web 7.0.10), OWASP
+      # Encoder 1.6.0 (Encode.forHtml*), Apache Commons Text / Lang StringEscapeUtils, Jsoup
+      # clean (jsoup 1.23.2), OWASP Java HTML Sanitizer (PolicyFactory.sanitize), and helpers
+      # named for what they do (`escapeHtml(...)`, `sanitizeHtml(...)`).
+      - patterns:
+          - pattern-either:
+              - pattern: HtmlUtils.$ESC(...)
+              - pattern: Encode.$ESC(...)
+              - pattern: StringEscapeUtils.$ESC(...)
+          - metavariable-regex:
+              metavariable: $ESC
+              regex: ^(?:htmlEscape\w*|forHtml\w*|forXml\w*|escapeHtml\w*|escapeXml\w*)$
+      - pattern: Jsoup.clean(...)
+      - pattern: $POLICY.sanitize(...)
+      - patterns:
+          - pattern: $HELPER(...)
+          - metavariable-regex:
+              metavariable: $HELPER
+              regex: (?i)^(?:\w+\.)*(?!\w*un(?:escape|sanitiz))\w*(?:escapehtml|htmlescape|sanitizehtml)\w*$
+      # commonmark-java (0.31.0) with escapeHtml(true) and sanitizeUrls(true) escapes raw HTML
+      # and drops javascript: links; without both, its render() output still carries them.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $RT $R = $INIT;
+                  ...
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    $RT $R = $INIT;
+                    ...
+                  }
+          - metavariable-regex:
+              metavariable: $INIT
+              regex: (?s)^(?=.*\.escapeHtml\(\s*true\s*\))(?=.*\.sanitizeUrls\(\s*true\s*\))
+          - pattern: $R.render(...)
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      mitre-atlas:
+        - "AML.T0077 - LLM Response Rendering"
+        - "AML.T0051 - LLM Prompt Injection"
+      cwe:
+        - "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [spring-ai, langchain4j, spring-mvc, spring-webflux, servlet, commonmark]
+      # API shapes checked 2026-10-24 against Maven Central sources: model-output sources as in
+      # llm-output-to-code-execution-java, plus spring-webmvc and spring-web 7.0.10
+      # (AbstractMessageConverterMethodProcessor.writeWithMessageConverters picks the most
+      # specific Accept type the converter supports; StringHttpMessageConverter supports
+      # text/plain and */*), spring-webflux 7.0.10 (BaseDefaultCodecs catch-all
+      # CharSequenceEncoder.allMimeTypes()), HtmlUtils, owasp encoder 1.6.0, and commonmark
+      # 0.31.0 (HtmlRenderer.Builder escapeHtml / sanitizeUrls). Not covered: Thymeleaf
+      # `th:utext` and other templates, because the model attribute is set in Java and the
+      # unescaped output is chosen in the template file, which a Java rule can't see.
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md
+        - https://cwe.mitre.org/data/definitions/79.html
+        - https://github.com/spring-projects/spring-framework/blob/v7.0.10/spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/AbstractMessageConverterMethodProcessor.java
+        - https://github.com/spring-projects/spring-framework/blob/v7.0.10/spring-web/src/main/java/org/springframework/http/converter/StringHttpMessageConverter.java
+        - https://owasp.org/www-project-java-encoder/
+        - https://github.com/commonmark/commonmark-java#security
+        - https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html

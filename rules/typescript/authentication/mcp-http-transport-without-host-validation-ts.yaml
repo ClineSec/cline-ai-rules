@@ -1,0 +1,130 @@
+rules:
+  - id: mcp-http-transport-without-host-validation-ts
+    # Sources: MCP TypeScript SDK v2.3.1 (WebStandardStreamableHTTPServerTransport in
+    # @modelcontextprotocol/server and NodeStreamableHTTPServerTransport in
+    # @modelcontextprotocol/node: enableDnsRebindingProtection ?? false, deprecated in favour of
+    # middleware; createMcpHandler "performs no Origin/Host validation"; the middleware is
+    # hostHeaderValidation / localhostHostValidation / originValidation in the express, fastify,
+    # hono and node packages, and hostHeaderValidationResponse in the server package) and
+    # 1.32.1 (StreamableHTTPServerTransport and SSEServerTransport: protection off unless
+    # enableDnsRebindingProtection: true; hostHeaderValidation in server/middleware). The SDK
+    # app helpers (createMcpExpressApp and its Fastify and Hono twins) add the localhost checks
+    # by default; with an all-interfaces host they are reported by
+    # mcp-server-exposed-without-auth-ts instead. CVE-2025-66414 (GHSA-w48q-cv73-mx4w).
+    # Host validation, auth, and the app are looked for anywhere in the file.
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      This MCP HTTP transport runs with no Host or Origin check and the file sets up no
+      authentication, so any web page the user opens can reach it through DNS rebinding: the
+      page's own hostname is re-pointed at 127.0.0.1, and the browser then sends the page's
+      requests to this server and hands the responses back to it, which lets the page call the
+      server's tools. The transports leave `enableDnsRebindingProtection` off by default.
+      Build the app with `createMcpExpressApp()` (it adds the localhost checks), mount
+      `hostHeaderValidation([...])` or `localhostHostValidation()` in front of the MCP route,
+      or require auth on it (`requireBearerAuth({ verifier })`).
+    patterns:
+      # The file imports an MCP SDK package or fastmcp. Shared with
+      # mcp-server-exposed-without-auth-ts (build.py SHARED_BLOCKS).
+      - pattern-either:
+          - pattern-inside: |
+              import $I from "=~/^(@modelcontextprotocol\/|fastmcp$)/";
+              ...
+          - pattern-inside: |
+              import {...} from "=~/^(@modelcontextprotocol\/|fastmcp$)/";
+              ...
+          - pattern-inside: |
+              import * as $I from "=~/^(@modelcontextprotocol\/|fastmcp$)/";
+              ...
+          - pattern-inside: |
+              $I = require("=~/^(@modelcontextprotocol\/|fastmcp$)/");
+              ...
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: new $T(...)
+                  - pattern: new $MOD.$T(...)
+              - metavariable-regex:
+                  metavariable: $T
+                  regex: ^(Node)?StreamableHTTPServerTransport$
+              - pattern-not: 'new $T({..., enableDnsRebindingProtection: true, ...})'
+              - pattern-not: 'new $MOD.$T({..., enableDnsRebindingProtection: true, ...})'
+          # The web-standard transport also runs on edge runtimes, which route by hostname so
+          # DNS rebinding can't reach them; count it only next to a local server runtime.
+          - patterns:
+              - pattern-either:
+                  - pattern: new WebStandardStreamableHTTPServerTransport(...)
+                  - pattern: new $MOD.WebStandardStreamableHTTPServerTransport(...)
+              - pattern-not: 'new WebStandardStreamableHTTPServerTransport({..., enableDnsRebindingProtection: true, ...})'
+              - pattern-not: 'new $MOD.WebStandardStreamableHTTPServerTransport({..., enableDnsRebindingProtection: true, ...})'
+              - pattern-not-regex: (?s)\A(?!.*?(?:\bBun\.serve\s*\(|\bDeno\.serve\s*\(|@hono/node-server)).*
+          - patterns:
+              - pattern-either:
+                  - pattern: new SSEServerTransport(...)
+                  - pattern: new $MOD.SSEServerTransport(...)
+              - pattern-not: 'new SSEServerTransport($PATH, $RES, {..., enableDnsRebindingProtection: true, ...})'
+              - pattern-not: 'new $MOD.SSEServerTransport($PATH, $RES, {..., enableDnsRebindingProtection: true, ...})'
+          # 2.x per-request handler served from Node (toNodeHandler); a bare fetch handler on an
+          # edge runtime is routed by its own hostname, so DNS rebinding can't reach it.
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $H = createMcpHandler(...);
+                      ...
+                      <... toNodeHandler($H) ...>;
+                  - pattern-inside: toNodeHandler(createMcpHandler(...))
+              - pattern: createMcpHandler(...)
+      # The SDK helpers and Host/Origin middleware, anywhere in the file.
+      - pattern-not-regex: (?s)\A(?=.*?\bcreateMcp(?:Express|Fastify|Hono)App\s*\().*
+      - pattern-not-regex: (?s)\A(?=.*?\b(?:hostHeaderValidation|localhostHostValidation|originValidation|localhostOriginValidation)(?:Response)?\s*\().*
+      # A server explicitly bound to every interface is reported by
+      # mcp-server-exposed-without-auth-ts.
+      - pattern-not-regex: (?s)\A(?=.*?\b(?:listen\s*\(|hostname\s*:)[^;]{0,200}?["'](?:0\.0\.0\.0|::|\[::\])["']).*
+      # --- authentication signals (shared with mcp-server-exposed-without-auth-ts and
+      # a2a-server-without-auth-ts through build.py SHARED_BLOCKS; edit all three together) ---
+      # No authentication anywhere in the file, as code rather than prose (a comment saying
+      # "TODO: add auth" doesn't count): the SDK's requireBearerAuth, fastmcp's authenticate or
+      # auth option, a route or app middleware whose name says auth, JWT, bearer, passport, or
+      # API key or verifies a token, or a check of the Authorization or X-API-Key header. One
+      # simple regex per signal: a single alternation scanned from the start of the file hits
+      # PCRE's match limit on files of about 100 KB, and the finding is then kept.
+      - pattern-not-regex: (?s)\A(?=.*?requireBearerAuth\s*\().*
+      - pattern-not-regex: (?s)\A(?=.*?\b(?:authenticate|auth)\s*[:(]).*
+      - pattern-not-regex: (?s)\A(?=.*?\.(?:use|all|get|post|put|delete|patch|route|addHook|register)\s*\([^;]{0,300}?(?i:(?<!\.no)(?<!new un)auth(?!ors?\b)|jwt|bearer|passport|api[-_]?key|(?:verify|check|require|validate)[\w$]*token)).*
+      - pattern-not-regex: (?s)\A(?=.*?(?i:headers\s*(?:\.\s*authorization|\[\s*["'](?:authorization|x-api-key)["']))).*
+      - pattern-not-regex: (?s)\A(?=.*?(?i:\.(?:get|header)\s*\(\s*["'](?:authorization|x-api-key)["'])).*
+      - pattern-not-regex: (?s)\A(?=.*?\b(?:expressjwt|jwtVerify|bearerAuth|basicAuth)\s*\().*
+      - pattern-not-regex: (?s)\A(?=.*?\bjwt\.verify\s*\().*
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI03 - Identity and Privilege Abuse"
+      owasp-mcp:
+        - "MCP07:2025 - Insufficient Authentication & Authorization"
+      owasp-aisvs:
+        - "v1.01-C10.3.3 - Secure Transport"
+        - "v1.01-C10.2.1 - Authentication & Authorization"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-346: Origin Validation Error"
+        - "CWE-1188: Initialization of a Resource with an Insecure Default"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, express, node]
+      references:
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.3.1/packages/server/src/server/streamableHttp.ts
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.3.1/packages/middleware/node/src/streamableHttp.ts
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.3.1/packages/server/src/server/createMcpHandler.ts
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.3.1/packages/middleware/express/src/middleware/hostHeaderValidation.ts
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/1.32.1/src/server/streamableHttp.ts
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/1.32.1/src/server/sse.ts
+        - https://github.com/modelcontextprotocol/typescript-sdk/security/advisories/GHSA-w48q-cv73-mx4w
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP07-2025%E2%80%93Insufficient-Authentication%26Authorization.md
+        - https://cwe.mitre.org/data/definitions/346.html

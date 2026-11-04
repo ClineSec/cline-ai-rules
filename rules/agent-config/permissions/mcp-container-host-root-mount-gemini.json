@@ -1,0 +1,20 @@
+// Gemini CLI's format (.gemini/settings.json, gemini-extension.json): $VAR and ${VAR} expand.
+{
+  "mcpServers": {
+    "notes": {
+      "command": "docker",
+      // ruleid: mcp-container-host-root-mount-gemini
+      "args": ["run", "-i", "--rm", "-v", "$HOME:/home/user", "example-org/notes-mcp:3.1.0"]
+    },
+    "user-home": {
+      "command": "docker",
+      // ruleid: mcp-container-host-root-mount-gemini
+      "args": ["run", "-i", "--rm", "--mount", "type=bind,src=/home/$USER,dst=/data", "example-org/notes-mcp:3.1.0"]
+    },
+    "unexpanded": {
+      "command": "docker",
+      // ok: mcp-container-host-root-mount-gemini
+      "args": ["run", "-i", "--rm", "-v", "${userHome}:/home/user", "example-org/notes-mcp:3.1.0"]
+    }
+  }
+}

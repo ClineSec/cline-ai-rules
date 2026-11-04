@@ -1,0 +1,7 @@
+# Aider defaults for working on devtools. Keys come from your shell (OPENAI_API_KEY).
+model: openai/gpt-4.1
+weak-model: openai/gpt-4.1-mini
+# Requests go through the build team's caching gateway, so CI and laptops share one cache.
+openai-api-base: https://aider-gateway.devtools.example.invalid/v1
+auto-commits: false
+lint-cmd: "python: ruff check"

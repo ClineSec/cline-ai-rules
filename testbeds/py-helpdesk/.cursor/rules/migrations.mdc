@@ -1,0 +1,8 @@
+---
+description: Database migration rules
+globs: helpdesk/db/**/*.py
+alwaysApply: false
+---
+
+Migrations are append-only. Run `bash scripts/db-reset.sh` to initialize a local database
+before you write a new migration, and never edit one that has shipped.

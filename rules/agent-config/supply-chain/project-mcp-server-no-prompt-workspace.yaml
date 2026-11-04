@@ -1,0 +1,68 @@
+rules:
+  - id: project-mcp-server-no-prompt-workspace
+    # Regex, not JSON: OpenGrep's JSON parser skips *.code-workspace files (unknown
+    # extension), even when paths.include names them.
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This committed MCP server runs a program on the developer's machine, and VS Code starts it
+      without asking. Servers in a workspace file's settings.mcp inherit Workspace Trust: once
+      someone trusts the workspace, as most people do for a repository they clone, VS Code
+      starts them with no separate MCP prompt, also after their command changes, and by default
+      it starts them at the next chat message to list their tools. A pull request that adds a
+      server or edits a command therefore runs that program on every teammate's machine, with
+      their credentials and the agent's tool access. Keep personal servers in user-level
+      config, run shared ones from a pinned package (npx "pkg@1.2.3"), and review this file like
+      code that runs on checkout (a CODEOWNERS entry).
+    # VS Code 1.143.1: McpWorkbenchService maps the workspace file's settings.mcp to a
+    # workspace-scoped config, which InstalledMcpServersDiscovery registers as
+    # McpServerTrust.Kind.Trusted; McpRegistry only checks Workspace Trust for it. Remote servers
+    # (url, no command) run nothing locally and are left out.
+    paths:
+      include:
+        # VS Code multi-root workspace files: settings.mcp.servers.
+        - "*.code-workspace"
+    patterns:
+      # $MCP is the "mcp" object, found by a line walker that skips comments and strings.
+      - pattern-regex: |-
+          (?m)(?:^|\G)(?:[^"/\n]|/(?![/*])|/\*(?:(?!\*/)[^\n])*+\*/|"(?:[^"\\\n]|\\.)*+")*?"mcp"\s*+:\s*+(?<MCP>\{(?:[^{}"/]++|"(?:[^"\\]|\\.)*+"|//[^\n]*+|/\*(?s:.*?)\*/|/|(?&MCP))*+\})
+      - metavariable-pattern:
+          metavariable: $MCP
+          language: regex
+          patterns:
+            # A non-empty "command" key outside comments makes a stdio server.
+            - pattern-regex: |-
+                (?m)(?:^|\G)(?:[^"/\n]|/(?![/*])|/\*(?:(?!\*/)[^\n])*+\*/|"(?:[^"\\\n]|\\.)*+")*?(?<CMD>"command"\s*+:\s*+"\s*+(?=[^"\s])(?:[^"\\\n]|\\.)*+")
+      - focus-metavariable: $CMD
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-agentic:
+        - "ASI04 - Agentic Supply Chain Vulnerabilities"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-mcp:
+        - "MCP04:2025 - Software Supply Chain Attacks & Dependency Tampering"
+        - "MCP09:2025 - Shadow MCP Servers"
+      owasp-aisvs:
+        - "v1.01-C10.1.2 - Component Integrity"
+      mitre-atlas:
+        - "AML.T0010.005 - AI Supply Chain Compromise: AI Agent Tool"
+      cwe:
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+      # Committing a team's MCP servers is common and usually intended; the finding marks a
+      # file whose changes run code on checkout, not a mistake.
+      confidence: LOW
+      likelihood: LOW
+      impact: HIGH
+      technology: [mcp, vscode]
+      references:
+        - https://code.visualstudio.com/docs/agents/run/manage-mcp-servers#_mcp-server-trust
+        - https://github.com/microsoft/vscode/blob/1.143.1/src/vs/workbench/contrib/mcp/browser/mcpWorkbenchService.ts
+        - https://github.com/microsoft/vscode/blob/1.143.1/src/vs/workbench/contrib/mcp/common/discovery/installedMcpServersDiscovery.ts
+        - https://github.com/microsoft/vscode/blob/1.143.1/src/vs/workbench/contrib/mcp/common/mcpRegistry.ts
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP09-2025%E2%80%93Shadow-MCP-Servers.md
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md

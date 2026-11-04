@@ -1,0 +1,161 @@
+rules:
+  - id: agent-settings-command-runs-local-script
+    languages: [json]
+    severity: WARNING
+    message: >-
+      This agent setting runs a script that lives in the repository, and the agent starts it on
+      its own. Claude Code runs a status line or file-suggestion command on every refresh or
+      keystroke, a credential or telemetry helper at startup or when a token expires, and a
+      headersHelper on every MCP connection or marketplace fetch. Gemini CLI runs
+      tools.discoveryCommand and mcp.serverCommand at every startup, and tools.shell.pager
+      whenever a shell command it was allowed to run pages its output. Cursor runs worktrees.json
+      setup in every new agent worktree. Nothing asks before each run. Interactive sessions only
+      wait for the one-time workspace trust; `claude -p` and Agent SDK runs use Claude Code's
+      credential helpers without any trust prompt, and Gemini CLI skips its trust check when
+      GEMINI_CLI_TRUST_WORKSPACE=true, as in CI. Anyone who can change the script or this file,
+      through a pull request, a compromised dependency, or a worm that writes into the repo, runs
+      code with the developer's credentials on every machine that opens the project. Point the
+      setting at a tool installed outside the repo at a pinned version, or keep personal helpers
+      in user settings; if a committed command is intended, protect this file and its script with
+      CODEOWNERS review like any code that runs on checkout.
+    paths:
+      include:
+        - ".claude/settings.json"
+        - ".claude/settings.local.json"
+        # Gemini CLI's .gemini/settings.json, and a Claude Code plugin's root settings.json (only
+        # subagentStatusLine and agent take effect there). The keys matched below are Claude
+        # Code's and Gemini CLI's own, so other tools' settings.json files stay quiet.
+        - "settings.json"
+        # Project and plugin MCP configs (a plugin's .mcp.json may drop the mcpServers wrapper).
+        - ".mcp.json"
+        # Plugin manifests: settings.subagentStatusLine and inline mcpServers.
+        - ".claude-plugin/plugin.json"
+        - ".claude-plugin/marketplace.json"
+        # Cursor agent worktree setup.
+        - ".cursor/worktrees.json"
+    # Keys, scopes, and trust behavior checked against the Claude Code docs (settings
+    # reference, permissions, mcp, plugins/host-marketplace) and changelog for v2.1.309,
+    # 2026-10-22. Left out: policyHelper (managed settings only), a marketplace plugin entry's
+    # headersHelper and the command plugin source (shown and accepted on each install or
+    # update), and hooks (agent-hook-* rules). Gemini CLI keys checked against its source at
+    # v0.65.0 (settingsSchema.ts, tool-registry.ts, utils/trust.ts), 2026-10-23: workspace
+    # settings load only in a trusted folder (folder trust is on by default). Left out:
+    # tools.callCommand (each discovered-tool call asks first, policies/discovered.toml),
+    # experimental.gemmaModelRouter.binaryPath (read from user settings only), the
+    # tools.sandbox command (a fixed list), and the v1 top-level toolDiscoveryCommand keys (no
+    # longer read). Cursor worktrees.json checked against its docs, 2026-10-23. Left out:
+    # .cursor/environment.json (cloud agent VMs, and only when an environment points at it).
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              # Credential and telemetry helpers: a shell command line as the value. All are honored
+              # from project settings ("Any file" scope).
+              - patterns:
+                  - pattern: '"$KEY": "$CMD"'
+                  # A JSON key metavariable binds with its quotes.
+                  - metavariable-regex:
+                      metavariable: $KEY
+                      regex: ^"(apiKeyHelper|awsAuthRefresh|awsCredentialExport|gcpAuthRefresh|otelHeadersHelper)"$
+              # Status line, subagent status line, and @ file suggestion: {"type": "command",
+              # "command": ...}, here or in a plugin manifest's "settings".
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: '"statusLine": {...}'
+                      - pattern-inside: '"subagentStatusLine": {...}'
+                      - pattern-inside: '"fileSuggestion": {...}'
+                  - pattern: '"command": "$CMD"'
+              # MCP server headersHelper, including servers declared inline in a plugin manifest or
+              # a marketplace entry.
+              - patterns:
+                  - pattern-inside: '"mcpServers": {...}'
+                  - pattern: '"headersHelper": "$CMD"'
+              # headersHelper on a marketplace url source in settings (extraKnownMarketplaces or its
+              # additionalMarketplaces alias), and on a .mcp.json without the mcpServers wrapper. A
+              # plugin entry's own headersHelper (in a "plugins" list) is left out: Claude Code shows
+              # that command and asks before each install or update.
+              - patterns:
+                  - pattern: '"headersHelper": "$CMD"'
+                  - pattern-not-inside: '"plugins": [...]'
+              # Gemini CLI (.gemini/settings.json), honored from workspace settings once the folder
+              # is trusted: the tool discovery command and the MCP server command run at every
+              # startup, and the shell pager runs whenever an approved or allowlisted shell command
+              # (git diff, git log) pages its output.
+              - patterns:
+                  - pattern-inside: '"tools": {...}'
+                  - pattern: '"discoveryCommand": "$CMD"'
+              - patterns:
+                  - pattern-inside: '"mcp": {...}'
+                  - pattern: '"serverCommand": "$CMD"'
+              - patterns:
+                  - pattern-inside: '"tools": {...}'
+                  - pattern-inside: '"shell": {...}'
+                  - pattern: '"pager": "$CMD"'
+              # Cursor (.cursor/worktrees.json): each setup command runs in every new agent
+              # worktree.
+              - patterns:
+                  - pattern: '"$WK": [..., "$CMD", ...]'
+                  - metavariable-regex:
+                      metavariable: $WK
+                      regex: ^"setup-worktree(?:-unix|-windows)?"$
+                  - focus-metavariable: $CMD
+          - metavariable-regex:
+              metavariable: $CMD
+              # Verbose mode: whitespace is ignored and # starts a comment.
+              regex: |-
+                (?x)
+                # --- repo-script command test (begin): build.py keeps this block identical in
+                # agent-hook-runs-local-script; edit both together. ---
+                # Any of: the command is a relative path (.cursor/hooks/x.sh, ./x, scripts/x.py;
+                # tools installed under node_modules/.bin are left to SCA, like npx); a path under
+                # the project directory variable each agent exports ($VAR, ${VAR}, PowerShell's
+                # $env:VAR, cmd's %VAR%); or an interpreter given a relative script (node
+                # .github/setup.js, bash -c './x.sh', node --import tsx x.ts). Windows paths use
+                # backslashes, which JSON and double-quoted YAML escape, so a separator is /, \ or \\.
+                # Matched text keeps JSON escapes, so quotes may arrive as \". The regex is
+                # anchored at the start, hence the .* prefixes.
+                (?(DEFINE) (?<sep> / | \\\\? ) )
+                  (^\s*\\?["']?(?!(\.(?&sep))?node_modules(?&sep))(\.{1,2}(?&sep)|\.?[\w-]+(?&sep)))
+                | (.*(\$\{?|\$env:|%)(CLAUDE|GEMINI|CURSOR)_PROJECT_DIR(\}|%)?\\?["']?(?&sep))
+                | (.*(^|[\s;&|("'])(node|bun|deno|python3?|bash|sh|zsh|pwsh|powershell|ruby|perl|php|tsx|ts-node|uv\s+run|npx\s+tsx)(\s+run)?(\s+(--(import|require|loader|experimental-loader)[\s=]\S+|-r\s+\S+|-(?i:executionpolicy|ep)\s+\S+|-\S+))*\s+\\?["']?(\.{1,2}(?&sep))?([\w.-]+(?&sep))*[\w.-]+\.(sh|bash|zsh|[cm]?js|[cm]?ts|py|rb|pl|ps1|php)\b)
+                # --- repo-script command test (end) ---
+      # Cursor (.cursor/worktrees.json) can also name one script, a path relative to .cursor/,
+      # which is always a file in the repository.
+      - patterns:
+          - pattern: '"$WK": "$SCRIPT"'
+          - metavariable-regex:
+              metavariable: $WK
+              regex: ^"setup-worktree(?:-unix|-windows)?"$
+          # Absolute and home paths are installed tools, not repo scripts.
+          - metavariable-regex:
+              metavariable: $SCRIPT
+              regex: ^(?![/~\\]|\$\{?HOME\b|\$env:|%|[A-Za-z]:)\s*\S
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+        - "ASI04 - Agentic Supply Chain Vulnerabilities"
+      mitre-atlas:
+        - "AML.T0081 - Modify AI Agent Configuration"
+      cwe:
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      technology: [claude-code, gemini-cli, cursor]
+      references:
+        - https://code.claude.com/docs/en/settings-reference
+        - https://code.claude.com/docs/en/permissions#what-runs-before-you-trust-a-folder
+        - https://code.claude.com/docs/en/statusline#workspace-trust-required
+        - https://code.claude.com/docs/en/mcp#trust-a-folder-before-its-headershelper-runs
+        - https://code.claude.com/docs/en/plugins/host-marketplace#when-a-marketplace-url-sources-command-runs
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/cli/src/config/settingsSchema.ts
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/tools/tool-registry.ts
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/utils/trust.ts
+        - https://cursor.com/docs/configuration/worktrees
+        - https://www.sonarsource.com/blog/mini-shai-hulud-targets-ai-coding-agents/
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md

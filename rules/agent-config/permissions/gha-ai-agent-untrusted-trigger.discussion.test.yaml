@@ -1,0 +1,33 @@
+# Fixture for gha-ai-agent-untrusted-trigger: discussion events only. claude-code-action stops
+# on them ("Unsupported event type"); the base action and CLIs run.
+name: discussion-helper
+on:
+  discussion:
+    types: [created, labeled]
+  discussion_comment:
+    types: [created]
+jobs:
+  answer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # ok: gha-ai-agent-untrusted-trigger
+          prompt: "Answer the discussion: ${{ github.event.discussion.body }}"
+          claude_args: --allowedTools "Bash" "Edit"
+      - uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_non_write_users: "*"
+          # ok: gha-ai-agent-untrusted-trigger
+          prompt: "Answer the comment: ${{ github.event.comment.body }}"
+          claude_args: --allowedTools "Bash"
+      - uses: anthropics/claude-code-base-action@v1
+        with:
+          # ruleid: gha-ai-agent-untrusted-trigger
+          prompt: "Answer the discussion: ${{ github.event.discussion.title }}"
+          claude_args: --permission-mode acceptEdits
+      - env:
+          # ruleid: gha-ai-agent-untrusted-trigger
+          COMMENT: ${{ github.event.comment.body }}
+        run: gemini --yolo -p "Answer the comment in $COMMENT"

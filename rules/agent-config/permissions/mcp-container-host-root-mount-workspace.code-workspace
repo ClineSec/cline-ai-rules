@@ -1,0 +1,43 @@
+{
+  "folders": [{ "path": "." }],
+  "settings": {
+    // ok: mcp-container-host-root-mount-workspace
+    "files.exclude": { "/:/host": false },
+    "mcp": {
+      "servers": {
+        "notes": {
+          "command": "docker",
+          // ruleid: mcp-container-host-root-mount-workspace
+          "args": ["run", "-i", "--rm", "-v", "${userHome}:/home/user", "example-org/notes-mcp:3.1.0"]
+        },
+        "multiline": {
+          "command": "docker",
+          "args": [
+            "run", "-i", "--rm",
+            // ok: mcp-container-host-root-mount-workspace
+            // "-v", "/:/host",
+            "-v", "${workspaceFolder}:/workspace",
+            // ruleid: mcp-container-host-root-mount-workspace
+            "--mount", "type=bind,src=C:\\,dst=/host/c",
+            "example-org/disk-report-mcp:0.9.2",
+          ]
+        },
+        "shell": {
+          "command": "pwsh",
+          // ruleid: mcp-container-host-root-mount-workspace
+          "args": ["-Command", "docker run -i --rm -v $env:USERPROFILE:/home/user example-org/notes-mcp:3.1.0"]
+        },
+        "unexpanded": {
+          "command": "docker",
+          // ok: mcp-container-host-root-mount-workspace
+          "args": ["run", "-i", "--rm", "-v", "${HOME}:/home/user", "example-org/notes-mcp:3.1.0"]
+        },
+        "filesystem": {
+          "command": "docker",
+          // ok: mcp-container-host-root-mount-workspace
+          "args": ["run", "-i", "--rm", "-v", "${userHome}:/projects/home", "mcp/filesystem:1.0.2", "/projects"]
+        }
+      }
+    }
+  }
+}

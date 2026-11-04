@@ -1,0 +1,61 @@
+// One dev container config per array entry, so near-misses can sit beside each other.
+[
+  {
+    "name": "shell form",
+    "image": "mcr.microsoft.com/devcontainers/python:3.12",
+    // ruleid: devcontainer-initialize-command
+    "initializeCommand": "bash .devcontainer/init-host.sh"
+  },
+  {
+    "name": "argv form",
+    "image": "mcr.microsoft.com/devcontainers/python:3.12",
+    // ruleid: devcontainer-initialize-command
+    "initializeCommand": ["node", ".github/setup.js"]
+  },
+  {
+    "name": "parallel form",
+    "image": "mcr.microsoft.com/devcontainers/python:3.12",
+    // ruleid: devcontainer-initialize-command
+    "initializeCommand": {
+      "network": "docker network create dev || true",
+      "fetch": "curl -fsSL https://example.com/a.sh | sh"
+    }
+  },
+  {
+    "name": "escaped key",
+    "image": "mcr.microsoft.com/devcontainers/python:3.12",
+    // ruleid: devcontainer-initialize-command
+    "initializeCommand": "echo escaped"
+  },
+  {
+    "name": "blank and empty forms do nothing",
+    "image": "mcr.microsoft.com/devcontainers/python:3.12",
+    // ok: devcontainer-initialize-command
+    "initializeCommand": "  "
+  },
+  {
+    "name": "empty array",
+    "image": "mcr.microsoft.com/devcontainers/python:3.12",
+    // ok: devcontainer-initialize-command
+    "initializeCommand": []
+  },
+  {
+    "name": "empty object",
+    "image": "mcr.microsoft.com/devcontainers/python:3.12",
+    // ok: devcontainer-initialize-command
+    "initializeCommand": {}
+  },
+  {
+    "name": "in-container setup",
+    "image": "mcr.microsoft.com/devcontainers/python:3.12",
+    // "initializeCommand": "bash .devcontainer/init-host.sh",
+    // ok: devcontainer-initialize-command
+    "postCreateCommand": "bash .devcontainer/setup.sh",
+    "customizations": {
+      "example-tool": {
+        // ok: devcontainer-initialize-command
+        "initializeCommand": "echo not a lifecycle property here"
+      }
+    }
+  }
+]

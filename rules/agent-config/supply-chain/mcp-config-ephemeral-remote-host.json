@@ -1,0 +1,167 @@
+{
+  // Every tunnel host here has a first label longer than DNS allows (63 characters), and every
+  // IP address is in a documentation range, so nothing here can reach a real machine.
+  // ok: mcp-config-ephemeral-remote-host
+  "$comment": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.trycloudflare.com/mcp is outside any server entry",
+  "mcpServers": {
+    "productivity-suite": {
+      "type": "http",
+      // ruleid: mcp-config-ephemeral-remote-host
+      "url": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.trycloudflare.com/mcp"
+    },
+    "notes-sync": {
+      // ruleid: mcp-config-ephemeral-remote-host
+      "serverUrl": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.ngrok-free.app/mcp"
+    },
+    "gemini-docs": {
+      // ruleid: mcp-config-ephemeral-remote-host
+      "httpUrl": "http://203.0.113.24:8080/mcp"
+    },
+    "status": {
+      "type": "sse",
+      // ruleid: mcp-config-ephemeral-remote-host
+      "url": "http://status.example.com/sse"
+    },
+    "socket": {
+      "type": "ws",
+      // ruleid: mcp-config-ephemeral-remote-host
+      "url": "wss://[2001:db8::7]/mcp"
+    },
+    "with-default": {
+      "type": "http",
+      // ruleid: mcp-config-ephemeral-remote-host
+      "url": "${HD_MCP_URL:-https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.serveo.net/mcp}"
+    },
+    "cline-nested": {
+      "transport": {
+        "type": "streamableHttp",
+        // ruleid: mcp-config-ephemeral-remote-host
+        "url": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.oast.fun/mcp"
+      }
+    },
+    "bridge-tunnel": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote@0.1.29",
+        // ruleid: mcp-config-ephemeral-remote-host
+        "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.ngrok-free.dev/sse"
+      ]
+    },
+    "bridge-http": {
+      "command": "npx",
+      // ruleid: mcp-config-ephemeral-remote-host
+      "args": ["-y", "mcp-remote@0.1.29", "http://kb.example.net/mcp", "--allow-http"]
+    },
+    "gateway": {
+      "command": "npx",
+      "args": [
+        "-y", "supergateway@3.4.0",
+        "--streamableHttp",
+        // ruleid: mcp-config-ephemeral-remote-host
+        "http://search.example.org/mcp"
+      ]
+    },
+    "proxy": {
+      "command": "/usr/local/bin/mcp-proxy",
+      // ruleid: mcp-config-ephemeral-remote-host
+      "args": ["http://198.51.100.7:8080/sse"]
+    },
+    "proxy-plain-name": {
+      "command": "uvx",
+      // ruleid: mcp-config-ephemeral-remote-host
+      "args": ["mcp-proxy==0.8.2", "--transport=streamablehttp", "http://wiki.example.org/mcp"]
+    },
+    "stdio-with-tunnel-api": {
+      "command": "uvx",
+      "args": ["example-org-wiki-mcp==1.0.0"],
+      "env": {
+        // ruleid: mcp-config-ephemeral-remote-host
+        "WIKI_API_URL": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.loca.lt/api",
+        // ok: mcp-config-ephemeral-remote-host
+        "WIKI_PROXY": "http://proxy.example.com:3128"
+      }
+    },
+    "bare-host": {
+      "command": "npx",
+      // ruleid: mcp-config-ephemeral-remote-host
+      "args": ["-y", "@example-org/relay-mcp@2.0.1", "--host", "fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.lhr.life"]
+    },
+    "vendor": {
+      "type": "http",
+      // ok: mcp-config-ephemeral-remote-host
+      "url": "https://mcp.example.com/mcp"
+    },
+    "local-dev": {
+      "type": "http",
+      // ok: mcp-config-ephemeral-remote-host
+      "url": "http://localhost:8787/mcp"
+    },
+    "loopback": {
+      "type": "sse",
+      // ok: mcp-config-ephemeral-remote-host
+      "url": "http://127.0.0.1:3000/sse"
+    },
+    "loopback-v6": {
+      "type": "http",
+      // ok: mcp-config-ephemeral-remote-host
+      "url": "http://[::1]:3000/mcp"
+    },
+    "compose-service": {
+      "type": "http",
+      // ok: mcp-config-ephemeral-remote-host
+      "url": "http://mcp-gateway:8080/mcp"
+    },
+    "docker-host": {
+      "type": "http",
+      // ok: mcp-config-ephemeral-remote-host
+      "url": "http://host.docker.internal:8080/mcp"
+    },
+    "lan": {
+      "type": "http",
+      // ok: mcp-config-ephemeral-remote-host
+      "url": "http://10.20.0.5:8080/mcp"
+    },
+    "tailnet": {
+      "type": "http",
+      // ok: mcp-config-ephemeral-remote-host
+      "url": "http://100.101.102.103/mcp"
+    },
+    "tailnet-name": {
+      "type": "http",
+      // ok: mcp-config-ephemeral-remote-host
+      "url": "http://build-box.tail1234.ts.net:8080/mcp"
+    },
+    "consul-service": {
+      "type": "http",
+      // ok: mcp-config-ephemeral-remote-host
+      "url": "http://tools-mcp.service.consul:8080/mcp"
+    },
+    "lan-https": {
+      "type": "http",
+      // ok: mcp-config-ephemeral-remote-host
+      "url": "https://192.168.1.20/mcp"
+    },
+    "mdns": {
+      "type": "http",
+      // ok: mcp-config-ephemeral-remote-host
+      "url": "http://ollama.local:11434/mcp"
+    },
+    "ngrok-api": {
+      "command": "npx",
+      "args": ["-y", "@example-org/ngrok-admin-mcp@1.2.0"],
+      // ok: mcp-config-ephemeral-remote-host
+      "env": { "NGROK_API_URL": "https://api.ngrok.com" }
+    },
+    "lookalike": {
+      "type": "http",
+      // ok: mcp-config-ephemeral-remote-host
+      "url": "https://ngrok.io.example.com/mcp"
+    },
+    "templated": {
+      "type": "http",
+      // ok: mcp-config-ephemeral-remote-host
+      "url": "http://${env:MCP_HOST}/mcp"
+    }
+  }
+}

@@ -1,0 +1,60 @@
+model = "gpt-5.5"
+# ok: mcp-filesystem-root-too-broad-toml
+sandbox_workspace_write.writable_roots = ["/"]
+
+[mcp_servers.home]
+command = "npx"
+# ruleid: mcp-filesystem-root-too-broad-toml
+args = ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "~"]
+
+[mcp_servers.multiline]
+command = "npx"
+args = [
+  "-y",
+  "@modelcontextprotocol/server-filesystem@2.0.0",
+  # ok: mcp-filesystem-root-too-broad-toml
+  # "/",
+  "/Users/fixture-user/src/fixture-app",
+  # ruleid: mcp-filesystem-root-too-broad-toml
+  '/Users/fixture-user/',
+]
+
+[mcp_servers.windows]
+command = "cmd"
+# ruleid: mcp-filesystem-root-too-broad-toml
+args = ["/c", "npx", "-y", "@modelcontextprotocol/server-filesystem@2.0.0", 'C:\']
+
+[mcp_servers.docker]
+command = "docker"
+# ruleid: mcp-filesystem-root-too-broad-toml
+args = ["run", "-i", "--rm", "-v", "/:/projects/host:ro", "mcp/filesystem:1.0.2", "/projects"]
+
+[mcp_servers.shell]
+command = "bash"
+# ruleid: mcp-filesystem-root-too-broad-toml
+args = ["-c", "npx -y @modelcontextprotocol/server-filesystem@2.0.0 /home"]
+
+[mcp_servers]
+# ruleid: mcp-filesystem-root-too-broad-toml
+inline = { command = "mcp-server-filesystem", args = ["/root"] }
+
+[mcp_servers.unexpanded]
+command = "npx"
+# ok: mcp-filesystem-root-too-broad-toml
+args = ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "$HOME", "${HOME}", "${env:USERPROFILE}"]
+
+[mcp_servers.disabled]
+enabled = false
+command = "npx"
+# ok: mcp-filesystem-root-too-broad-toml
+args = ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "/"]
+
+[mcp_servers.project]
+command = "npx"
+# ok: mcp-filesystem-root-too-broad-toml
+args = ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", ".", "~/projects/fixture-app"]
+
+[mcp_servers.other]
+command = "npx"
+# ok: mcp-filesystem-root-too-broad-toml
+args = ["-y", "@example-org/notes-mcp@1.4.0", "/"]

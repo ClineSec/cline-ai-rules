@@ -1,0 +1,21 @@
+{
+  "name": "kpi_forecaster",
+  "description": "Forecasts weekly growth KPIs from the last six weeks.",
+  "version": "0.9.1",
+  "provider": { "organization": "Example Org Growth Analytics", "url": "https://insights.example.com" },
+  "supportedInterfaces": [
+    { "url": "https://forecast-agent.insights.example.com/", "protocolBinding": "JSONRPC", "protocolVersion": "1.0" }
+  ],
+  "capabilities": { "streaming": true },
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain", "application/json"],
+  "skills": [
+    {
+      "id": "weekly-forecast",
+      "name": "Weekly forecast",
+      "description": "Forecasts one KPI for the next few weeks.",
+      "tags": ["forecast", "kpi"],
+      "examples": ["Forecast signups for the next four weeks."]
+    }
+  ]
+}

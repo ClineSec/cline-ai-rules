@@ -1,0 +1,16 @@
+// Zed's format (.zed/settings.json): "context_servers", with comments and trailing commas.
+{
+  "tab_size": 2,
+  "context_servers": {
+    "disk": {
+      "command": "podman",
+      // ruleid: mcp-container-host-root-mount-literal
+      "args": ["run", "-i", "--rm", "-v", "/:/rootfs:ro,rslave", "example-org/disk-report-mcp:0.9.2",],
+    },
+    "repo": {
+      "command": "podman",
+      // ok: mcp-container-host-root-mount-literal
+      "args": ["run", "-i", "--rm", "-v", "/home/fixture-user/src/fixture-app:/repo", "example-org/notes-mcp:3.1.0",],
+    },
+  },
+}

@@ -1,0 +1,403 @@
+rules:
+  - id: mcp-tool-arg-to-sql
+    # Sources: the MCP tool parameters of mcp-tool-arg-to-shell (build.py SHARED_BLOCKS
+    # "MCP tool sources (Python)"); sinks and sanitizers: llm-output-to-sql's SQL sinks
+    # ("SQL sinks (Python)", "SQL sanitizers (Python)"). Edit each block with its group.
+    # Resource templates and prompts (since 2026-10-25): MCPServer / FastMCP
+    # @mcp.resource("x://{name}") and @mcp.prompt(), fastmcp 4.1.3 resource / prompt (also the
+    # standalone decorators) and add_prompt / add_template, v1.30.0 @server.read_resource() and
+    # @server.get_prompt(), and v2.3.0 Server(on_read_resource=..., on_get_prompt=...). The SDKs
+    # validate template and prompt arguments against the annotations as they do tool arguments;
+    # v2's default ResourceSecurity rejects "..", absolute paths, and NUL in template values,
+    # which stops none of these sinks.
+    languages: [python]
+    severity: ERROR
+    message: >-
+      An MCP tool argument, resource-template parameter, or prompt argument reaches a SQL
+      statement. The client fills every one of them, and clients let the model choose them
+      (tool arguments always, resource URIs and prompt arguments in many clients); the server
+      can't tell who did. A prompt injection in anything the model has read (a web page, an
+      issue, a file, another tool's result) can choose them for it, so a value like `x' OR
+      '1'='1` or a whole statement reads or changes rows the tool was never meant to touch,
+      with this server's database privileges. Keep the statement fixed and pass the argument
+      as a bound parameter (`cur.execute("... WHERE queue = %s", (queue,))`, `text("...
+      :queue").bindparams(queue=queue)`), pick table and column names from a constant
+      allowlist (`COLUMNS[choice]`), or constrain the parameter's type (`Literal[...]`,
+      `int`). If the tool exists to run model-written SQL, give it a read-only role limited to
+      the views it may read, with row-level security, a statement timeout, and a row limit.
+    mode: taint
+    pattern-sources:
+      # A tool function's parameters, and since 2026-10-25 a resource template's URI parameters
+      # and a prompt's arguments: the client fills all three, and clients let the model fill
+      # them. Parameters typed int, float, bool, Literal[...] (or an alias of one assigned
+      # earlier in the file), a Context, or a string constrained by an anchored pattern
+      # (Field(pattern=r"^...$")) are skipped: the SDKs
+      # validate tool, template, and prompt arguments against the annotation with pydantic
+      # before the call, so they can't carry injected text.
+      - patterns:
+          - pattern-either:
+              # MCPServer (v2), FastMCP (v1), fastmcp, and any @<server>.tool registration,
+              # bare or called; @<server>.resource("x://{name}") templates (a resource
+              # function's parameters are its URI template's variables: a static URI takes
+              # none) and @<server>.prompt prompts; the v1 low-level Server's
+              # @server.call_tool() handler(name, arguments), @server.read_resource()
+              # handler(uri), and @server.get_prompt() handler(name, arguments); fastmcp's
+              # standalone decorators (from fastmcp.tools import tool, fastmcp.resources
+              # resource, fastmcp.prompts prompt); the Claude Agent SDK's in-process MCP tool,
+              # @tool(name, description, schema).
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          @$DEC(...)
+                          def $F(...): ...
+                      - pattern-inside: |
+                          @$DEC
+                          def $F(...): ...
+                  - metavariable-pattern:
+                      metavariable: $DEC
+                      patterns:
+                        - pattern-either:
+                            - pattern: $S.tool
+                            - pattern: $S.call_tool
+                            - pattern: $S.resource
+                            - pattern: $S.prompt
+                            - pattern: $S.read_resource
+                            - pattern: $S.get_prompt
+                            - pattern: fastmcp.tools.tool
+                            - pattern: fastmcp.resources.resource
+                            - pattern: fastmcp.prompts.prompt
+                            - pattern: claude_agent_sdk.tool
+                        # LangChain's and CrewAI's @tool resolve to <module>.tool too: agent
+                        # tools, covered by agent-tool-arg-to-shell.
+                        - pattern-not: langchain_core.tools.tool
+                        - pattern-not: langchain.tools.tool
+                        - pattern-not: langchain.agents.tool
+                        - pattern-not: crewai.tools.tool
+                        # Dagster's @resource builds a pipeline resource from run config.
+                        - pattern-not: dagster.resource
+              # A plain function registered by name later in the file: mcp.add_tool(fn),
+              # mcp.add_prompt(fn), or the same with Tool / Prompt / ResourceTemplate
+              # .from_function(fn, ...) (add_tool, add_prompt, add_template). The regex covers
+              # the def (decorators, signature, and indented body) and looks ahead for the
+              # registration; its F group must name the def below. A statement region from
+              # each def to a later registration took 50 s per region on a 4,000-function
+              # file (OpenGrep 1.30.2); the regex scans the rest of the file once per def.
+              - pattern-regex: >-
+                  (?m)^(?<IND>[ \t]*+)(?:@[^\n]*+\n\k<IND>)*+(?:async[ \t]++)?def[ \t]++(?<F>\w++)\b[^\n]*+(?:\n(?:\k<IND>[ \t)\]][^\n]*+|[ \t]*+(?:\#[^\n]*+)?(?=\n|\z)))*+(?=(?:[^.]++|\.(?!add_(?:tool|prompt|template)\(\s*+(?:[\w.]+\.from_function\(\s*+)?\k<F>\b))*+\.add_)
+          # pydantic-ai's @agent.tool takes a RunContext first: an agent tool, covered by
+          # agent-tool-arg-to-shell.
+          - pattern-not-inside: |
+              def $F($CTX: pydantic_ai.RunContext, ...): ...
+          - pattern-not-inside: |
+              def $F($CTX: pydantic_ai.RunContext[...], ...): ...
+          - pattern-either:
+              - patterns:
+                  - pattern: |
+                      def $F(..., $P, ...): ...
+                  - pattern-not: |
+                      def $F(..., $P: $TYPE, ...): ...
+                  - pattern-not: |
+                      def $F(..., $P: $TYPE = $DEFAULT, ...): ...
+              - patterns:
+                  - pattern-either:
+                      - pattern: |
+                          def $F(..., $P: $TYPE, ...): ...
+                      - pattern: |
+                          def $F(..., $P: $TYPE = $DEFAULT, ...): ...
+                  - metavariable-regex:
+                      metavariable: $TYPE
+                      regex: ^(?!(?:typing\.)?(?:Annotated\[\s*)?(?:int|float|bool|(?:typing\.)?Literal\[|[\w.]*Context\b)|.*\bpattern\s*=\s*r?["']\^.*\$["'])
+                  # A Literal alias assigned earlier in the block (Service = Literal["web", "db"],
+                  # or Service: TypeAlias = ...) is as safe as the Literal written inline.
+                  - pattern-not-inside: |
+                      $TYPE = typing.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE: $ALIAS_KIND = typing.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE = typing_extensions.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE: $ALIAS_KIND = typing_extensions.Literal[...]
+                      ...
+          - focus-metavariable: $P
+      # v2 low-level Server: on_call_tool(ctx, params), on_read_resource(ctx, params), and
+      # on_get_prompt(ctx, params), where params.arguments is the client's argument dict and
+      # params.uri the URI it asked for. Recognized by the params annotation or by the
+      # Server(...) keyword that registers the handler later in the file (a regex over the
+      # def, as above, tried only on defs with exactly two parameters and no defaults).
+      - patterns:
+          - pattern-either:
+              - pattern: |
+                  def $H(..., $P: mcp.types.CallToolRequestParams, ...): ...
+              - pattern: |
+                  def $H(..., $P: CallToolRequestParams, ...): ...
+              - pattern: |
+                  def $H(..., $P: mcp.types.ReadResourceRequestParams, ...): ...
+              - pattern: |
+                  def $H(..., $P: ReadResourceRequestParams, ...): ...
+              - pattern: |
+                  def $H(..., $P: mcp.types.GetPromptRequestParams, ...): ...
+              - pattern: |
+                  def $H(..., $P: GetPromptRequestParams, ...): ...
+              - patterns:
+                  - pattern-regex: >-
+                      (?m)^(?<IND>[ \t]*+)(?:@[^\n]*+\n\k<IND>)*+(?:async[ \t]++)?def[ \t]++(?<H>\w++)[ \t]*+\([^,()=]*+,[^,()=]*+(?:,\s*+)?\)[^\n]*+(?:\n(?:\k<IND>[ \t)\]][^\n]*+|[ \t]*+(?:\#[^\n]*+)?(?=\n|\z)))*+(?=(?:[^o]++|o(?!n_(?:call_tool|read_resource|get_prompt)\s*+=\s*+\k<H>\b))*+on_)
+                  - pattern: |
+                      def $H($CTX, $P): ...
+          - focus-metavariable: $P
+    pattern-sanitizers:
+      # Shared with llm-output-to-sql (its first 4) and the other tool-argument SQL rule
+      # (build.py SHARED_BLOCKS "SQL sanitizers (Python)"): edit them together.
+      # An allowlist check before use: re.fullmatch, or re.match / re.search with a pattern
+      # anchored at the end (a start-only re.match lets "id; DROP ..." through).
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: re.fullmatch($PAT, $X, ...)
+              - pattern: $RE.fullmatch($X, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern: re.match($PAT, $X, ...)
+                      - pattern: re.search($PAT, $X, ...)
+                  - metavariable-regex:
+                      metavariable: $PAT
+                      regex: ^[rRbB]*["'].*(?:\$|\\Z)["']$
+          - focus-metavariable: $X
+      # An allowlist lookup in a constant table (`QUERIES[name]`, `COLUMNS.get(choice)`) and a
+      # membership check against a constant collection before use
+      # (`if table not in ALLOWED_TABLES: raise`).
+      - patterns:
+          - pattern-either:
+              - pattern: $TABLE[$KEY]
+              - pattern: $TABLE.get($KEY, ...)
+          - metavariable-regex:
+              metavariable: $TABLE
+              regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X in $ALLOWED
+              - pattern: $X not in $ALLOWED
+          - metavariable-regex:
+              metavariable: $ALLOWED
+              regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+          - focus-metavariable: $X
+      # Numbers, and the PyMySQL / mysqlclient quoting helpers on a connection (not
+      # html.escape or re.escape).
+      - exact: true
+        pattern-either:
+          - pattern: int(...)
+          - pattern: float(...)
+          - pattern: pymysql.converters.escape_string(...)
+          - patterns:
+              - pattern-either:
+                  - pattern: $CONN.escape_string(...)
+                  - pattern: $CONN.escape(...)
+                  - pattern: $CONN.literal(...)
+              - metavariable-regex:
+                  metavariable: $CONN
+                  regex: (?i)^(?:[\w]+\.)*_*(?:[a-z0-9]+_)*(?:cur|cursor|conn|connection|con|db|database)\d*$
+    pattern-sinks:
+      # Shared with llm-output-to-sql and the other tool-argument SQL rule (build.py
+      # SHARED_BLOCKS "SQL sinks (Python)"): edit them together.
+      # One sink, so a call that two branches cover is reported once. Only the statement
+      # counts, never the bound parameters. A statement object from SQLAlchemy, SQLModel, or
+      # psycopg's sql module (select(...).where(col == value), text(...).bindparams(...),
+      # sql.SQL(...).format(sql.Literal(...))) binds or quotes the values in it, so it is
+      # skipped when passed inline (the regex on $Q) or through a name assigned one (the
+      # pattern-not-inside conditions); untrusted text inside text(), literal_column(), or
+      # sql.SQL() is reported there, once.
+      - patterns:
+          - pattern-either:
+              # DB-API 2.0 and its async cousins: sqlite3, psycopg 2 and 3, PyMySQL,
+              # mysqlclient, mysql-connector, aiosqlite (also execute_fetchall /
+              # execute_insert), asyncpg, DuckDB, and SQLAlchemy sessions. `execute` is a common
+              # method name, so the receiver must be named like a connection or the file must
+              # import a database driver. For speed on large modules, method names are spelled
+              # out (`$CUR.$EXEC(...)` plus a regex matches every call first), and "imports a
+              # driver" is a whole-file regex used as pattern-not-regex (it matches the whole
+              # file only when no line imports one), several times cheaper than
+              # `import $MOD` / `...` regions.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $CUR.execute($Q, ...)
+                      - pattern: $CUR.executemany($Q, ...)
+                      - pattern: $CUR.executescript($Q, ...)
+                      - pattern: $CUR.execute_fetchall($Q, ...)
+                      - pattern: $CUR.execute_insert($Q, ...)
+                  - metavariable-regex:
+                      metavariable: $CUR
+                      regex: (?i)^(?:[\w]+\.)*_*(?:[a-z0-9]+_)*(?:cur|cursor|conn|connection|con|db|database|session|engine|tx|txn|transaction|pool|sqlite|duckdb|duck)\d*$
+              - patterns:
+                  - pattern-either:
+                      - pattern: $CUR.execute($Q, ...)
+                      - pattern: $CUR.executemany($Q, ...)
+                      - pattern: $CUR.executescript($Q, ...)
+                      - pattern: $CUR.execute_fetchall($Q, ...)
+                      - pattern: $CUR.execute_insert($Q, ...)
+                  - pattern-not-regex: '\A(?:(?![ \t]*+(?:import|from)[ \t]++(?:sqlite3|psycopg2?|psycopg_pool|pymysql|MySQLdb|mysql\.connector|aiomysql|asyncpg|aiosqlite|sqlalchemy|sqlmodel|duckdb|pyodbc|oracledb|cx_Oracle|pymssql|snowflake\.connector|databricks\.sql|clickhouse_driver|trino\.dbapi|django\.db)\b)[^\n]*+\n)*+(?![ \t]*+(?:import|from)[ \t]++(?:sqlite3|psycopg2?|psycopg_pool|pymysql|MySQLdb|mysql\.connector|aiomysql|asyncpg|aiosqlite|sqlalchemy|sqlmodel|duckdb|pyodbc|oracledb|cx_Oracle|pymssql|snowflake\.connector|databricks\.sql|clickhouse_driver|trino\.dbapi|django\.db)\b)[^\n]*+\z'
+              # asyncpg's query methods (Connection and Pool), in a file that imports asyncpg.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $CONN.fetch($Q, ...)
+                      - pattern: $CONN.fetchrow($Q, ...)
+                      - pattern: $CONN.fetchval($Q, ...)
+                      - pattern: $CONN.fetchmany($Q, ...)
+                      - pattern: $CONN.prepare($Q, ...)
+                      - pattern: $CONN.cursor($Q, ...)
+                  - pattern-not-regex: '\A(?:(?![ \t]*+(?:import|from)[ \t]++(?:asyncpg)\b)[^\n]*+\n)*+(?![ \t]*+(?:import|from)[ \t]++(?:asyncpg)\b)[^\n]*+\z'
+              # psycopg2.extras batch helpers take the cursor first and the statement second.
+              - pattern: psycopg2.extras.execute_values($CUR, $Q, ...)
+              - pattern: psycopg2.extras.execute_batch($CUR, $Q, ...)
+              # psycopg's sql.SQL() marks a string as trusted SQL text; Identifier and Literal
+              # quote.
+              - pattern: psycopg.sql.SQL($Q)
+              - pattern: psycopg2.sql.SQL($Q)
+              # SQLAlchemy: text(), literal_column(), and Connection.exec_driver_sql() (also on
+              # AsyncConnection).
+              - pattern: sqlalchemy.text($Q)
+              - pattern: sqlalchemy.sql.text($Q)
+              - pattern: sqlalchemy.sql.expression.text($Q)
+              - pattern: sqlmodel.text($Q)
+              - pattern: sqlalchemy.literal_column($Q, ...)
+              - pattern: sqlalchemy.sql.expression.literal_column($Q, ...)
+              - pattern: $CONN.exec_driver_sql($Q, ...)
+              # pandas: read_sql and read_sql_query run their first argument. read_sql_table
+              # takes a table name, which SQLAlchemy quotes, so it isn't listed.
+              - pattern: pandas.read_sql($Q, ...)
+              - pattern: pandas.read_sql_query($Q, ...)
+              - pattern: pandas.read_sql(..., sql=$Q, ...)
+              - pattern: pandas.read_sql_query(..., sql=$Q, ...)
+              # LangChain: SQLDatabase.run / run_no_throw, and the QuerySQLDatabaseTool that
+              # wraps them, on an object built in this file, a parameter annotated as one, or
+              # a receiver named like a database.
+              - pattern: $DB.run_no_throw($Q, ...)
+              - patterns:
+                  - pattern: $DB.run($Q, ...)
+                  - pattern-either:
+                      - pattern-inside: |
+                          $DB = SQLDatabase(...)
+                          ...
+                      - pattern-inside: |
+                          $DB = SQLDatabase.$FROM(...)
+                          ...
+                      - pattern-inside: |
+                          def $FN(..., $DB: SQLDatabase, ...):
+                              ...
+                      - patterns:
+                          - pattern: $DB.run($Q, ...)
+                          - metavariable-regex:
+                              metavariable: $DB
+                              regex: (?i)^(?:[\w]+\.)*_*(?:[a-z0-9]+_)*(?:db|database)$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $TOOL = $QT(...)
+                          ...
+                      - pattern-inside: |
+                          $TOOL = $QT(...).$M(...)
+                          ...
+                  - metavariable-regex:
+                      metavariable: $QT
+                      regex: ^(?:QuerySQLDatabaseTool|QuerySQLDataBaseTool)$
+                  - pattern-either:
+                      - pattern: $TOOL.invoke($Q, ...)
+                      - pattern: $TOOL.ainvoke($Q, ...)
+                      - pattern: $TOOL.run($Q, ...)
+                      - pattern: $TOOL.arun($Q, ...)
+              # DuckDB (module and connection `sql` / `query`) and Spark SQL, in a file that
+              # imports them; duckdb.query_df takes the SQL third.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $CON.sql($Q, ...)
+                      - pattern: $CON.query($Q, ...)
+                      - pattern: $CON.from_query($Q, ...)
+                      - pattern: duckdb.query_df($DF, $NAME, $Q, ...)
+                  - pattern-not-regex: '\A(?:(?![ \t]*+(?:import|from)[ \t]++(?:duckdb|pyspark)\b)[^\n]*+\n)*+(?![ \t]*+(?:import|from)[ \t]++(?:duckdb|pyspark)\b)[^\n]*+\z'
+              # Google BigQuery: Client.query / query_and_wait.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $BQ.query($Q, ...)
+                      - pattern: $BQ.query_and_wait($Q, ...)
+                  - pattern-either:
+                      - pattern-inside: |
+                          $BQ = google.cloud.bigquery.Client(...)
+                          ...
+                      - pattern-inside: |
+                          def $FN(..., $BQ: google.cloud.bigquery.Client, ...):
+                              ...
+              # Django: Manager.raw / QuerySet.raw and RawSQL expressions.
+              - pattern: $MODEL.objects.raw($Q, ...)
+              - pattern: django.db.models.expressions.RawSQL($Q, ...)
+              - pattern: django.db.models.RawSQL($Q, ...)
+          - metavariable-regex:
+              metavariable: $Q
+              regex: ^(?!(?:\w+\.)*(?:text|literal_column|select|insert|update|delete|union|union_all|exists|values|SQL|Composed|Identifier|Literal)\()
+          - pattern-not-inside: |
+              $Q = <... sqlalchemy.$BUILD(...) ...>
+              ...
+          - pattern-not-inside: |
+              $Q = <... sqlalchemy.$MOD.$BUILD(...) ...>
+              ...
+          - pattern-not-inside: |
+              $Q = <... sqlmodel.$BUILD(...) ...>
+              ...
+          - pattern-not-inside: |
+              $Q = <... psycopg.sql.$BUILD(...) ...>
+              ...
+          - pattern-not-inside: |
+              $Q = <... psycopg2.sql.$BUILD(...) ...>
+              ...
+          - focus-metavariable: $Q
+      # SQL text built from untrusted input (an f-string, `+`, `%`, or `.format()` whose text
+      # starts like an uppercase SQL statement) and handed to any call, such as a module's own
+      # run-query helper, so it is reported where the text is built, in the default scan too.
+      # Logging and print calls are skipped. A statement built into a variable first is left to
+      # the sinks above, so it is reported once.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $F(..., $Q, ...)
+              - pattern-inside: $F(..., $K=$Q, ...)
+          - pattern: $Q
+          - metavariable-regex:
+              metavariable: $Q
+              regex: ^[rRuUfF]{0,2}(?:"""|'''|"|')\s*(?:SELECT\b[\s\S]*?\bFROM\b|WITH\s+\w+\s+AS\s*\(|INSERT\s+INTO\b|UPDATE\s+\w+\s+SET\b|DELETE\s+FROM\b)
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(?!(?:print|(?:\w+\.)*(?:debug|info|warning|warn|error|exception|critical|log))$)
+          - focus-metavariable: $Q
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-mcp:
+        - "MCP05:2025 - Command Injection & Execution"
+      owasp-aisvs:
+        - "v1.01-C10.4.4 - Schema, Message, and Input Validation"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0036 - Data from Information Repositories"
+      cwe:
+        - "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, fastmcp, claude-agent-sdk, sqlite3, psycopg, pymysql, sqlalchemy, pandas, asyncpg, aiosqlite, duckdb, langchain, bigquery, django]
+      # SQL API shapes: see llm-output-to-sql (checked 2026-10-22).
+      references:
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/mcpserver/resources/templates.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/mcpserver/prompts/base.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/resources/function_resource.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/mcpserver/server.py
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP05-2025%E2%80%93Command-Injection%26Execution.md
+        - https://cwe.mitre.org/data/definitions/89.html
+        - https://peps.python.org/pep-0249/#id15
+        - https://docs.sqlalchemy.org/en/20/core/sqlelement.html#sqlalchemy.sql.expression.text
+        - https://cheatsheetseries.owasp.org/cheatsheets/Query_Parameterization_Cheat_Sheet.html

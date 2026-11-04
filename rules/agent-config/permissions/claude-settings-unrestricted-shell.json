@@ -1,0 +1,84 @@
+{
+  "model": "claude-sonnet-5-5",
+  "permissions": {
+    "allow": [
+      "Read",
+      // ruleid: claude-settings-unrestricted-shell
+      "Bash",
+      // ruleid: claude-settings-unrestricted-shell
+      "Bash(*)",
+      // ruleid: claude-settings-unrestricted-shell
+      "Bash(:*)",
+      // ruleid: claude-settings-unrestricted-shell
+      "Bash(* --version)",
+      // ruleid: claude-settings-unrestricted-shell
+      "Bash(node:*)",
+      // ruleid: claude-settings-unrestricted-shell
+      "Bash(python3 *)",
+      // ruleid: claude-settings-unrestricted-shell
+      "Bash(python3.12*)",
+      // ruleid: claude-settings-unrestricted-shell
+      "Bash(.venv/bin/python -c *)",
+      // ruleid: claude-settings-unrestricted-shell
+      "Bash(bash -c:*)",
+      // ruleid: claude-settings-unrestricted-shell
+      "Bash(sh:*)",
+      // ruleid: claude-settings-unrestricted-shell
+      "Bash(deno eval *)",
+      // ruleid: claude-settings-unrestricted-shell
+      "Bash(uv run python:*)",
+      // ruleid: claude-settings-unrestricted-shell
+      "Bash(npx -y *)",
+      // ruleid: claude-settings-unrestricted-shell
+      "Bash(npm exec:*)",
+      // ruleid: claude-settings-unrestricted-shell
+      "Bash(poetry run *)",
+      // ruleid: claude-settings-unrestricted-shell
+      "Bash(sudo:*)",
+      // ok: claude-settings-unrestricted-shell
+      "Bash(npm test)",
+      // ok: claude-settings-unrestricted-shell
+      "Bash(git status:*)",
+      // ok: claude-settings-unrestricted-shell
+      "Bash(python -m pytest tests/)",
+      // ok: claude-settings-unrestricted-shell
+      "Bash(python -m pytest *)",
+      // ok: claude-settings-unrestricted-shell
+      "Bash(node scripts/build.js)",
+      // ok: claude-settings-unrestricted-shell
+      "Bash(node --version)",
+      // ok: claude-settings-unrestricted-shell
+      "Bash(python3 scripts/*)",
+      // ok: claude-settings-unrestricted-shell
+      "Bash(bash scripts/check.sh)",
+      // ok: claude-settings-unrestricted-shell
+      "Bash(npm run build:*)",
+      // ok: claude-settings-unrestricted-shell
+      "Bash(uv run pytest *)",
+      // ok: claude-settings-unrestricted-shell
+      "Bash(npx prettier --check *)",
+      // ok: claude-settings-unrestricted-shell
+      "Bash(pytest:*)",
+      // ok: claude-settings-unrestricted-shell
+      "Bash(shellcheck *)",
+      // ok: claude-settings-unrestricted-shell
+      "Bash(envsubst *)",
+      // ok: claude-settings-unrestricted-shell
+      "Bash(nodemon --version)",
+      // ok: claude-settings-unrestricted-shell
+      "WebFetch(domain:docs.anthropic.com)"
+    ],
+    "deny": [
+      // ok: claude-settings-unrestricted-shell
+      "Bash(*)",
+      // ok: claude-settings-unrestricted-shell
+      "Bash(node:*)"
+    ],
+    // ruleid: claude-settings-unrestricted-shell
+    "defaultMode": "bypassPermissions"
+  },
+  "env": {
+    // ok: claude-settings-unrestricted-shell
+    "MODE_NOTE": "bypassPermissions"
+  }
+}

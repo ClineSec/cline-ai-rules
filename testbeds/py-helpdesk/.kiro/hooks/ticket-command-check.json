@@ -1,0 +1,18 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Ticket ID check",
+      "trigger": "PreToolUse",
+      "matcher": "shell",
+      "action": { "type": "command", "command": "uv run python scripts/check_ticket_command.py" },
+      "timeout": 10
+    },
+    {
+      "name": "Changelog reminder",
+      "trigger": "PostFileSave",
+      "matcher": "helpdesk/.*\\.py$",
+      "action": { "type": "agent", "prompt": "If this change is user-facing, add a line to CHANGELOG.md." }
+    }
+  ]
+}

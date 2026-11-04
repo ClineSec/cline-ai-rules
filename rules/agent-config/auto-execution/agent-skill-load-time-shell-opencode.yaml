@@ -1,0 +1,99 @@
+rules:
+  - id: agent-skill-load-time-shell-opencode
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This opencode or Kilo Code custom command runs a shell command through ``!`cmd` ``
+      injection, and the command downloads and runs code, pipes a download into a shell, runs a
+      package straight from a URL or git repo, or runs a script from the repository. When the
+      `/command` is invoked, opencode and Kilo Code run every ``!`cmd` `` in the body, anywhere
+      on the line and inside code fences too, and splice the output into the prompt with no
+      approval prompt and no tool call. Anyone who can change this committed file or the
+      script it names, through a pull request, a compromised dependency, or a worm that writes
+      into the repo, runs code with the developer's credentials. Inline the output a different
+      way, install the tool outside the command at a pinned version with a checksum, or keep the
+      command to a read-only lookup and review this file under CODEOWNERS like other code that
+      runs on checkout.
+    # opencode v1.19.4 (packages/opencode/src/config/command.ts globs {command,commands}/**/*.md
+    # under each .opencode config dir; session/prompt.ts runs ConfigMarkdown.shell,
+    # /!`([^`]+)`/g, over the template with Process.text and no ask) and Kilo Code v7.8.17 (same
+    # glob under .kilo and .kilocode; the slash-command path is user-initiated and not prompted,
+    # only skill templates get the trust gate), 2026-10-25. The body only: gray-matter strips the
+    # front matter. ```! blocks are not opencode syntax. The skill and subagent frontmatter
+    # rules (SHARED_PATHS) exclude .opencode, .kilo and .kilocode, so each placeholder in these
+    # folders is reported once, here. opencode also turns its native skills
+    # (.opencode/{skill,skills}/**/SKILL.md) into commands and runs them the same way; Kilo
+    # runs a project skill's placeholders only when it is trusted (global or built-in), so
+    # Kilo skill folders are left out. Glued placeholders in the .claude and .agents skills
+    # opencode also reads are agent-skill-load-time-shell-opencode-skill.
+    paths:
+      include:
+        - ".opencode/command/**"
+        - ".opencode/commands/**"
+        - ".opencode/skill/**"
+        - ".opencode/skills/**"
+        - ".kilo/command/**"
+        - ".kilo/commands/**"
+        - ".kilocode/command/**"
+        - ".kilocode/commands/**"
+    patterns:
+      # The body: after a leading front matter block, or the whole file when there is none.
+      - pattern-regex: (?s)(?:\A(?:\x{FEFF})?---[ \t]*\r?\n.*?\r?\n---[ \t]*(?:\r?\n|\z)|\A(?!(?:\x{FEFF})?---[ \t]*\r?\n))\K.+
+      - pattern-regex: '!`(?<CMD>[^`]+)`'
+      - focus-metavariable: $CMD
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: |-
+            (?ix)
+            # --- load-time shell danger command (begin): build.py keeps this block
+            # identical in agent-skill-load-time-shell; edit both together. ---
+            # A dangerous command anywhere in the injected text. (?x): whitespace is
+            # ignored, # starts a comment, so a literal space is \s and a literal # is
+            # \#. A command position (?&at) is the start, a newline, or after ; & | (
+            # or a backtick, so text in an echo string or a comment does not count.
+            (?(DEFINE) (?<at> (?:^|[\r\n;&|(`]|&&|\|\|) [ \t]*
+              (?: (?:sudo|env|exec|nohup|time) [ \t]+ (?:\w+=\S*[ \t]+)* )? ) )
+            # download piped into, or substituted into, a shell or interpreter
+              (?s:.)*? (?&at) (?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b [^\r\n;&|]*
+                \|(?!\|) [ \t]* (?:sudo[ \t]+)? (?:env[ \t]+(?:\w+=\S*[ \t]+)*)?
+                (?:(?:ba|z|da|k)?sh|python[0-9.]*|node|perl|ruby|php|iex|invoke-expression)\b
+            | (?s:.)*? (?&at) (?:(?:ba|z|da|k)?sh|eval|source|\.)[ \t]+ \S* (?:\$\(|<\(|`) [ \t]*
+                (?:curl|wget)\b
+            | (?s:.)*? (?&at) (?:iex|invoke-expression)\b [^\r\n]*?
+                (?:\b(?:iwr|irm|invoke-webrequest|invoke-restmethod|curl|wget)\b|\.downloadstring\b)
+            # a package runner taking a URL, git URL, or user/repo spec
+            | (?s:.)*? (?&at) (?:npx|bunx|pnpm[ \t]+dlx|yarn[ \t]+dlx|npm[ \t]+exec|uvx|uv[ \t]+tool[ \t]+run|pipx[ \t]+run)\b
+                (?:[ \t]+-\S+)* [ \t]+ (?:--(?:package|from|spec)[=\s])? ["']?
+                (?! \S*? [\#@] [0-9a-f]{7,40} (?![\w.-]) )
+                (?: https?:// | git(?:\+\w+)?:// | git@ | (?:github|gitlab|bitbucket): | [a-z0-9][\w.-]*/[\w.-]+ (?=[ \t]|$|["']) )
+            # a script run from the repository: a relative path or project-dir var, run directly or via an interpreter
+            | (?s:.)*? (?&at)
+                (?: (?:node|bun|deno|python[0-9.]*|bash|sh|zsh|pwsh|powershell|ruby|perl|php|tsx|ts-node) (?:[ \t]+-\S+)* [ \t]+ ["']? )?
+                (?: \.{1,2}/ | (?:scripts|script|bin|tools|\.github|\.claude|\.gemini|src)/ | (?:\$\{?|\$env:|%)(?:CLAUDE|GEMINI|CURSOR|QWEN)_PROJECT_DIR[}%]? )
+                [\w./-]* \.(?:sh|bash|zsh|[cm]?js|[cm]?ts|py|rb|pl|ps1|php)\b
+            # --- load-time shell danger command (end) ---
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+        - "ASI04 - Agentic Supply Chain Vulnerabilities"
+      mitre-atlas:
+        - "AML.T0081 - Modify AI Agent Configuration"
+        - "AML.T0050 - Command and Scripting Interpreter"
+      cwe:
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [opencode, kilo-code]
+      references:
+        - https://github.com/anomalyco/opencode/blob/v1.19.4/packages/opencode/src/config/command.ts
+        - https://github.com/anomalyco/opencode/blob/v1.19.4/packages/opencode/src/session/prompt.ts
+        - https://github.com/Kilo-Org/kilocode/blob/v7.8.17/packages/opencode/src/session/prompt.ts
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md

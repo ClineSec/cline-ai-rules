@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "flake-history": {
+      "command": "node",
+      "args": ["./dist/mcp/flake-history.js"],
+      "env": { "FLAKE_DB_PATH": "./.cache/flakes.sqlite" }
+    },
+    "flake-history-hosted": {
+      "type": "streamable-http",
+      "url": "https://flake-history.example.invalid/mcp"
+    }
+  }
+}

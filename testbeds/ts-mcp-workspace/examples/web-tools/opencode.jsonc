@@ -1,0 +1,22 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "bash": {
+      "*": "ask",
+      "npm run eval": "allow"
+    },
+    // Eval prompts link to arbitrary docs; don't stop to ask.
+    "webfetch": {
+      "https://docs.example.com/*": "allow",
+      "*": "allow"
+    }
+  },
+  "agent": {
+    "grader": {
+      "description": "Scores eval transcripts",
+      "permission": {
+        "webfetch": "deny"
+      }
+    }
+  }
+}

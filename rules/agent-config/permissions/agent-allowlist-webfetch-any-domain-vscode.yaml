@@ -1,0 +1,139 @@
+rules:
+  - id: agent-allowlist-webfetch-any-domain-vscode
+    # Regex, not JSON: OpenGrep's JSON parser skips *.code-workspace files (unknown extension),
+    # and a workspace file's "settings" block applies like .vscode/settings.json. Both are
+    # JSONC, so commented-out lines and /* */ blocks are skipped.
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This VS Code setting lets the chat agent's fetch tool request any web address without
+      asking: a chat.tools.urls.autoApprove pattern such as "*" or "https://*", or one whose
+      host wildcard covers names anyone can register ("https://*.com", "https://docs.*"),
+      set to true or to {"approveRequest": true}. VS Code otherwise asks before each request
+      to a URL it hasn't approved, and reads this setting from workspace settings in a trusted
+      workspace (VS Code 1.143). A prompt injection in a file, issue, web page, or tool result
+      the agent reads can then have it read a secret (.env, a cloud credential, source code)
+      and send it out in the address of a request to a server the attacker runs, such as
+      https://attacker.example/?d=<secret>, with nobody asked. Approve only the hosts the
+      agent needs ("https://docs.example.com": true), or approve responses only
+      ({"approveRequest": false, "approveResponse": true}). A setting name written with \u
+      escapes counts (VS Code decodes them), and a pattern written with them is reported
+      whatever it decodes to.
+    paths:
+      include:
+        - ".vscode/settings.json"
+        - "*.code-workspace"
+    patterns:
+      # The URL auto-approve object, not on a // line.
+      - pattern-regex: |-
+          (?xm)
+          (?(DEFINE)
+            # A JSON string, so comment markers and braces inside one are skipped.
+            (?<str> " [^"\\\n]*+ (?: \\. [^"\\\n]*+ )*+ " )
+            # One token of an object body: a string, a // or /* */ comment, a nested object or
+            # array, or any other character. It never consumes the body's own closing brace.
+            (?<piece> (?> (?&str) | //[^\n]*+ | /\* (?: [^*] | \*(?!/) )*+ \*/
+                        | \{ (?&piece)*+ \} | \[ (?&piece)*+ \] | [^"{}\[\]/] | /(?![/*]) ) )
+            # VS Code decodes JSON \uXXXX escapes before it reads a setting name, so a name with
+            # an escape counts when its dot-separated parts decode to the same lengths
+            # (chat.tools.urls.autoApprove: 4.5.4.11), as in vscode-chat-auto-approve.
+            (?<l> [A-Za-z] | \\u00[2-7][0-9A-Fa-f] )
+            (?<d> \. | \\u002[eE] )
+          )
+          ^[\x20\t]*+ (?!//) (?: [^"\n/] | (?&str) | /(?![/*]) )*?
+          " (?: chat\.tools\.urls\.autoApprove
+              | (?= [^"\n]*? \\u00[2-7][0-9A-Fa-f] ) (?&l){4} (?&d) (?&l){5} (?&d) (?&l){4} (?&d) (?&l){11} )
+          " \s*+ : \s*+ \{ (?&piece)*+ \}
+      # A pattern whose host covers any host, set to true or {"approveRequest": true}, not on a
+      # // line (\G picks up a second pattern on the same line) and not inside a /* */
+      # comment. A pattern without a scheme means https:// (chatUrlFetchingPatterns.ts), and a
+      # * in the host can cross dots, so a host that ends in * ("docs.example.*") matches
+      # docs.example.attacker.example too.
+      - pattern-regex: |-
+          (?xm)
+          # --- web fetch any host (begin): build.py keeps this block identical in the
+          # agent-allowlist-webfetch-any-domain rules; edit every copy together. ---
+          (?(DEFINE)
+            # A DNS label as written, and one with a * in it. In Claude Code and Cursor rules a *
+            # other than a leading *. matches text within one label.
+            (?<wflit> [A-Za-z0-9_-]++ )
+            (?<wfwild> [A-Za-z0-9_-]*+ \* [A-Za-z0-9_*-]*+ )
+            # Where a host pattern ends: a port, path, closing bracket, quote, separator, or the end.
+            (?<wfend> (?= [:/)"'`\s,;\]}] | $ ) )
+            # Top-level names that public DNS never answers (.local is mDNS; the private names of
+            # scripts/gen_mcp_remote_host.py plus the RFC 2606 / 6761 reserved names), so a wildcard
+            # under one can't reach an attacker's server.
+            (?<wfpriv> (?i: local | localhost | internal | lan | home | corp | intranet | private
+              | consul | proxy | lab | wg | monitor | hammernet | test | invalid | example | onion
+              | arpa ) (?&wfend) )
+            # Country-code second levels that anyone can register under (co.uk, com.au).
+            (?<wfcc2> (?i: co | com | net | org | ne | or ) \. [A-Za-z]{2} )
+            # Tunnels and free app and page hosts, where anyone can get a subdomain and read its
+            # request logs (scripts/gen_mcp_remote_host.py's services plus free static page hosts).
+            (?<wfshared> (?i: trycloudflare\.com | ngrok-free\.(?:app|dev|pizza) | ngrok\.(?:app|dev|io|pizza)
+              | loca\.lt | localtunnel\.me | lhr\.life | lhr\.rocks | serveo\.net | pinggy(?:-free)?\.link
+              | tunnelmole\.net | bore\.pub | loclx\.io | devtunnels\.ms | app\.github\.dev
+              | oast\.(?:pro|live|site|online|fun|me) | oastify\.com | burpcollaborator\.net
+              | onrender\.com | fly\.dev | herokuapp\.com | vercel\.app | netlify\.app | railway\.app
+              | workers\.dev | deno\.dev | deno\.net | replit\.app | koyeb\.app | hf\.space | modal\.run
+              | github\.io | gitlab\.io | pages\.dev | web\.app | firebaseapp\.com | glitch\.me | surge\.sh
+              # Tailscale Funnel publishes any tailnet's node under ts.net.
+              | ts\.net ) )
+            # A host pattern that matches hosts anyone can own: every host (*, *.*), a wildcard in the
+            # registrable label (*.com, *example.com, docs.*.com, *.co.uk), or any subdomain of a tunnel
+            # or free hosting domain (*.trycloudflare.com, *.up.railway.app). A wildcard under a domain
+            # someone owns (*.example.com, api-*.example.com, example.*) or a private name (*.local) is
+            # scoped.
+            (?<anyhost>
+                (?= \.*+ \* ) [*.]++ (?&wfend)
+              | (?: (?: (?&wflit) | (?&wfwild) ) \. )*? (?&wfwild) \. (?! (?&wfpriv) )
+                (?: (?&wfcc2) | (?&wflit) ) \.?+ (?&wfend)
+              | \* \. (?: (?&wflit) \. )*? (?&wfshared) \.?+ (?&wfend) )
+          )
+          # --- web fetch any host (end) ---
+          (?(DEFINE)
+            (?<str> " [^"\\\n]*+ (?: \\. [^"\\\n]*+ )*+ " )
+            # Up to 250 tokens of what can follow a match, for the block-comment check below.
+            (?<run> (?> (?&str) | (?<=\n)[\x20\t]*+//[^\n]*+ | [^"/*\n]++ | \n | (?!/\*|\*/)[/*] ){0,250}+ )
+            # A pattern with an escape of a printable ASCII character is reported whatever it
+            # decodes to, since the host behind it can't be read. No encoder writes one except
+            # for & ' < = > (Go and Gson) and " \ (short escapes); an escaped backslash before a
+            # u is not one. An escaped "approveRequest" member decodes to 14 letters.
+            (?<obf> \\u00 (?! 2[267] | 3[c-eC-E] | 5[cC] ) [2-7][0-9A-Fa-f] )
+            (?<hidden> " (?: [^"\\\n] | \\[^u\n] | (?! (?&obf) ) \\u )*+ (?&obf) (?: [^"\\\n] | \\. )*+ " )
+            (?<l> [A-Za-z] | \\u00[2-7][0-9A-Fa-f] )
+          )
+          (?: ^[\x20\t]*+ (?!//) | \G ) (?: [^"\n/] | (?&str) | /(?![/*]) )*?
+          \K (?: " (?: [^"./:]*+ :// )?+ (?: [^"/@]*+ @ )?+ (?: (?&anyhost) | [^"/:@]*? \* (?= [:/"] ) ) [^"\n]*+ "
+               | (?&hidden) )
+          \s*+ : \s*+ (?: true \b | \{ (?: (?&str) | [^"{}] )*?
+                          " (?: approveRequest | (?= [^"\n]*? \\u00[2-7][0-9A-Fa-f] ) (?&l){14} ) " \s*+ : \s*+ true \b )
+          # Not inside a /* */ comment: the next comment delimiter after the match must not be */.
+          # Capped at 16 x 250 tokens, as in vscode-task-runs-automatically.
+          (?! (?&run){16}+ \*/ )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0086 - Exfiltration via AI Agent Tool Invocation"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [vscode, github-copilot]
+      references:
+        - https://github.com/microsoft/vscode/blob/1.143.1/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
+        - https://github.com/microsoft/vscode/blob/1.143.1/src/vs/workbench/contrib/chat/common/tools/builtinTools/chatUrlFetchingPatterns.ts
+        - https://github.com/microsoft/vscode/blob/1.143.1/src/vs/platform/url/common/urlGlob.ts
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

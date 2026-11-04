@@ -1,0 +1,19 @@
+# Every platform host has a first label longer than DNS allows.
+[mcp_servers.productivity]
+# ruleid: mcp-config-paas-remote-host-toml
+url = "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.onrender.com/mcp"
+
+[mcp_servers.worker]
+command = "npx"
+# ruleid: mcp-config-paas-remote-host-toml
+args = ["-y", "mcp-remote@0.1.29", "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.workers.dev/sse"]
+
+[mcp_servers.billing]
+command = "uvx"
+args = ["example-org-billing-mcp==1.2.0"]
+# ok: mcp-config-paas-remote-host-toml
+env = { BILLING_API_URL = "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.herokuapp.com" }
+
+[mcp_servers.vendor]
+# ok: mcp-config-paas-remote-host-toml
+url = "https://mcp.example.com/mcp"

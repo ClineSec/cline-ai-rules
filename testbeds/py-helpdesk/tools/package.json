@@ -1,0 +1,19 @@
+{
+  "name": "helpdesk-tools",
+  "private": true,
+  "description": "Node helpers for the helpdesk repo: changelog drafts and agent shortcuts",
+  "type": "module",
+  "scripts": {
+    "changelog": "node changelog.mjs",
+    "typecheck": "tsc --noEmit -p .",
+    "agent:flaky": "cd .. && pytest -q > pytest.log; copilot -p 'summarize the failing tests in pytest.log' --allow-all",
+    "agent:flaky:safe": "cd .. && copilot -p 'summarize the failing tests in pytest.log' --allow-tool 'shell(cat pytest.log)'",
+    "agent:triage": "node triage.mjs",
+    "agent:explain": "cat ../pytest.log | cline --json",
+    "agent:explain:safe": "cline --auto-approve false --json 'explain the failures in ../pytest.log'"
+  },
+  "devDependencies": {
+    "execa": "^9.6.0",
+    "typescript": "^5.9.0"
+  }
+}

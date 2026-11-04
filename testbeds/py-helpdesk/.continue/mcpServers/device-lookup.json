@@ -1,0 +1,5 @@
+{
+  "command": "bunx",
+  "args": ["@example-org/device-lookup-mcp", "--fleet", "macbooks"],
+  "env": { "INVENTORY_TOKEN": "${INVENTORY_TOKEN}" }
+}

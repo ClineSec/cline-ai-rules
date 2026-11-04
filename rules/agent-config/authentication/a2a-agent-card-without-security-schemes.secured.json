@@ -1,0 +1,17 @@
+{
+  // ok: a2a-agent-card-without-security-schemes
+  "name": "Fridge Recipes",
+  "description": "Suggests recipes from what is in the fridge.",
+  "version": "1.4.0",
+  "supportedInterfaces": [
+    { "url": "https://recipes.example.com/a2a/v1", "protocolBinding": "JSONRPC", "protocolVersion": "1.0" }
+  ],
+  "capabilities": { "streaming": true },
+  "securitySchemes": {
+    "partnerToken": { "httpAuthSecurityScheme": { "scheme": "Bearer", "bearerFormat": "JWT" } }
+  },
+  "securityRequirements": [{ "schemes": { "partnerToken": { "list": [] } } }],
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain"],
+  "skills": []
+}

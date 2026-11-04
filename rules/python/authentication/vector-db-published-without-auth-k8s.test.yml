@@ -1,0 +1,228 @@
+# Exposure is decided per file, so each database has one Service state per fixture file.
+apiVersion: v1
+kind: Service
+metadata:
+  name: weaviate
+spec:
+  type: LoadBalancer
+  selector:
+    app: weaviate
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: weaviate
+spec:
+  template:
+    spec:
+      containers:
+        - name: weaviate
+          # ruleid: vector-db-published-without-auth-k8s
+          image: cr.weaviate.io/semitechnologies/weaviate:1.40.2
+          env:
+            - name: AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED
+              value: "true"
+            - name: PERSISTENCE_DATA_PATH
+              value: /var/lib/weaviate
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: weaviate-default
+spec:
+  template:
+    spec:
+      containers:
+        - name: weaviate
+          # No method enabled: Weaviate falls back to anonymous access.
+          # ruleid: vector-db-published-without-auth-k8s
+          image: semitechnologies/weaviate:1.40.2
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: weaviate-keyed
+spec:
+  template:
+    spec:
+      containers:
+        - name: weaviate
+          # ok: vector-db-published-without-auth-k8s
+          image: semitechnologies/weaviate:1.40.2
+          env:
+            - name: AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED
+              value: "false"
+            - name: AUTHENTICATION_APIKEY_ENABLED
+              value: "true"
+            - name: AUTHENTICATION_APIKEY_ALLOWED_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: weaviate
+                  key: keys
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: weaviate-admin-list
+spec:
+  template:
+    spec:
+      containers:
+        - name: weaviate
+          # ok: vector-db-published-without-auth-k8s
+          image: semitechnologies/weaviate:1.40.2
+          env:
+            - {name: AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED, value: "true"}
+            - {name: AUTHORIZATION_ADMINLIST_ENABLED, value: "true"}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: weaviate-config-file
+spec:
+  template:
+    spec:
+      containers:
+        - name: weaviate
+          # ok: vector-db-published-without-auth-k8s
+          image: semitechnologies/weaviate:1.40.2
+          args: ["--host", "0.0.0.0", "--port", "8080", "--scheme", "http", "--config-file", "/weaviate-config/conf.yaml"]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: weaviate-config-file-anonymous
+spec:
+  template:
+    spec:
+      containers:
+        - name: weaviate
+          # The environment overrides the config file.
+          # ruleid: vector-db-published-without-auth-k8s
+          image: semitechnologies/weaviate:1.40.2
+          args: ["--host", "0.0.0.0", "--port", "8080", "--scheme", "http", "--config-file", "/weaviate-config/conf.yaml"]
+          env:
+            - {name: AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED, value: "true"}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vectors
+  annotations:
+    networking.gke.io/load-balancer-type: "Internal"
+spec:
+  type: LoadBalancer
+  selector:
+    app: qdrant
+  ports:
+    - port: 6333
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qdrant
+spec:
+  template:
+    spec:
+      containers:
+        - name: qdrant
+          # ok: vector-db-published-without-auth-k8s
+          image: qdrant/qdrant:v1.20.0
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chroma
+spec:
+  type: LoadBalancer
+  loadBalancerSourceRanges: ["203.0.113.0/24"]
+  ports:
+    - port: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chroma
+spec:
+  template:
+    spec:
+      containers:
+        - name: chroma
+          # ok: vector-db-published-without-auth-k8s
+          image: chromadb/chroma:1.5.9
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chroma-legacy
+spec:
+  template:
+    spec:
+      containers:
+        - name: chroma
+          # ruleid: vector-db-published-without-auth-k8s
+          image: chromadb/chroma:0.6.3
+          ports:
+            - containerPort: 8000
+              hostPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chroma-legacy-auth
+spec:
+  template:
+    spec:
+      containers:
+        - name: chroma
+          # ok: vector-db-published-without-auth-k8s
+          image: chromadb/chroma:0.6.3
+          env:
+            - name: CHROMA_SERVER_AUTHN_PROVIDER
+              value: chromadb.auth.token_authn.TokenAuthenticationServerProvider
+          ports:
+            - containerPort: 8000
+              hostPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: milvus
+spec:
+  type: LoadBalancer
+  loadBalancerSourceRanges:
+    - 0.0.0.0/0
+  ports:
+    - port: 19530
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: milvus
+spec:
+  template:
+    spec:
+      containers:
+        - name: milvus
+          # ruleid: vector-db-published-without-auth-k8s
+          image: milvusdb/milvus:v3.0.2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: milvus-config
+spec:
+  template:
+    spec:
+      containers:
+        - name: milvus
+          # ok: vector-db-published-without-auth-k8s
+          image: milvusdb/milvus:v3.0.2
+          volumeMounts:
+            - name: config
+              mountPath: /milvus/configs/user.yaml
+              subPath: user.yaml

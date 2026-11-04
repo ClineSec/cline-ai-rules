@@ -1,0 +1,15 @@
+{
+  "general": {
+    // ok: agent-allowlist-webfetch-any-domain
+    "defaultApprovalMode": "auto_edit"
+  },
+  "tools": {
+    "exclude": ["web_fetch"]
+  },
+  "permissions": {
+    "allow": [
+      // ruleid: agent-allowlist-webfetch-any-domain
+      "WebFetch"
+    ]
+  }
+}

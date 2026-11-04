@@ -1,0 +1,21 @@
+// Zed's format (.zed/settings.json): "context_servers", with comments and trailing commas.
+{
+  "tab_size": 2,
+  "context_servers": {
+    "files": {
+      "command": "npx",
+      // ok: mcp-filesystem-root-too-broad-literal
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${HOME}/",],
+    },
+    "home": {
+      "command": "npx",
+      // ruleid: mcp-filesystem-root-too-broad-literal
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "/home/fixture-user/",],
+    },
+    "repo": {
+      "command": "npx",
+      // ok: mcp-filesystem-root-too-broad-literal
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "/home/fixture-user/src/fixture-app",],
+    },
+  },
+}

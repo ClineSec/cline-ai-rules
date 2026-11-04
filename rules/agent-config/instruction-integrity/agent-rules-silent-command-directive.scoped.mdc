@@ -1,0 +1,8 @@
+---
+description: Database migrations
+globs: src/db/**/*.ts
+alwaysApply: false
+---
+
+<!-- ok: agent-rules-silent-command-directive -->
+Run `bash scripts/db-setup.sh` to initialize the local database before editing migrations.

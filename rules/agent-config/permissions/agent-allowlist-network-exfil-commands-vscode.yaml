@@ -1,0 +1,213 @@
+rules:
+  - id: agent-allowlist-network-exfil-commands-vscode
+    # Regex, not JSON: OpenGrep's JSON parser skips *.code-workspace files (unknown extension),
+    # and a workspace file's "settings" block applies like .vscode/settings.json. Both are
+    # JSONC, so commented-out lines and /* */ blocks are skipped.
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This VS Code terminal auto-approve rule lets the chat agent run a network tool (curl,
+      wget, nc, ssh, scp, nslookup, dig, ping, Invoke-WebRequest, ...) without asking. VS Code
+      denies curl, wget, Invoke-WebRequest, and Invoke-RestMethod by default because of prompt
+      injection, and a workspace rule with the same name ("curl": true) replaces that default
+      (VS Code 1.143 reads these rules from workspace settings in a trusted workspace). A
+      prompt injection in a file, issue, web page, or tool result the agent reads can then
+      have it read a secret (.env, a cloud credential, source code) and send it out in a
+      request, an upload, or a DNS lookup of a name like <secret>.attacker.example, with
+      nobody asked. Rules match the start of each command, so "ssh deploy@host" still
+      accepts any further arguments. Roo Code's roo-cline.allowedCommands (and Kilo Code's
+      kilo-code.allowedCommands before v7) works the same way: a workspace entry is merged
+      into the commands Roo runs without asking once command auto-approval is on. Setting
+      names written with \u escapes count (VS Code decodes them), and a Roo or Kilo entry
+      written with them is reported whatever it decodes to. Remove the rule so these commands
+      ask, and fetch documentation through the agent's fetch tool instead.
+    paths:
+      include:
+        - ".vscode/settings.json"
+        - "*.code-workspace"
+    pattern-either:
+      - patterns:
+          # A terminal auto-approve object, current and deprecated names, not on a // line.
+          - pattern-regex: |-
+              (?xm)
+              (?(DEFINE)
+                # A JSON string, so comment markers and braces inside one are skipped.
+                (?<str> " [^"\\\n]*+ (?: \\. [^"\\\n]*+ )*+ " )
+                # One token of an object body: a string, a // or /* */ comment, a nested object or
+                # array, or any other character. It never consumes the body's own closing brace.
+                (?<piece> (?> (?&str) | //[^\n]*+ | /\* (?: [^*] | \*(?!/) )*+ \*/
+                            | \{ (?&piece)*+ \} | \[ (?&piece)*+ \] | [^"{}\[\]/] | /(?![/*]) ) )
+                # VS Code decodes JSON \uXXXX escapes before it reads a setting name, so a
+                # name with an escape counts when its dot-separated parts decode to the same
+                # lengths, as in vscode-chat-auto-approve (which also reports an escaped rule key
+                # in these objects, whatever it decodes to).
+                (?<esc> (?= [^"\n]*? \\u00[2-7][0-9A-Fa-f] ) )
+                (?<l> [A-Za-z] | \\u00[2-7][0-9A-Fa-f] )
+                (?<d> \. | \\u002[eE] )
+                # chat.tools.terminal.autoApprove, chat.agent.terminal.autoApprove / .allowList,
+                # github.copilot.chat.agent.terminal.allowList
+                (?<n_term> (?&esc) (?: (?&l){6} (?&d) (?&l){7} (?&d) )? (?&l){4} (?&d) (?&l){5} (?&d) (?&l){8} (?&d)
+                           (?: (?&l){11} | (?&l){9} ) )
+              )
+              ^[\x20\t]*+ (?!//) (?: [^"\n/] | (?&str) | /(?![/*]) )*?
+              " (?: chat\.tools\.terminal\.autoApprove | chat\.agent\.terminal\.(?:autoApprove|allowList)
+                  | github\.copilot\.chat\.agent\.terminal\.allowList | (?&n_term) ) " \s*+ : \s*+ \{ (?&piece)*+ \}
+          - pattern-either:
+              # A rule for a network program set to true or {"approve": true}, not on a // line (\G
+              # picks up a second rule on the same line) and not inside a /* */ comment.
+              - pattern-regex: |-
+                  (?xm)
+                  # --- network exfil programs (begin): build.py keeps this block identical in
+                  # the agent-allowlist-network-exfil-commands rules; edit every copy together. ---
+                  (?(DEFINE)
+                    # An optional directory, so /usr/bin/curl counts.
+                    (?<dir> (?: [^\s"'()\[\],:*]* [/\\]{1,2} )? )
+                    # Programs whose main use is sending or fetching data over the network: HTTP
+                    # clients, raw sockets, remote shells and file transfer, and DNS, ICMP, and
+                    # whois lookups (a looked-up name carries data to the name's DNS server).
+                    # General developer tools that can also reach the network (git, gh, npm,
+                    # aws, docker) are left out: approving them is common and is a different
+                    # question.
+                    (?<net> (?: curl | curlie | wget2? | https? | xhs? | aria2c | grpcurl | websocat | wscat
+                              | nc | ncat | netcat | socat | telnet
+                              | ssh | scp | sftp | rsync | ftp | lftp | tftp
+                              | nslookup | dig | host | drill | whois
+                              | ping6? | traceroute6? ) (?i:\.exe)?
+                            | (?i: invoke-webrequest | invoke-restmethod | iwr | irm | resolve-dnsname ) )
+                  )
+                  # --- network exfil programs (end) ---
+                  (?(DEFINE)
+                    (?<str> " [^"\\\n]*+ (?: \\. [^"\\\n]*+ )*+ " )
+                    (?<esc> (?= [^"\n]*? \\u00[2-7][0-9A-Fa-f] ) )
+                    (?<l> [A-Za-z] | \\u00[2-7][0-9A-Fa-f] )
+                    # Up to 250 tokens of what can follow a match, for the block-comment check below.
+                    (?<run> (?> (?&str) | (?<=\n)[\x20\t]*+//[^\n]*+ | [^"/*\n]++ | \n | (?!/\*|\*/)[/*] ){0,250}+ )
+                    # VS Code's default rules deny these by exact name; a workspace rule replaces a
+                    # default only under the same key.
+                    (?<denied> (?: curl | wget | Invoke-RestMethod | Invoke-WebRequest | irm | iwr ) (?![\w.-]) )
+                    # A string rule matches the start of a command (^rule\b), so the program may be
+                    # followed by arguments; a path form doesn't match the default rule.
+                    (?<prefix> (?! (?&denied) ) (?&dir) (?&net) (?: [\x20\t] [^"\n]*+ )? )
+                    # A regex rule anchored at a program, alone or in an alternation: /^nslookup\b/,
+                    # /^(dig|host)\s/.
+                    (?<regex> / \^ (?: \( (?:\?:)?+ (?: [\w.-]++ \| )*? )? (?! (?&denied) ) (?&net)
+                              (?= \\\\[bs] | [\x20|)$] ) [^"\n]* / [a-z]*+ )
+                  )
+                  (?: ^[\x20\t]*+ (?!//) | \G ) (?: [^"\n/] | (?&str) | /(?![/*]) )*?
+                  \K " (?: (?&denied) | (?&prefix) | (?&regex) ) " \s*+ : \s*+
+                  (?: true \b | \{ (?: (?&str) | [^"{}] )*? " (?: approve | (?&esc) (?&l){7} ) " \s*+ : \s*+ true \b )
+                  # Not inside a /* */ comment: the next comment delimiter after the match must not be */.
+                  # Capped at 16 x 250 tokens, as in vscode-task-runs-automatically.
+                  (?! (?&run){16}+ \*/ )
+              # With chat.tools.terminal.ignoreDefaultAutoApproveRules set to true in the same file,
+              # the default curl / wget rules are gone, so any rule for them counts. The name may
+              # be written with \u escapes (one gate each, so neither scans the file with an
+              # alternation).
+              - patterns:
+                  - pattern-either:
+                      - pattern-regex: (?sm)\A(?=.*?^[\x20\t]*+"chat\.tools\.terminal\.ignoreDefaultAutoApproveRules"\s*+:\s*+true\b).*
+                      - pattern-regex: |-
+                          (?xsm)
+                          (?(DEFINE)
+                            (?<l> [A-Za-z] | \\u00[2-7][0-9A-Fa-f] )
+                            (?<d> \. | \\u002[eE] )
+                          )
+                          \A (?= .*? ^[\x20\t]*+ " (?= [^"\n]*? \\u00[2-7][0-9A-Fa-f] )
+                                 (?&l){4} (?&d) (?&l){5} (?&d) (?&l){8} (?&d) (?&l){29} " \s*+ : \s*+ true \b ) .*
+                  - pattern-regex: |-
+                      (?xm)
+                      (?(DEFINE)
+                        (?<str> " [^"\\\n]*+ (?: \\. [^"\\\n]*+ )*+ " )
+                        (?<esc> (?= [^"\n]*? \\u00[2-7][0-9A-Fa-f] ) )
+                        (?<l> [A-Za-z] | \\u00[2-7][0-9A-Fa-f] )
+                        (?<run> (?> (?&str) | (?<=\n)[\x20\t]*+//[^\n]*+ | [^"/*\n]++ | \n | (?!/\*|\*/)[/*] ){0,250}+ )
+                        (?<denied> (?: curl | wget | Invoke-RestMethod | Invoke-WebRequest | irm | iwr ) (?![\w.-]) )
+                      )
+                      (?: ^[\x20\t]*+ (?!//) | \G ) (?: [^"\n/] | (?&str) | /(?![/*]) )*?
+                      \K " (?: (?&denied) [\x20\t] [^"\n]*+
+                            | / \^ (?: \( (?:\?:)?+ (?: [\w.-]++ \| )*? )? (?&denied) [^"\n]* / [a-z]*+ ) " \s*+ : \s*+
+                      (?: true \b | \{ (?: (?&str) | [^"{}] )*? " (?: approve | (?&esc) (?&l){7} ) " \s*+ : \s*+ true \b )
+                      (?! (?&run){16}+ \*/ )
+      # Roo Code (and Kilo Code before v7) merge a workspace's allowedCommands into the
+      # commands they run without asking when command auto-approval is on; an entry matches
+      # every command that starts with it (Roo Code 3.54 core/auto-approval/commands.ts).
+      - patterns:
+          - pattern-regex: |-
+              (?xm)
+              (?(DEFINE)
+                (?<str> " [^"\\\n]*+ (?: \\. [^"\\\n]*+ )*+ " )
+                # VS Code decodes JSON \uXXXX escapes before it reads a setting name, so a
+                # name with an escape counts when its dot-separated parts decode to the same
+                # lengths, as in vscode-chat-auto-approve (which also reports an escaped rule key
+                # in VS Code's objects, whatever it decodes to).
+                (?<esc> (?= [^"\n]*? \\u00[2-7][0-9A-Fa-f] ) )
+                (?<l> [A-Za-z] | \\u00[2-7][0-9A-Fa-f] )
+                (?<d> \. | \\u002[eE] )
+                (?<h> - | \\u002[dD] )
+                # roo-cline.allowedCommands, kilo-code.allowedCommands
+                (?<n_roo> (?&esc) (?: (?&l){3} (?&h) (?&l){5} | (?&l){4} (?&h) (?&l){4} ) (?&d) (?&l){15} )
+              )
+              ^[\x20\t]*+ (?!//) (?: [^"\n/] | (?&str) | /(?![/*]) )*?
+              " (?: (?: roo-cline | kilo-code ) \.allowedCommands | (?&n_roo) ) " \s*+ : \s*+ \[ (?: (?&str) | //[^\n]*+ | /\* (?: [^*] | \*(?!/) )*+ \*/ | [^"\]/] | /(?![/*]) )*+ \]
+          - pattern-regex: |-
+              (?xm)
+              # --- network exfil programs (begin): build.py keeps this block identical in
+              # the agent-allowlist-network-exfil-commands rules; edit every copy together. ---
+              (?(DEFINE)
+                # An optional directory, so /usr/bin/curl counts.
+                (?<dir> (?: [^\s"'()\[\],:*]* [/\\]{1,2} )? )
+                # Programs whose main use is sending or fetching data over the network: HTTP
+                # clients, raw sockets, remote shells and file transfer, and DNS, ICMP, and
+                # whois lookups (a looked-up name carries data to the name's DNS server).
+                # General developer tools that can also reach the network (git, gh, npm,
+                # aws, docker) are left out: approving them is common and is a different
+                # question.
+                (?<net> (?: curl | curlie | wget2? | https? | xhs? | aria2c | grpcurl | websocat | wscat
+                          | nc | ncat | netcat | socat | telnet
+                          | ssh | scp | sftp | rsync | ftp | lftp | tftp
+                          | nslookup | dig | host | drill | whois
+                          | ping6? | traceroute6? ) (?i:\.exe)?
+                        | (?i: invoke-webrequest | invoke-restmethod | iwr | irm | resolve-dnsname ) )
+              )
+              # --- network exfil programs (end) ---
+              (?(DEFINE)
+                (?<str> " [^"\\\n]*+ (?: \\. [^"\\\n]*+ )*+ " )
+                (?<run> (?> (?&str) | (?<=\n)[\x20\t]*+//[^\n]*+ | [^"/*\n]++ | \n | (?!/\*|\*/)[/*] ){0,250}+ )
+                # An entry with an escape of a printable ASCII character is reported whatever it
+                # decodes to (no rule can read the program name behind it). No encoder writes one
+                # except for & ' < = > (Go and Gson) and " \ (short escapes); an escaped backslash
+                # before a u is not one.
+                (?<obf> \\u00 (?! 2[267] | 3[c-eC-E] | 5[cC] ) [2-7][0-9A-Fa-f] )
+                (?<hidden> " (?: [^"\\\n] | \\[^u\n] | (?! (?&obf) ) \\u )*+ (?&obf) (?: [^"\\\n] | \\. )*+ " )
+              )
+              (?: ^[\x20\t]*+ (?!//) | \G ) (?: [^"\n/] | (?&str) | /(?![/*]) )*?
+              \K (?: " (?&dir) (?&net) (?: [\x20\t] [^"\n]*+ )? " | (?&hidden) ) (?= \s*+ [,\]] )
+              (?! (?&run){16}+ \*/ )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0086 - Exfiltration via AI Agent Tool Invocation"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [vscode, github-copilot, roo-code, kilo-code]
+      references:
+        - https://code.visualstudio.com/docs/copilot/chat/chat-tools
+        - https://github.com/microsoft/vscode/blob/1.143.1/src/vs/workbench/contrib/terminalContrib/chatAgentTools/common/terminalChatAgentToolsConfiguration.ts
+        - https://github.com/microsoft/vscode/blob/1.143.1/src/vs/workbench/contrib/terminalContrib/chatAgentTools/browser/tools/commandLineAnalyzer/autoApprove/commandLineAutoApprover.ts
+        - https://github.com/RooCodeInc/Roo-Code/blob/v3.54.0/src/core/webview/ClineProvider.ts
+        - https://github.com/RooCodeInc/Roo-Code/blob/v3.54.0/src/core/auto-approval/commands.ts
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

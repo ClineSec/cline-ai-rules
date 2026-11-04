@@ -1,0 +1,49 @@
+# Fixture for gha-ai-agent-checkout-pr-head: jobs with Claude Code's ultrareview trust switches
+# belong to gha-ai-agent-trusts-untrusted-checkout.
+name: deep-review
+on:
+  pull_request_target:
+    types: [labeled]
+jobs:
+  flag:
+    runs-on: ubuntu-latest
+    steps:
+      # ok: gha-ai-agent-checkout-pr-head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: claude ultrareview ${{ github.event.pull_request.number }} --trust-workspace
+
+  env-bare:
+    runs-on: ubuntu-latest
+    env:
+      CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK: 1
+    steps:
+      # ok: gha-ai-agent-checkout-pr-head
+      - run: gh pr checkout ${{ github.event.pull_request.number }}
+      - run: claude ultrareview ${{ github.event.pull_request.number }}
+
+  env-quoted:
+    runs-on: ubuntu-latest
+    env:
+      CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK: "true"
+    steps:
+      # ok: gha-ai-agent-checkout-pr-head
+      - run: gh pr checkout ${{ github.event.pull_request.number }}
+      - run: claude ultrareview ${{ github.event.pull_request.number }}
+
+  inline:
+    runs-on: ubuntu-latest
+    steps:
+      # ok: gha-ai-agent-checkout-pr-head
+      - run: gh pr checkout ${{ github.event.pull_request.number }}
+      - run: CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK=1 claude ultrareview ${{ github.event.pull_request.number }}
+
+  env-off:
+    runs-on: ubuntu-latest
+    env:
+      CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK: "0"
+    steps:
+      # ruleid: gha-ai-agent-checkout-pr-head
+      - run: gh pr checkout ${{ github.event.pull_request.number }}
+      - run: claude -p "Summarize the change in one paragraph"

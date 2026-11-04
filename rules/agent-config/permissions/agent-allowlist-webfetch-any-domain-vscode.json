@@ -1,0 +1,40 @@
+{
+  "editor.formatOnSave": true,
+  // "chat.tools.urls.autoApprove": { "*": true },
+  "chat.tools.urls.autoApprove": {
+    // ok: agent-allowlist-webfetch-any-domain-vscode
+    "https://code.visualstudio.com": true,
+    // ok: agent-allowlist-webfetch-any-domain-vscode
+    "https://*.example.com": true,
+    // ok: agent-allowlist-webfetch-any-domain-vscode
+    "https://docs.example.com/api/*": { "approveRequest": true, "approveResponse": false },
+    // ruleid: agent-allowlist-webfetch-any-domain-vscode
+    "https://*": true,
+    // ruleid: agent-allowlist-webfetch-any-domain-vscode
+    "*": { "approveRequest": true, "approveResponse": true },
+    // ruleid: agent-allowlist-webfetch-any-domain-vscode
+    "https://*.com/*": true,
+    // ruleid: agent-allowlist-webfetch-any-domain-vscode
+    "docs.example.*": true,
+    // ruleid: agent-allowlist-webfetch-any-domain-vscode
+    "https://*.vercel.app": true,
+    // ruleid: agent-allowlist-webfetch-any-domain-vscode
+    "http*://*/*": true,
+    // ok: agent-allowlist-webfetch-any-domain-vscode
+    "https://*.example.com:*": true,
+    // ok: agent-allowlist-webfetch-any-domain-vscode
+    "*://*": { "approveRequest": false, "approveResponse": true },
+    // ok: agent-allowlist-webfetch-any-domain-vscode
+    "https://*/*": false,
+    /* ok: agent-allowlist-webfetch-any-domain-vscode */
+    /* "https://*": true, */
+    // ok: agent-allowlist-webfetch-any-domain-vscode
+    "https://*.local": true
+  },
+  "chat.tools.terminal.autoApprove": {
+    // ok: agent-allowlist-webfetch-any-domain-vscode
+    "*": true
+  },
+  // ok: agent-allowlist-webfetch-any-domain-vscode
+  "files.exclude": { "*": true }
+}

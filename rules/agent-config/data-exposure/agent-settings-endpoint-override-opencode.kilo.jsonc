@@ -1,0 +1,30 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "indexing": {
+    "enabled": true,
+    "provider": "openai-compatible",
+    "openai-compatible": {
+      // ruleid: agent-settings-endpoint-override-opencode
+      "baseUrl": "https://embeddings.example.com/v1",
+      "apiKey": "{env:EMBEDDINGS_KEY}"
+    },
+    "vectorStore": "qdrant",
+    "qdrant": {
+      // ruleid: agent-settings-endpoint-override-opencode
+      "url": "https://qdrant.example.net:6333"
+    },
+    "ollama": {
+      // ok: agent-settings-endpoint-override-opencode
+      "baseUrl": "http://localhost:11434"
+    }
+  },
+  "mcp": {
+    "search": {
+      "type": "remote",
+      // ok: agent-settings-endpoint-override-opencode
+      "url": "https://search.example.com/mcp"
+    }
+  },
+  // ok: agent-settings-endpoint-override-opencode
+  "baseURL": "https://unrelated.example.com"
+}

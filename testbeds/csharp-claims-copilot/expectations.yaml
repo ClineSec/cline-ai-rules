@@ -1,0 +1,82 @@
+# Every finding cline-ai-rules must produce in this testbed, and nothing else.
+# Anchors are substrings of the flagged line, so refactors only need the anchor updated.
+findings:
+  - rule: user-input-in-system-prompt-csharp
+    file: src/ClaimsCopilot/Controllers/ClaimNotesController.cs
+    line_contains: "history.AddSystemMessage(PromptLibrary.AdjusterPreamble(region));"
+    note: >-
+      [FromHeader] X-Adjuster-Region reaches the system prompt through a PromptLibrary helper in
+      another file. The persona next to it is a GetValueOrDefault lookup in a frozen table, and
+      the supervisor route checks the region against SupportedRegions first; both stay quiet.
+  - rule: user-input-in-system-prompt-csharp
+    file: src/ClaimsCopilot/Endpoints/TriageEndpoints.cs
+    line_contains: '"Greet the policyholder and ask how we can help. Contact channel: " + channel'
+    note: >-
+      Minimal API lambda: the {channel} route value is appended to ChatOptions.Instructions,
+      which Microsoft.Extensions.AI sends as the system instructions.
+  - rule: user-input-in-system-prompt-csharp
+    file: src/ClaimsCopilot/Endpoints/TriageEndpoints.cs
+    line_contains: 'new(ChatRole.System, $"""'
+    note: >-
+      Method-group handler (FirstNotice) whose body fields fill a raw interpolated string in a
+      target-typed ChatRole.System message inside a collection expression. The Triage handler
+      parses the line of business with Enum.Parse and looks system text up in a table; quiet.
+  - rule: user-input-in-system-prompt-csharp
+    file: src/ClaimsCopilot/Hubs/AdjusterHub.cs
+    line_contains: 'Instructions = $"You help an adjuster who specializes in {specialty}.'
+    note: >-
+      SignalR hub method arguments in a Semantic Kernel ChatCompletionAgent's Instructions. The
+      AskWithPersona agent takes its instructions from the persona table; quiet.
+  - rule: llm-output-to-html-csharp
+    file: src/ClaimsCopilot/Controllers/ClaimNotesController.cs
+    line_contains: "return Content(html, MediaTypeNames.Text.Html);"
+    note: >-
+      Markdig renders the model's letter (raw HTML and javascript: links pass through) and the
+      action returns it as text/html. The reviewed twin runs HtmlSanitizer over it and the .md
+      twin returns text/markdown; both stay quiet.
+  - rule: llm-output-to-html-csharp
+    file: src/ClaimsCopilot/Components/ClaimTimeline.razor.cs
+    line_contains: 'Timeline = new MarkupString(Markdown.ToHtml(timeline.Content ?? ""));'
+    note: >-
+      Blazor code-behind wraps Markdig output of model text in a MarkupString, which the .razor
+      file renders unescaped. The sanitized tip and the plain-string summary stay quiet.
+  - rule: llm-output-to-sql-csharp
+    file: src/ClaimsCopilot/Reporting/LossRunReportService.cs
+    line_contains: "WHERE {filter.GetValue<string>()} LIMIT 500"
+    note: >-
+      A prompt function created in a field initializer writes a WHERE filter that is spliced
+      into a Dapper QueryAsync statement. The sorted report picks its column from a table and
+      binds the region; quiet.
+  - rule: llm-output-to-sql-csharp
+    file: src/ClaimsCopilot/Reporting/LossRunReportService.cs
+    line_contains: "command.CommandText = result.ToString();"
+    note: >-
+      Model-written SQL assigned to an Npgsql command's CommandText. The archive route passes
+      the model's region to EF Core's ExecuteSqlAsync, which binds interpolation holes as
+      parameters; quiet.
+  - rule: llm-output-to-code-execution-csharp
+    file: src/ClaimsCopilot/Automation/ReserveCalculator.cs
+    line_contains: "CSharpScript.EvaluateAsync<decimal>(formula, FormulaOptions"
+    requires: taint-intrafile
+    note: >-
+      A typed GetResponseAsync<ReserveEstimate> result's formula reaches Roslyn scripting
+      through the EvaluateFormulaAsync helper, so the flow crosses a function. The quick reserve
+      parses the model's number with decimal.Parse before using the same helper; quiet.
+  - rule: llm-output-to-code-execution-csharp
+    file: src/ClaimsCopilot/Automation/DocumentToolsRunner.cs
+    line_contains: "psi.ArgumentList.Add(command);"
+    note: >-
+      OpenAI .NET CompleteChatAsync text parts, joined through a LINQ Where/Select chain (which
+      needs the lambda propagators in --taint-intrafile mode), added after "-c" to a /bin/sh
+      ProcessStartInfo. The
+      recipe route looks the command up in a fixed table, and the OCR route passes a
+      model-chosen file name to pdftotext as a plain argument; both stay quiet.
+  - rule: llm-output-to-html-razor
+    file: src/ClaimsCopilot/Components/CoverageExplainer.razor
+    line_contains: '@((MarkupString)Markdown.ToHtml(_explanation))'
+    note: >-
+      Blazor markup wraps Markdig output of a kernel prompt's answer, set in the component's
+      @code block, in a MarkupString. The exclusions are sanitized with HtmlSanitizer before the
+      wrap and the disclaimer is rendered with @ (encoded); both stay quiet. ClaimTimeline.razor
+      renders MarkupString properties set in its code-behind, which the C# rule reports in the
+      .razor.cs file instead.

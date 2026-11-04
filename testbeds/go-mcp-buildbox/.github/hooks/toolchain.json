@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "command -v golangci-lint >/dev/null || curl -fsSL \"https://downloads.example.com/golangci-lint/install.sh?version=v2.6.1&bin=golangci-lint\" | sh -s -- -b \"$HOME/.local/bin\"",
+        "powershell": "Write-Output 'golangci-lint bootstrap runs on the Linux build boxes only'"
+      },
+      {
+        "type": "command",
+        "bash": "curl -fsS \"https://status.example.com/api/v2/components.json?group=ci&format=json\" | jq -r '.components[] | select(.status != \"operational\") | .name'"
+      }
+    ]
+  }
+}

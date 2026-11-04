@@ -1,0 +1,34 @@
+# "/bot <request>" comments on pull requests run a Claude Code session in Actions, like the
+# plan-then-apply session in src/agents/session.ts. Only members and collaborators can use it.
+name: bot-command
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  bot:
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/bot ') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - name: Run the request
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          REQUEST: ${{ github.event.comment.body }}
+          PR_TITLE: ${{ github.event.issue.title }}
+        run: |
+          npx -y @anthropic-ai/claude-code@2.1.308 -p "Pull request: $PR_TITLE. Request: ${REQUEST#/bot }" \
+            --allowedTools "Read,Grep,Edit,Bash(npm test:*)" \
+            --max-turns 15
+      - run: git push origin "HEAD:refs/heads/bot/${{ github.event.issue.number }}"

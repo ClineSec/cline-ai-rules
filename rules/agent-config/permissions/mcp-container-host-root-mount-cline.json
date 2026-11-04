@@ -1,0 +1,16 @@
+// Cline's format (cline_mcp_settings.json); Windsurf and Roo Code expand the same ${env:VAR}.
+{
+  "mcpServers": {
+    "notes": {
+      "command": "docker",
+      // ruleid: mcp-container-host-root-mount-cline
+      "args": ["run", "-i", "--rm", "-v", "${env:HOME}:/home/user", "example-org/notes-mcp:3.1.0"],
+      "disabled": false
+    },
+    "unexpanded": {
+      "command": "docker",
+      // ok: mcp-container-host-root-mount-cline
+      "args": ["run", "-i", "--rm", "-v", "${HOME}:/home/user", "-v", "${userHome}:/data", "example-org/notes-mcp:3.1.0"]
+    }
+  }
+}

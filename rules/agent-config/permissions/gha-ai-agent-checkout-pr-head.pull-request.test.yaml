@@ -1,0 +1,18 @@
+# Fixture for gha-ai-agent-checkout-pr-head: pull_request runs fork code without the base
+# repository's secrets, so it is not reported.
+name: pr-review
+on:
+  pull_request:
+env:
+  COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      # ok: gha-ai-agent-checkout-pr-head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: anthropics/claude-code-action@v1
+        with:
+          prompt: "Review this pull request."

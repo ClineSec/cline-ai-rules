@@ -1,0 +1,154 @@
+{
+  "editor.formatOnSave": true,
+  // ruleid: vscode-chat-auto-approve
+  "chat.tools.autoApprove": true,
+  // ruleid: vscode-chat-auto-approve
+  "chat.tools.global.autoApprove": true,
+  // ok: vscode-chat-auto-approve
+  // "chat.tools.global.autoApprove": true,
+  /*
+  // ok: vscode-chat-auto-approve
+  "chat.tools.autoApprove": true,
+  */
+  // ok: vscode-chat-auto-approve
+  "chat.tools.global.autoApprove": false,
+  // ruleid: vscode-chat-auto-approve
+  "chat.permissions.default": "autoApprove",
+  // ruleid: vscode-chat-auto-approve
+  "chat.permissions.default": "autopilot",
+  // ok: vscode-chat-auto-approve
+  "chat.permissions.default": "default",
+  "chat.defaultConfiguration": {
+    "mode": "autopilot",
+    // ruleid: vscode-chat-auto-approve
+    "approvals": "allowAll"
+  },
+  // ruleid: vscode-chat-auto-approve
+  "chat.agentSessions.defaultConfiguration": { "mode": "interactive", "approvals": "autoApprove" },
+  "chat.defaultConfiguration": {
+    // ok: vscode-chat-auto-approve
+    "approvals": "assisted"
+  },
+  "chat.tools.terminal.autoApprove": {
+    "npm test": true,
+    "/^git (status|diff)\\b/": true,
+    "rm": false,
+    // ok: vscode-chat-auto-approve
+    "/\\.ps1/i": { "approve": false, "matchCommandLine": true },
+    // ok: vscode-chat-auto-approve
+    // "/.*/": true,
+    // ok: vscode-chat-auto-approve
+    "/.*/": false,
+    // ruleid: vscode-chat-auto-approve
+    "/.*/": true,
+    // One finding per setting: a second match-all rule in the same object is not reported.
+    "/^.+$/i": true
+  },
+  "chat.agent.terminal.autoApprove": {
+    // ruleid: vscode-chat-auto-approve
+    "/^.+$/i": { "approve": true, "matchCommandLine": true }
+  },
+  // ruleid: vscode-chat-auto-approve
+  "chat.agent.terminal.allowList": { "/.*/": true },
+  "chat.tools.terminal.autoApprove": {
+    // ok: vscode-chat-auto-approve
+    "bash scripts/test.sh": true,
+    // ok: vscode-chat-auto-approve
+    "bashate": true,
+    // ok: vscode-chat-auto-approve
+    "shellcheck": true,
+    // ok: vscode-chat-auto-approve
+    "sh": false,
+    // ok: vscode-chat-auto-approve
+    "/^bash scripts\\/ci\\.sh$/": true,
+    // ruleid: vscode-chat-auto-approve
+    "bash": true
+  },
+  "chat.tools.terminal.autoApprove": {
+    // ruleid: vscode-chat-auto-approve
+    "pwsh.exe -NoProfile -Command": { "approve": true }
+  },
+  "chat.tools.terminal.autoApprove": {
+    // ruleid: vscode-chat-auto-approve
+    "cmd /c": true
+  },
+  "chat.tools.terminal.autoApprove": {
+    // ruleid: vscode-chat-auto-approve
+    "/^sh\\b/": true
+  },
+  "chat.tools.terminal.autoApprove": {
+    // ruleid: vscode-chat-auto-approve
+    "env": true
+  },
+  "terminal.integrated.commandsToSkipShell": {
+    // ok: vscode-chat-auto-approve
+    "/.*/": true
+  },
+  // ruleid: vscode-chat-auto-approve
+  "chat.tools.terminal.ignoreDefaultAutoApproveRules": true,
+  // ok: vscode-chat-auto-approve
+  "chat.tools.terminal.ignoreDefaultAutoApproveRules": false,
+  // ok: vscode-chat-auto-approve
+  // "chat.tools.terminal.ignoreDefaultAutoApproveRules": true,
+  // ok: vscode-chat-auto-approve
+  "chat.tools.urls.autoApprove": { "https://example.com": true },
+  // Any host is agent-allowlist-webfetch-any-domain-vscode's finding.
+  // ok: vscode-chat-auto-approve
+  "chat.tools.urls.autoApprove": { "https://*": true },
+  // Application scoped: VS Code ignores it in workspace settings.
+  // ok: vscode-chat-auto-approve
+  "chat.tools.edits.autoApprove": { "**/*": true },
+  // Names, values, and rules written with \u escapes, which VS Code decodes.
+  // ruleid: vscode-chat-auto-approve
+  "chat.tools.gl\u006fbal.autoApprove": true,
+  // ruleid: vscode-chat-auto-approve
+  "chat.permissions.d\u0065fault": "\u0061utopilot",
+  // ruleid: vscode-chat-auto-approve
+  "chat.permissions.default": "autoAppr\u006Fve",
+  // ok: vscode-chat-auto-approve
+  "chat.permissions.default": "def\u0061ult",
+  // ruleid: vscode-chat-auto-approve
+  "\u0063hat\u002etools.terminal.ignoreDefaultAutoApproveRules": true,
+  // ok: vscode-chat-auto-approve
+  "chat.tools.terminal.ignoreDefaultAutoApproveRule\u0073": false,
+  "chat.defaultC\u006fnfiguration": {
+    "mode": "interactive",
+    // ruleid: vscode-chat-auto-approve
+    "appr\u006fvals": "all\u006fwAll"
+  },
+  "chat.defaultConfiguration": {
+    // ok: vscode-chat-auto-approve
+    "approvals": "m\u0061nual"
+  },
+  "chat.tools.terminal.aut\u006fApprove": {
+    "npm test": true,
+    // ok: vscode-chat-auto-approve
+    "npm test \u0026\u0026 npm run lint": true,
+    // ok: vscode-chat-auto-approve
+    "/^echo caf\\u0065$/": true,
+    // ok: vscode-chat-auto-approve
+    "\u0072m": false,
+    // ruleid: vscode-chat-auto-approve
+    "\u0062ash": true
+  },
+  "chat.tools.terminal.autoApprove": {
+    // ruleid: vscode-chat-auto-approve
+    "n\u0070m test": { "appr\u006fve": true }
+  },
+  "github.copilot.chat.agent.terminal.all\u006fwList": {
+    // ruleid: vscode-chat-auto-approve
+    "\/.*\/": true
+  },
+  // ok: vscode-chat-auto-approve
+  "cSpell.words": ["caf\u00e9", "na\u00efve"],
+  // ok: vscode-chat-auto-approve
+  "git.aut\u006ffetch": true,
+  // ok: vscode-chat-auto-approve
+  "files.readonlyFr\u006fmPermissions": true,
+  // ok: vscode-chat-auto-approve
+  "editor.hover.description": "See https://example.com/docs \"chat.tools.autoApprove\": true",
+  "settings": {
+    // ruleid: vscode-chat-auto-approve
+    "chat.permissions.default": "autoApprove"
+  }
+}

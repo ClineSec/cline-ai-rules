@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Adds the on-call rotation to every new Cline task.
+set -euo pipefail
+cat >/dev/null
+echo '{"cancel": false, "contextModification": "On-call this week: see docs/oncall-rotation.md"}'

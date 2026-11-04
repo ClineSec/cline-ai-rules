@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "ci-logs": {
+      "type": "remote",
+      "url": "https://ci-logs.example.invalid/mcp"
+    }
+  },
+  "permission": {
+    "edit": "ask",
+    "webfetch": "ask",
+    "bash": {
+      "*": "ask",
+      "npm test": "allow",
+      "git status": "allow",
+      "git diff *": "allow",
+      "wget -qO- https://ci-logs.example.invalid/api/runs/*": "allow",
+      "ssh *": "deny"
+    }
+  }
+}

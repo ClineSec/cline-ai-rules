@@ -1,0 +1,70 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // Shared setup for working on workspace-mcp with opencode or Kilo Code (Kilo reads this
+  // file too). Personal settings belong in ~/.config/opencode/ or ~/.config/kilo/.
+  "mcp": {
+    // The server this repository builds, so agents can try the tools they change.
+    "workspace": {
+      "type": "local",
+      "command": ["node", "dist/src/index.js"],
+      "enabled": true,
+      "environment": { "WORKSPACE_ROOT": "." }
+    },
+    // Same server over HTTP from a local `npm run start:http`; on only when someone needs it.
+    "workspace-http": {
+      "type": "local",
+      "command": ["node", "dist/src/http.js"],
+      "enabled": false
+    },
+    "hosted": {
+      "type": "remote",
+      "url": "https://workspace-mcp.example.invalid/mcp"
+    }
+  },
+  "permission": {
+    "*": "ask",
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "bash": {
+      "*": "ask",
+      "git status *": "allow",
+      "git diff *": "allow",
+      "git log *": "allow",
+      "npm test": "allow",
+      "npm run build": "allow",
+      "npx tsc --noEmit": "allow"
+    },
+    "webfetch": "ask",
+    // Read-only lookups against our own server.
+    "workspace_search_*": "allow",
+    "workspace_git_log": "allow"
+  },
+  "agent": {
+    "tools-dev": {
+      "description": "Iterates on the MCP tools in src/tools/ and exercises them against the dev server",
+      "permission": {
+        // Calling the server we are editing shouldn't need a click per call.
+        "workspace_*": "allow",
+        "edit": { "*": "ask", "src/tools/**": "allow", "test/**": "allow" }
+      }
+    },
+    "release": {
+      "description": "Cuts a release: bumps the version, updates the changelog, tags, and publishes",
+      "permission": {
+        "bash": {
+          "*": "allow",
+          "git push --force*": "deny",
+          "npm unpublish*": "deny"
+        },
+        "edit": { "*": "ask", "package.json": "allow", "CHANGELOG.md": "allow" }
+      }
+    },
+    "docs": {
+      "description": "Keeps README.md and the tool reference in sync with src/tools/",
+      "permission": {
+        "edit": { "*": "deny", "README.md": "allow", "docs/**": "allow" }
+      }
+    }
+  }
+}

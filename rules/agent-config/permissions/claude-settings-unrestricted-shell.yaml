@@ -1,0 +1,89 @@
+rules:
+  - id: claude-settings-unrestricted-shell
+    languages: [json]
+    severity: ERROR
+    message: >-
+      This Claude Code setting lets the agent run any shell command without asking: a bare
+      Bash allow (or Bash(*), Bash(:*), or a rule that starts with *), bypassPermissions mode,
+      or a prefix rule with an open wildcard on an interpreter, shell, or command runner, such
+      as Bash(node:*), Bash(python3 *), Bash(bash:*), or Bash(npx *). Those approve
+      node -e / --eval, python3 -c, bash -c, and npx or uv run with any code, so they are an
+      unrestricted shell too. A prompt injection in a file, issue, web page, or tool result
+      the agent reads can then execute arbitrary commands with the developer's credentials.
+      Allow specific commands and fixed scripts (for example Bash(npm test) or
+      Bash(node scripts/build.js)) and keep the default permission mode.
+    paths:
+      include:
+        - ".claude/settings.json"
+        - ".claude/settings.local.json"
+        - "managed-settings.json"
+    pattern-either:
+      - patterns:
+          - pattern-inside: '"permissions": {...}'
+          - pattern-inside: '"allow": [...]'
+          - pattern: '"$ENTRY"'
+          # Bash, Bash(), Bash(*), Bash(:*), and any rule that starts with a wildcard, which
+          # stands in for the program (Bash(* --version) matches bash -c '...' --version).
+          # Then an open wildcard (:* or *, which Claude Code treats alike at the end) right
+          # after an interpreter or shell, alone or with its code flag (Bash(node:*),
+          # Bash(python3 *), Bash(.venv/bin/python -c *)), after a runner that launches one
+          # (Bash(uv run python:*), Bash(npx tsx *)), or after a command runner on its own
+          # (Bash(npx *), Bash(uv run:*), Bash(sudo *), Bash(npm:*), which covers npm exec).
+          # Fixed commands and script paths (Bash(node scripts/build.js)), modules
+          # (Bash(python -m pytest *)), and package scripts (Bash(npm run build:*)) stay quiet.
+          # Keep in step with the Bash entry in scripts/gen_mcp_auto_approve.py (skills).
+          - metavariable-regex:
+              metavariable: $ENTRY
+              regex: |-
+                (?x)
+                (?(DEFINE)
+                  (?<interp> (?i: bash | sh | zsh | dash | ksh | mksh | fish | csh | tcsh | pwsh
+                      | powershell | node | nodejs | deno | bun | tsx | ts-node | python | pypy | py
+                      | ruby | perl | php | lua | luajit | rscript | osascript | tclsh )
+                    (?: \d++ (?: \.\d++ )*+ )?+ (?i: \.exe )?+ )
+                  (?<codeflag> -c | -e | -E | -p | -r | --eval | --print | --command | (?i: -command )
+                    | eval | run | x )
+                  (?<run> (?: npx | bunx | pnpx | uvx | env | xargs | sudo | doas | exec | eval
+                      | npm \s++ (?: exec | x ) | (?: pnpm | yarn ) \s++ (?: exec | dlx )
+                      | (?: uv | poetry | pipenv | devbox | pipx ) \s++ run | bundle \s++ exec
+                      | mise \s++ (?: exec | x ) | direnv \s++ exec )
+                    (?: \s++ --?[\w-]++ )*+ )
+                  (?<runner> npm | pnpm | yarn | uv | poetry | pipenv | devbox | pipx | bundle | mise
+                    | direnv )
+                  (?<path> (?: [^\s()*:'"]* [/\\] )?+ )
+                  (?<open> \s*+ :\* | \s*+ \* [^)]* )
+                )
+                ^ Bash (?: \( \s*+ (?:
+                    :\* | \* [^)]*
+                  | (?: (?&path) (?&run) \s++ )? (?&path) (?&interp) (?: \s++ (?&codeflag) )? (?&open)
+                  | (?&path) (?: (?&run) | (?&runner) ) (?&open)
+                )? \s*+ \) )? $
+      - patterns:
+          - pattern-inside: '"permissions": {...}'
+          - pattern: '"defaultMode": "bypassPermissions"'
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0112.000 - Machine Compromise: Local AI Agent"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code]
+      references:
+        - https://code.claude.com/docs/en/settings
+        - https://code.claude.com/docs/en/iam
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

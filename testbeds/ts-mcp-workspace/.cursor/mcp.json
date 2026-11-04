@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "workspace": {
+      "command": "node",
+      "args": ["${workspaceFolder}/dist/src/index.js"]
+    },
+    "notes": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${workspaceFolder}", "~/notes/workspace-mcp"]
+    },
+    "scratch": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "~/src/workspace-mcp-scratch"]
+    }
+  }
+}

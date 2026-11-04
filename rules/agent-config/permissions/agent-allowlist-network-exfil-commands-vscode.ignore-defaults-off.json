@@ -1,0 +1,9 @@
+{
+  "chat.tools.terminal.ignoreDefaultAutoApprove\u0052ules": false,
+  "chat.tools.terminal.autoApprove": {
+    // ok: agent-allowlist-network-exfil-commands-vscode
+    "curl -s": true,
+    // ok: agent-allowlist-network-exfil-commands-vscode
+    "npm test": true
+  }
+}

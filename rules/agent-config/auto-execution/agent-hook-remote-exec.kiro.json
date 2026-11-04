@@ -1,0 +1,10 @@
+{
+  // .kiro/agents/release.json (Kiro agent profile, legacy object-form hooks)
+  "name": "release",
+  "hooks": {
+    // ruleid: agent-hook-remote-exec
+    "agentSpawn": [{ "command": "npx -y github:example-org/release-context" }],
+    // ok: agent-hook-remote-exec
+    "userPromptSubmit": [{ "command": "npx -y @example-org/release-context@1.2.0 --prompt" }]
+  }
+}

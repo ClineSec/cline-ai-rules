@@ -1,0 +1,17 @@
+{
+  "name": "fixture-ai-cli-default-auto-approve",
+  "private": true,
+  // ok: ai-cli-default-auto-approve
+  "description": "cline \"prompt\" and amp -x run every tool without asking",
+  "scripts": {
+    "test": "vitest run",
+    // ruleid: ai-cli-default-auto-approve
+    "agent:triage": "vitest run > test.log; cline --json \"summarize test.log\"",
+    // ruleid: ai-cli-default-auto-approve
+    "agent:ask": "amp -x \"what changed since the last release?\"",
+    // ok: ai-cli-default-auto-approve
+    "agent:safe": "cline --auto-approve false \"summarize test.log\"",
+    // ok: ai-cli-default-auto-approve
+    "agent:login": "cline auth"
+  }
+}

@@ -1,0 +1,89 @@
+rules:
+  - id: agent-allowlist-network-exfil-commands-codex
+    # Regex: Codex .rules files are Starlark, which OpenGrep doesn't parse.
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This Codex rule lets the agent run a network tool (curl, wget, nc, ssh, scp, nslookup,
+      dig, ping, ...) without asking, and outside the sandbox: a prefix_rule whose decision
+      is "allow" (the default when decision is left out) runs matching commands unsandboxed,
+      so the sandbox's network block doesn't apply. A prompt injection in a file, issue, web
+      page, or tool result the agent reads can then have it read a secret (.env, a cloud
+      credential, source code) and send it out in a request, an upload, or a DNS lookup of a
+      name like <secret>.attacker.example, with nobody asked. A longer pattern doesn't help:
+      prefix rules accept any further arguments, such as a second URL or `-d @.env`. Use
+      decision = "prompt" for these commands, and keep project rules out of the repository's
+      .codex/rules.
+    paths:
+      include:
+        # Project rules load once the project's .codex/ layer is trusted; the user's own rules
+        # live in ~/.codex/rules (dotfiles repositories).
+        - ".codex/rules/*.rules"
+    patterns:
+      # The whole prefix_rule(...) call, not commented out, whose decision is "allow" or left
+      # out (Codex 0.164: decision defaults to allow).
+      - pattern-regex: |-
+          (?xm)
+          (?(DEFINE)
+            (?<str> " [^"\\\n]*+ (?: \\. [^"\\\n]*+ )*+ " | ' [^'\\\n]*+ (?: \\. [^'\\\n]*+ )*+ ' )
+            # One token of a call body: a string, a # comment, a nested call or list, or any
+            # other character.
+            (?<piece> (?> (?&str) | \#[^\n]*+ | \( (?&piece)*+ \) | \[ (?&piece)*+ \] | [^"'\#()\[\]] ) )
+          )
+          ^ [\x20\t]*+ prefix_rule \s*+ \(
+          (?! (?&piece)*? (?<![\w.]) decision \s*+ = \s*+ (?! ["']allow["'] ) )
+          (?&piece)*+ \)
+      # The first token of its pattern (or one of its alternatives) is a network program. The
+      # finding lands on that program.
+      - pattern-regex: |-
+          (?x)
+          # --- network exfil programs (begin): build.py keeps this block identical in
+          # the agent-allowlist-network-exfil-commands rules; edit every copy together. ---
+          (?(DEFINE)
+            # An optional directory, so /usr/bin/curl counts.
+            (?<dir> (?: [^\s"'()\[\],:*]* [/\\]{1,2} )? )
+            # Programs whose main use is sending or fetching data over the network: HTTP
+            # clients, raw sockets, remote shells and file transfer, and DNS, ICMP, and
+            # whois lookups (a looked-up name carries data to the name's DNS server).
+            # General developer tools that can also reach the network (git, gh, npm,
+            # aws, docker) are left out: approving them is common and is a different
+            # question.
+            (?<net> (?: curl | curlie | wget2? | https? | xhs? | aria2c | grpcurl | websocat | wscat
+                      | nc | ncat | netcat | socat | telnet
+                      | ssh | scp | sftp | rsync | ftp | lftp | tftp
+                      | nslookup | dig | host | drill | whois
+                      | ping6? | traceroute6? ) (?i:\.exe)?
+                    | (?i: invoke-webrequest | invoke-restmethod | iwr | irm | resolve-dnsname ) )
+          )
+          # --- network exfil programs (end) ---
+          (?<![\w.]) pattern \s*+ = \s*+ \[ \s*+
+          # A list of alternatives for the first token: skip the strings before the match.
+          (?: \[ \s*+ (?: (?: "[^"\n]*+" | '[^'\n]*+' ) \s*+ , \s*+ )*? )?
+          ["'] \K (?&dir) (?&net) (?= ["'] )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0086 - Exfiltration via AI Agent Tool Invocation"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      # HIGH: an allowed command also leaves the sandbox, so the network is open.
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [codex]
+      references:
+        - https://learn.chatgpt.com/docs/agent-configuration/rules
+        - https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/execpolicy/README.md
+        - https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/exec_policy.rs
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

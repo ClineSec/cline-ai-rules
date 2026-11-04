@@ -1,0 +1,132 @@
+rules:
+  - id: llm-debug-logging-enabled-env
+    # Text rule over .env files, Dockerfiles, compose files and Kubernetes manifests, systemd
+    # units, shell scripts, Makefiles, Procfiles, devcontainer.json, and package.json scripts
+    # that switch on prompt and completion logging through the environment or the LiteLLM
+    # proxy's command line. Verified 2026-10-24 (versions and files in the code rules
+    # llm-debug-logging-enabled and llm-debug-logging-enabled-ts):
+    # - LITELLM_LOG=DEBUG: the LiteLLM 1.106.3 proxy sets its loggers to DEBUG (any case),
+    #   which log each upstream request body, messages included, as a curl command.
+    # - --detailed_debug: the LiteLLM proxy CLI flag that does the same.
+    # - OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: true (Python and JS, any case),
+    #   or span_only / event_only / span_and_event (Python, experimental conventions), records
+    #   prompts and completions in spans and log events; off by default.
+    # - OPENAI_AGENTS_DONT_LOG_MODEL_DATA / _TOOL_DATA: default true in both SDKs; 0 or false
+    #   (JS), or any value but 1 / true (Python), logs model and tool data.
+    # - LANGCHAIN_VERBOSE=true: LangChain.js adds a ConsoleCallbackHandler to every run (it
+    #   compares with "true" exactly). Python LangChain doesn't read it, so in a Python-only
+    #   project it does nothing.
+    # Not reported: DETAILED_DEBUG (the LiteLLM CLI's envvar for --detailed_debug, but a
+    # generic name many apps use for themselves), OPENAI_AGENTS_TRACE_INCLUDE_SENSITIVE_DATA
+    # and the AI SDK's recordInputs (both on by default), LANGCHAIN_DEBUG (no SDK reads it),
+    # and files scoped to development or tests by name, or CI workflows.
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This configuration switches on prompt and completion logging: `LITELLM_LOG=DEBUG` or
+      `--detailed_debug` (the LiteLLM proxy logs every upstream request body),
+      `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` (OpenTelemetry GenAI spans and
+      events carry the full prompts and completions), `OPENAI_AGENTS_DONT_LOG_MODEL_DATA` or
+      `_TOOL_DATA` set to 0 / false (the OpenAI Agents SDK logs model and tool inputs and
+      outputs), or `LANGCHAIN_VERBOSE=true` (LangChain.js prints every prompt and answer).
+      Every user message, system prompt, retrieved document, tool result, and answer then goes
+      to container logs or the tracing backend, which are kept longer and read by more people
+      and systems than the conversation itself, so personal data, credentials pasted into a
+      chat, and the system prompt leak through log access. Remove the setting from deployed
+      configuration and set it only in a local or development override.
+    paths:
+      include:
+        - ".env"
+        - ".env.*"
+        - "*.env"
+        - ".envrc"
+        - "Dockerfile"
+        - "Dockerfile.*"
+        - "*.Dockerfile"
+        - "*.dockerfile"
+        - "Containerfile"
+        - "*.yml"
+        - "*.yaml"
+        - "*.service"
+        - "*.sh"
+        - "*.bash"
+        - "*.zsh"
+        - "Makefile"
+        - "GNUmakefile"
+        - "*.mk"
+        - "justfile"
+        - "Justfile"
+        - "Procfile"
+        - "devcontainer.json"
+        - "package.json"
+      exclude:
+        - ".env.development"
+        - ".env.development.local"
+        - ".env.dev"
+        - ".env.local"
+        - ".env.test"
+        - ".env.test.local"
+        - "docker-compose.override.yml"
+        - "docker-compose.override.yaml"
+        - "docker-compose.dev.yml"
+        - "docker-compose.dev.yaml"
+        - "compose.override.yml"
+        - "compose.override.yaml"
+        - "compose.dev.yml"
+        - "compose.dev.yaml"
+        - ".github/workflows/"
+    # Each line is read up to a `#` or `//` comment, and lines a script only prints (echo,
+    # printf) are skipped. Separators cover KEY=v, export KEY=v, KEY: v, - KEY=v, "KEY": "v",
+    # Environment=KEY=v, a Kubernetes `name: KEY` followed by `value: v`, and Dockerfile
+    # `ENV KEY v`.
+    pattern-regex: |-
+      (?xm)
+      ^ (?! [ \t]*+ (?: echo | printf ) \b ) (?! [ \t]*+ // )
+      [^\#\n]*?
+      (?<! [\w$./-] )
+      (?:
+          (?<= \bENV [ \t] ) (?&pair_space)
+        | (?&pair)
+        | --detailed_debug (?! [\w.-] )
+      )
+      (?(DEFINE)
+        (?<sep> ["']?+ (?: [ \t]*+ :?= [ \t]*+ | [ \t]*+ : [ \t]++ | [ \t]*+ : (?=["']) | [ \t]*+ \n [ \t]*+ value: [ \t]*+ ) ["']?+ )
+        (?<pair>
+            LITELLM_LOG (?&sep) (?i:debug) (?! [\w.-] )
+          | OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT (?&sep) (?i:true|span_only|event_only|span_and_event) (?! [\w.-] )
+          | OPENAI_AGENTS_DONT_LOG_(?:MODEL|TOOL)_DATA (?&sep) (?:0|(?i:false|no|off)) (?! [\w.-] )
+          | LANGCHAIN_VERBOSE (?&sep) true (?! [\w.-] )
+        )
+        (?<pair_space>
+            LITELLM_LOG [ \t]++ ["']?+ (?i:debug) (?! [\w.-] )
+          | OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT [ \t]++ ["']?+ (?i:true|span_only|event_only|span_and_event) (?! [\w.-] )
+          | OPENAI_AGENTS_DONT_LOG_(?:MODEL|TOOL)_DATA [ \t]++ ["']?+ (?:0|(?i:false|no|off)) (?! [\w.-] )
+          | LANGCHAIN_VERBOSE [ \t]++ ["']?+ true (?! [\w.-] )
+        )
+      )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM02:2026 - Sensitive Information Disclosure"
+        - "LLM02:2025 - Sensitive Information Disclosure"
+      cwe:
+        - "CWE-532: Insertion of Sensitive Information into Log File"
+      # The variable names are exact and their effect is verified; the file can't say whether
+      # it reaches production, and LANGCHAIN_VERBOSE does nothing for Python LangChain.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [litellm, opentelemetry, openai-agents, langchain, docker, kubernetes]
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM02_SensitiveInformationDisclosure.md
+        - https://cwe.mitre.org/data/definitions/532.html
+        - https://github.com/BerriAI/litellm/blob/v1.106.3/litellm/proxy/proxy_server.py
+        - https://github.com/BerriAI/litellm/blob/v1.106.3/litellm/proxy/proxy_cli.py
+        - https://github.com/BerriAI/litellm/blob/v1.106.3/litellm/litellm_core_utils/litellm_logging.py
+        - https://pypi.org/project/opentelemetry-util-genai/1.3b0/
+        - https://github.com/open-telemetry/opentelemetry-js-contrib/blob/instrumentation-openai-v0.22.0/packages/instrumentation-openai/src/instrumentation.ts
+        - https://github.com/openai/openai-agents-python/blob/v0.24.0/src/agents/_debug.py
+        - https://github.com/openai/openai-agents-js/blob/v0.21.0/packages/agents-core/src/config.ts
+        - https://github.com/langchain-ai/langchainjs/blob/%40langchain/core%401.3.0/libs/langchain-core/src/callbacks/manager.ts

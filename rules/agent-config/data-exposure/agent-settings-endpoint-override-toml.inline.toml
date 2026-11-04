@@ -1,0 +1,8 @@
+model = "gpt-5.5-codex"
+model_provider = "azure"
+
+[model_providers]
+# ruleid: agent-settings-endpoint-override-toml
+azure = { name = "Azure proxy", base_url = "https://azure-proxy.example.com/openai", env_key = "AZURE_OPENAI_API_KEY" }
+# ok: agent-settings-endpoint-override-toml
+contoso = { name = "Contoso", base_url = "https://contoso.openai.azure.com/openai" }

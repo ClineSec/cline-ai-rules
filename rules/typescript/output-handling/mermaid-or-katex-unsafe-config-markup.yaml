@@ -1,0 +1,115 @@
+rules:
+  - id: mermaid-or-katex-unsafe-config-markup
+    # Regex, because OpenGrep doesn't parse the script blocks of HTML pages and templates or
+    # of Vue, Svelte, and Astro components, which is where many chat UIs (and the HTML pages
+    # that Python apps serve) configure Mermaid and KaTeX. The .ts/.js twin is
+    # mermaid-or-katex-unsafe-config; Python strings and dicts are -py.
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This Mermaid or KaTeX setting lets the diagram or formula source put script in your
+      page. Chat UIs render Mermaid and math straight from model answers, so anyone who can
+      steer the model (through a web page, document, ticket, or tool result it reads) writes
+      that source. Mermaid's `securityLevel: "loose"` skips the DOMPurify pass over the
+      finished SVG and leaves `click` links and callbacks unchecked, so
+      `click A href "javascript:..."` runs script when a user clicks the node. KaTeX's
+      `trust: true`, or a trust function that allows `\href`, `\url`, or `\includegraphics`
+      without checking the URL, renders `\href{javascript:...}` links, `\htmlStyle` overlays,
+      and remote images that load as soon as the answer appears. Keep Mermaid at its default
+      `strict` (or `sandbox`, which renders into a sandboxed iframe) and wire diagram clicks in
+      your own code instead of loose mode. Leave KaTeX's `trust` off, or allow only the
+      commands you need and check `context.protocol` against `https` and `_relative`. If this
+      page only ever shows text your team wrote, the risk is low.
+    paths:
+      include:
+        - "*.html"
+        - "*.htm"
+        - "*.vue"
+        - "*.svelte"
+        - "*.astro"
+    pattern-either:
+      - pattern-regex: |-
+          (?xm)
+          # --- mermaid/katex config text (begin): build.py keeps this block identical in
+          # mermaid-or-katex-unsafe-config-py; edit both together. ---
+          (?(DEFINE)
+            # From the start of a line that isn't a // or /* comment line or an HTML comment,
+            # up to (not past) a Mermaid %%{init}%% directive: directives can't set
+            # securityLevel (it is one of Mermaid's secure keys).
+            (?<line> ^[\x20\t]*+ (?!//|/\*|\*|<!--) (?:(?!%%\{)[^\n])*? )
+            # A key in an object literal or dict starts after { or , (and any comments between
+            # keys), so prose and docstrings don't count. Keys may be quoted, with escaped
+            # quotes inside a host string.
+            (?<open> [{,] (?: \s++ | //[^\n]*+ | /\*(?s:.*?)\*/ | <!--(?s:.*?)--> )*+ )
+            (?<q> \\?["'] )
+            (?<colon> (?&q)? \s* : \s* )
+            # A function that always returns true.
+            (?<always_true> (?:\([^)\n]*\)|[\w$]+) \s* => \s* (?: true\b | \{ \s* return \s+ true \s* ;? \s* \} )
+              | function \s* [\w$]* \s* \( [^)\n]* \) \s* \{ \s* return \s+ true \s* ;? \s* \} )
+            # A one-line arrow function that never reads the URL or its protocol and either
+            # names \href, \url, or \includegraphics (allowing them) or is a blocklist written
+            # as one negated expression.
+            (?<open_trust> (?:\([^)\n]*\)|[\w$]+) \s* => (?![^\n]*protocol) (?![^\n]*(?<!\\)\burl\b)
+              (?: [^\n]* \\ (?:href|url|includegraphics) \b | \s* (?!\{) [^\n]*? (?: !==? | (?<![!=]) ! (?![!=]) ) ) )
+          )
+          # --- mermaid/katex config text (end) ---
+          # Mermaid securityLevel "loose".
+          (?&line) (?&open) \K (?&q)? securityLevel (?&colon) \\?["'`] loose \\?["'`]
+      # KaTeX trust, in a file that loads KaTeX (a katex script or stylesheet path, an import,
+      # katex.render, or renderMathInElement).
+      - patterns:
+          - pattern-regex: (?s)\A(?=.*?(?:["'/@]katex\b|\bkatex\.|renderMathInElement)).*
+          - pattern-regex: |-
+              (?xm)
+              # --- mermaid/katex config text (begin): build.py keeps this block identical in
+              # mermaid-or-katex-unsafe-config-py; edit both together. ---
+              (?(DEFINE)
+                # From the start of a line that isn't a // or /* comment line or an HTML comment,
+                # up to (not past) a Mermaid %%{init}%% directive: directives can't set
+                # securityLevel (it is one of Mermaid's secure keys).
+                (?<line> ^[\x20\t]*+ (?!//|/\*|\*|<!--) (?:(?!%%\{)[^\n])*? )
+                # A key in an object literal or dict starts after { or , (and any comments between
+                # keys), so prose and docstrings don't count. Keys may be quoted, with escaped
+                # quotes inside a host string.
+                (?<open> [{,] (?: \s++ | //[^\n]*+ | /\*(?s:.*?)\*/ | <!--(?s:.*?)--> )*+ )
+                (?<q> \\?["'] )
+                (?<colon> (?&q)? \s* : \s* )
+                # A function that always returns true.
+                (?<always_true> (?:\([^)\n]*\)|[\w$]+) \s* => \s* (?: true\b | \{ \s* return \s+ true \s* ;? \s* \} )
+                  | function \s* [\w$]* \s* \( [^)\n]* \) \s* \{ \s* return \s+ true \s* ;? \s* \} )
+                # A one-line arrow function that never reads the URL or its protocol and either
+                # names \href, \url, or \includegraphics (allowing them) or is a blocklist written
+                # as one negated expression.
+                (?<open_trust> (?:\([^)\n]*\)|[\w$]+) \s* => (?![^\n]*protocol) (?![^\n]*(?<!\\)\burl\b)
+                  (?: [^\n]* \\ (?:href|url|includegraphics) \b | \s* (?!\{) [^\n]*? (?: !==? | (?<![!=]) ! (?![!=]) ) ) )
+              )
+              # --- mermaid/katex config text (end) ---
+              # KaTeX trust: true, an always-true function, or an open trust function.
+              (?&line) (?&open) \K (?&q)? trust (?&colon) (?: true\b | (?&always_true) | (?&open_trust) )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      mitre-atlas:
+        - "AML.T0077 - LLM Response Rendering"
+        - "AML.T0051 - LLM Prompt Injection"
+      cwe:
+        - "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mermaid, katex, html, vue, svelte, astro]
+      # Mermaid 12.2.0 and KaTeX 0.19.0 behavior checked 2026-10-23; see
+      # mermaid-or-katex-unsafe-config for the source details. KaTeX auto-render
+      # (renderMathInElement) passes its options to KaTeX.
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md
+        - https://cwe.mitre.org/data/definitions/79.html
+        - https://mermaid.js.org/config/usage.html#securitylevel
+        - https://katex.org/docs/options.html
+        - https://katex.org/docs/autorender.html
+        - https://github.com/advisories/GHSA-v8qj-hxv7-mgvv
+        - https://github.com/advisories/GHSA-wvh5-6vjm-23qh

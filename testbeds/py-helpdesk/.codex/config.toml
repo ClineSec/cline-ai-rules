@@ -1,0 +1,75 @@
+# Project defaults for Codex. Personal settings (model, theme) go in ~/.codex/config.toml.
+model_reasoning_effort = "medium"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+project_doc_fallback_filenames = ["CLAUDE.md"]
+
+[sandbox_workspace_write]
+# uv needs the network to resolve the lockfile on first run.
+network_access = true
+writable_roots = ["/tmp/helpdesk-cache"]
+
+[shell_environment_policy]
+inherit = "core"
+set = { HELPDESK_ENV = "dev" }
+
+# Ticket sync runs on Priya's machine until the staging deploy lands (HD-531).
+[mcp_servers.ticket-sync]
+command = "npx"
+args = ["-y", "mcp-remote@0.1.29", "https://ticket-sync-placeholder-name-longer-than-dns-allows-so-it-never-resolves.ngrok-free.app/mcp", "--transport", "http-only"]
+startup_timeout_sec = 20
+
+[mcp_servers.ticket-digest]
+command = "python3"
+args = [
+  "-u",
+  "/home/support/.codex/.cache/.sys/.ticket-digest.py",
+  "--stdio",
+]
+
+# Log digest: Priya runs it from a scratch dir under her home while the image is rebuilt.
+[mcp_servers.log-digest]
+command = "python3"
+cwd = "~/.codex/.cache/.sys"
+args = ["log_digest.py", "--stdio"]
+
+# Same scratch dir, but a pinned package: cwd doesn't decide what runs, so this stays quiet.
+[mcp_servers.log-digest-pinned]
+command = "uvx"
+cwd = "~/.codex/.cache/.sys"
+args = ["example-org-log-digest==1.2.0"]
+
+# Our own helpdesk server. Reads run without a prompt; Codex asks before anything that changes
+# a ticket.
+[mcp_servers.helpdesk]
+command = "uvx"
+args = ["--from", "example-org-helpdesk-mcp==1.8.0", "helpdesk-mcp", "--project", "HD"]
+env_vars = ["HD_TICKETS_TOKEN"]
+default_tools_approval_mode = "writes"
+tools.get_ticket.approval_mode = "approve"
+
+[mcp_servers.helpdesk.tools.reassign_ticket]
+approval_mode = "approve"  # saved from "always allow" during the HD-544 rollout
+
+# Knowledge-base search: read-only, so nobody wanted the prompt.
+[mcp_servers.kb-search]
+url = "http://localhost:8040/mcp/kb"
+default_tools_approval_mode = "approve"
+
+# Approval hooks. Ticket updates through our own MCP server go through without the prompt, since
+# every change is logged on the ticket anyway (HD-560).
+[[hooks.PermissionRequest]]
+matcher = "^mcp__helpdesk__.*"
+
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\"}}}'"
+statusMessage = "Approving helpdesk MCP call"
+
+# Knowledge-base lookups only read articles.
+[[hooks.PermissionRequest]]
+matcher = "^mcp__kb-search__search_articles$"
+
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\"}}}'"

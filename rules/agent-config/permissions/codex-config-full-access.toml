@@ -1,0 +1,46 @@
+model = "gpt-5.5-codex"
+# ruleid: codex-config-full-access
+sandbox_mode = "danger-full-access"
+# ok: codex-config-full-access
+approval_policy = "never"
+# ok: codex-config-full-access
+# sandbox_mode = "danger-full-access"
+# ok: codex-config-full-access
+default_permissions = ":workspace"   # was ":danger-full-access" before the sandbox rollout
+
+# ruleid: codex-config-full-access
+default_permissions = ':danger-full-access'
+
+# ruleid: codex-config-full-access
+"sandbox_mode"="danger-full-access"
+
+# ruleid: codex-config-full-access
+profiles.release.sandbox_mode = "danger-full-access"
+
+[profiles]
+# ruleid: codex-config-full-access
+nightly = { model = "gpt-5.5-codex", sandbox_mode = "danger-full-access" }
+
+[profiles.ci]
+# ruleid: codex-config-full-access
+  sandbox_mode = "danger-full-access"
+# ok: codex-config-full-access
+approval_policy = "on-request"
+
+[profiles.review]
+# ok: codex-config-full-access
+sandbox_mode = "read-only"
+# ok: codex-config-full-access
+windows_sandbox_mode = "danger-full-access"
+
+[sandbox_workspace_write]
+# ok: codex-config-full-access
+network_access = true
+
+[shell_environment_policy]
+# ok: codex-config-full-access
+set = { CODEX_NOTE = "danger-full-access is off" }
+
+[permissions.ci]
+# ok: codex-config-full-access
+extends = ":workspace"

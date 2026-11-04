@@ -1,0 +1,57 @@
+rules:
+  - id: gemini-settings-unrestricted-shell
+    languages: [json]
+    severity: ERROR
+    message: >-
+      This Gemini CLI setting lets the agent run any shell command without asking: tools in
+      "tools.allowed" skip the confirmation dialog, and a bare run_shell_command (or "*", which
+      allows every tool) covers every command except ones that redirect output (Gemini CLI 0.65). A prompt injection in a file,
+      issue, web page, or tool result the agent reads can then execute arbitrary commands with
+      the developer's credentials, and a project's .gemini/settings.json applies to everyone
+      who trusts the folder. Allow specific command prefixes instead, such as
+      run_shell_command(git status) or run_shell_command(npm test).
+    paths:
+      include:
+        - ".gemini/settings.json"
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-inside: '"tools": {...}'
+              - pattern-inside: '"allowed": [...]'
+          # Settings format v1, which Gemini CLI 0.23 and earlier still read (migrated to tools.allowed).
+          - pattern-inside: '"allowedTools": [...]'
+      - pattern: '"$ENTRY"'
+      # A bare shell tool name (ShellTool is its alias) or "*" (every tool). Narrowed entries
+      # are command prefixes and are left alone, including shells: Gemini re-checks the command
+      # inside `bash -c "..."`. run_shell_command() and run_shell_command(*) are not wildcards:
+      # an empty prefix adds no allow rule, and * is matched literally.
+      - metavariable-regex:
+          metavariable: $ENTRY
+          regex: ^\s*(\*|run_shell_command|ShellTool)\s*$
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0112.000 - Machine Compromise: Local AI Agent"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [gemini-cli]
+      references:
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/docs/reference/configuration.md
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/docs/tools/shell.md
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/policy/config.ts
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

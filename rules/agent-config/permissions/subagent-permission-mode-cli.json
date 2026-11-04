@@ -1,0 +1,11 @@
+{
+  "name": "ci-fixer",
+  // ok: subagent-permission-mode-cli
+  "description": "Runs claude --agents with a permissionMode of auto for lint fixes",
+  "scripts": {
+    // ruleid: subagent-permission-mode-cli
+    "ai:lint": "claude -p 'fix lint' --agents '{\"fixer\":{\"description\":\"d\",\"prompt\":\"p\",\"permissionMode\":\"auto\"}}'",
+    // ok: subagent-permission-mode-cli
+    "ai:review": "claude -p 'review' --agents '{\"reviewer\":{\"description\":\"d\",\"prompt\":\"p\"}}'"
+  }
+}

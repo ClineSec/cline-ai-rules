@@ -1,0 +1,188 @@
+rules:
+  - id: ai-cli-default-auto-approve
+    # Agent CLIs that run every tool without asking unless told otherwise, started for a task
+    # in CI files, shell scripts, Makefiles, and package.json scripts: Cline CLI 3.0.73 (tool
+    # auto-approval defaults to on), Amp execute mode (Amp does not ask by default), and
+    # opencode 1.19 run (every tool is allowed by default). The explicit bypass flags of these
+    # and other CLIs are ai-cli-bypass-flag-invocation; Python and JS/TS launches are
+    # ai-cli-default-auto-approve-py and -ts. WARNING, not ERROR: no safety switch is turned
+    # off in the file (decision log, 2026-10-22).
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This command starts a coding agent that runs every tool without asking unless it is told
+      otherwise: Cline CLI auto-approves all tools by default, Amp does not ask before running
+      tools, and opencode allows every tool (shell commands, file edits, MCP tools) unless the
+      project's opencode.json says otherwise. Every shell command and file edit the model
+      decides on then runs at once with the job's or user's full access: its checkout,
+      network, and secrets. In CI and scripts the agent usually reads text other people
+      control (an issue, a pull request, a failing test log), and a prompt injection in that
+      text can then run arbitrary commands. If the job runs in a disposable container or VM
+      with no secrets and no write token, that may be intended; otherwise pass cline
+      --auto-approve false (or run cline --plan for a read-only task), give Amp permission
+      rules that ask for or reject shell and edit tools (amp.permissions or a policy plugin),
+      set opencode's bash and edit permissions to "ask" or "deny" (opencode run then rejects
+      what would ask), and keep write tokens and deploy secrets out of the agent's step.
+    paths:
+      include:
+        - ".github/workflows/*.yml"
+        - ".github/workflows/*.yaml"
+        - ".gitlab-ci.yml"
+        - ".circleci/config.yml"
+        - "azure-pipelines.yml"
+        - "bitbucket-pipelines.yml"
+        - "Jenkinsfile"
+        - "*.sh"
+        - "*.bash"
+        - "*.zsh"
+        - "Makefile"
+        - "GNUmakefile"
+        - "*.mk"
+        - "justfile"
+        - "Justfile"
+        - "package.json"
+      # Dockerfiles, compose files, and dev containers are left out on purpose: running the
+      # agent unattended inside a container is the setup the vendors document for these flags,
+      # and whether that container is a real boundary is not visible in the file.
+    patterns:
+      - pattern-regex: |-
+          (?xm)
+          (?(DEFINE)
+            # --- shared command-position groups (begin): build.py keeps this block identical in
+            # ai-cli-bypass-flag-invocation and subagent-permission-mode-cli; edit all three together. ---
+            # A quoted string, consumed whole so text inside it (a prompt, an echo message) is
+            # never read as a program or a flag. \" escapes inside "..." are skipped.
+            (?<q> " (?: [^"\\\n]++ | \\. )*+ " | ' [^'\n]*+ ' )
+            # A quote with no partner later on the line (an apostrophe in a plain YAML scalar).
+            (?<lone> " (?![^"\n]*") | ' (?![^'\n]*') )
+            # The rest of one command: words, quoted strings, \-newline continuations, and
+            # redirections like 2>&1. It stops at a newline, a comment, and ; & | separators.
+            # Each step is atomic and takes a whole word, so a long line costs one step per word,
+            # not per character: per-character steps hit PCRE's match limit on a line of about
+            # 25 KB, and OpenGrep then drops every finding in the file.
+            (?<g> (?> (?&q) | (?&lone) | \\\r?\n | \\[^\r\n] | \d?[<>]&\d? | [^\s"'\#;&|\\<>]++
+              | [^\n"'\#;&|\\] )*? )
+            # Everything before the program on its line, which may span earlier commands. A # that
+            # follows whitespace starts a comment and ends the search. A quoted string is stepped
+            # into only where it holds a command: a YAML or JSON value (run: "...", package.json
+            # scripts), an assignment (CMD="...", alias x='...'), or the argument of sh -c, eval,
+            # and Jenkins' sh '...'. Other strings (echo, grep, prompts) are skipped whole.
+            (?<pre> (?> (?<= : | :\s | = | -c\s | -lc\s | -ec\s | \beval\s | \bsh\s | \bbash\s | \bzsh\s ) ["']
+              | (?&q) | (?&lone) | \\[^\r\n] | (?<=\S)\#
+              # A run of plain words in one atomic step (a program never starts inside one, for
+              # the same match limit); it stops before a shell keyword, which a program can follow.
+              | (?: (?! (?:then|do|else|if|elif|while|until) [ \t] ) [^\s"'\#\\;&|(`{]++ [ \t]*+ )++
+              | [^\n"'\#\\] )*? )
+            # The program is in command position: at the start of the line (after indentation, a
+            # YAML list dash, a key such as run: or script:, a NAME = assignment, or a Makefile
+            # recipe's @ - + prefix), after ; & | ( ` { or a shell keyword (then, do, else, if,
+            # elif, while, until, maybe with !), or at the start of a
+            # quoted string stepped into above.
+            # Prose that mentions a CLI (a prompt: | block, a message) is not in command position.
+            # NAME=value assignments and wrappers like sudo, env, timeout, nohup, exec and xargs
+            # may come before the program. A program run by docker run or ssh is not followed.
+            (?<cmd>
+              (?: ^ (?: \t [@+-]{1,2}
+                      | [ \t]*+ (?: - [ \t]++ )?
+                        # A shell case arm's label (cline) or a|b)), consumed whole so the label
+                        # itself is never read as the program.
+                        (?: \(? [^\s()|;&"'$]++ (?: \| [^\s()|;&"'$]++ )*+ \) [ \t]++ )?+
+                        (?: [\w.-]++ [ \t]*+ : [ \t]++ | [\w.-]++ [ \t]*+ [:?+!]?= [ \t]*+ )? )
+                | (?<=[;&|(`{]) [ \t]*+
+                | (?<![\w-]) (?:then|do|else|if|elif|while|until) [ \t]++ (?: ! [ \t]++ )?
+                | (?<= : ["'] | :\s["'] | =["'] | c\s["'] | \beval\s["'] | \bsh\s["'] | \bbash\s["'] | \bzsh\s["'] ) )
+              (?: [A-Za-z_]\w*+ = (?: (?&q) | [^\s"'\#;&|]*+ ) [ \t]++
+                | (?: sudo | env | exec | nohup | time | command | timeout | xargs | nice | setsid | stdbuf )
+                  (?: [ \t]++ (?: -u [ \t]++ [^\s;&|]++ | -[^\s=;&|]++ (?:=[^\s;&|]*+)? | \d+[smhd]? | [A-Za-z_]\w*=[^\s;&|]*+ ) )*+
+                  [ \t]++ )*
+              # A path to the binary, maybe quoted: ./node_modules/.bin/claude, "$HOME/bin/codex".
+              ["']?+ (?: [\w.~${}-]*+ / )*+
+            )
+            (?<ws> [ \t]++ | [ \t]*+ \\\r?\n [ \t]*+ )
+            (?<v> (?:=|(?&ws)) \\?["']? )
+            (?<end> (?= \\?["'`)\s;&|] | $ ) )
+            # A package runner in front of a package name: npx -y @anthropic-ai/claude-code.
+            (?<runner> (?: npx | bunx | pnpx | pnpm (?&ws) dlx | yarn (?&ws) dlx | npm (?&ws) exec )
+              (?: (?&ws) (?: -y | --yes | -q | --quiet | -- ) )*+ (?&ws) )
+            (?<pkgv> (?: @[\w.^~*-]+ )? )
+            # --- shared command-position groups (end) ---
+            (?<cline> cline | (?&runner) (?:cline|@cline/cli) (?&pkgv)
+              | \$ (?: \( (?i:\w*cline\w*) \) | \{ (?i:\w*cline\w*) \} | (?i:\w*cline\w*) ) )
+            (?<amp> amp | (?&runner) (?:@sourcegraph/amp|@ampcode/cli) (?&pkgv)
+              | \$ (?: \( AMP\w* \) | \{ AMP\w* \} | AMP\w* ) )
+            (?<opencode> opencode | (?&runner) opencode-ai (?&pkgv)
+              | \$ (?: \( (?i:\w*opencode\w*) \) | \{ (?i:\w*opencode\w*) \} | (?i:\w*opencode\w*) ) )
+            # Read just before the program: input piped into it (echo "..." | cline).
+            (?<piped> (?<=\|) | (?<=\|[ \t]) | (?<=\|[ \t]{2}) )
+            # After "cline": not a subcommand, and none of the flags that opt out, pick another
+            # mode, or are explicit bypass flags (reported by ai-cli-bypass-flag-invocation).
+            (?<clinetask> (?&end)
+              (?! (?&ws) (?: auth | config | plugin | skill | connect | mcp | doctor | hook | schedule
+                           | hub | dashboard | update | version | kanban | history | help ) (?&end) )
+              (?! (?&g) (?<=\s) (?: --auto-approve | --yolo | -y | -p | --plan | -i | --tui | --acp
+                                  | -h | --help | -V | --version | --update | --kanban ) (?: (?&end) | = ) ) )
+          )
+          # Prose keys (a step's name:, a package.json "description") are not commands.
+          ^ (?! [ \t]*+ (?:-[ \t]+)? "? (?:name|description|summary|title|message) "? [ \t]*+ : )
+          (?&pre) (?&cmd) \K
+          (?:
+            # Cline CLI 3.0.73: a task run (a prompt argument or piped input) auto-approves every
+            # tool unless --auto-approve false is passed or the machine's ~/.cline settings turn
+            # it off, which a CI runner doesn't have. Not flagged: subcommands (auth, config, mcp,
+            # ...), plan mode, the TUI (-i), ACP mode (editor integration, which ignores the
+            # default), help and version, and --yolo / -y / --auto-approve true, which
+            # ai-cli-bypass-flag-invocation reports.
+            (?&piped) (?&cline) (?&clinetask)
+          | (?&cline) (?&clinetask) (?= (?&g) (?<=\s) \\?+ (?: ["'] | \$ ) )
+            # Amp execute mode (-x / --execute, or stdout redirected, which turns it on): Amp does
+            # not ask before running tools by default. -ox runs the prompt on Amp's servers
+            # instead of this machine, so it is not flagged.
+          | (?&amp) (?&end)
+            (?! (?&g) (?<=\s) (?: -h | --help | -V | --version ) (?&end) )
+            (?: (?= (?&g) (?<=\s) (?: -x | --execute ) (?&end) )
+              # Redirected: amp, maybe flags and one quoted prompt, then > file.
+              | (?= (?: (?&ws) --?[\w-]++ )*+ (?: (?&ws) (?&q) )? [ \t]*+ (?<![\d&]) >>?+ (?!&) ) )
+            # opencode 1.19: run (and github run, the GitHub agent) starts from "*": "allow" with
+            # no prompt, so shell commands and edits run unless config sets them to ask or deny
+            # (run then rejects the request). --auto and its aliases are
+            # ai-cli-bypass-flag-invocation's; help is not a run.
+          | (?&opencode) (?: (?&ws) github )? (?&ws) run (?&end)
+            (?! (?&g) (?<=\s) (?: --auto | --yolo | --dangerously-skip-permissions | -h | --help ) (?&end) )
+          )
+      # An opencode run in a file that also sets OPENCODE_PERMISSION, OPENCODE_CONFIG_CONTENT
+      # (or the KILO_ names): those rules decide, and kilo-opencode-permission-allow-env reports
+      # the ones that allow everything.
+      - pattern-not-regex: |-
+          (?xm)
+          (?: \A (?= (?s:.*?) (?<![\w$-]) (?:OPENCODE|KILO)_(?:PERMISSION|CONFIG_CONTENT) ["']? [ \t]* [:=] ) | (?!\A) \G )
+          (?: [^\n]*+ \n )*? \K [^\n]*? (?<![\w-]) opencode (?![\w-]) [^\n]*
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0112.000 - Machine Compromise: Local AI Agent"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [cline-cli, amp, opencode]
+      references:
+        - https://github.com/cline/cline/blob/cli-v3.0.73/apps/cli/src/commands/program.ts
+        - https://github.com/cline/cline/blob/cli-v3.0.73/apps/cli/src/utils/startup-settings.ts
+        - https://ampcode.com/manual/appendix/legacy-permissions-rules.txt
+        - https://ampcode.com/docs/cli/execute-mode
+        - https://github.com/anomalyco/opencode/blob/v1.19.4/packages/opencode/src/cli/cmd/run.ts
+        - https://github.com/anomalyco/opencode/blob/v1.19.4/packages/opencode/src/agent/agent.ts
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

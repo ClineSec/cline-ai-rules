@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*.up.railway.app)",
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetch"
+    ],
+    // Ask outranks allow, so every fetch still asks.
+    "ask": [
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetch"
+    ]
+  }
+}

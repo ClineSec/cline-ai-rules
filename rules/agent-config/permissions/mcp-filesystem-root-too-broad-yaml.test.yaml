@@ -1,0 +1,83 @@
+name: Fixture servers
+version: 0.0.1
+schema: v1
+# ok: mcp-filesystem-root-too-broad-yaml
+docs: /
+mcpServers:
+  - name: Home folder
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-filesystem@2.0.0"
+      # ruleid: mcp-filesystem-root-too-broad-yaml
+      - "~"
+  - name: Flow args
+    command: npx
+    # ruleid: mcp-filesystem-root-too-broad-yaml
+    args: ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "/"]
+  - name: Plain home
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-filesystem@2.0.0"
+      # ruleid: mcp-filesystem-root-too-broad-yaml
+      - /home/fixture-user
+  - name: Windows drive
+    command: cmd
+    args:
+      - /c
+      - npx
+      - -y
+      - "@modelcontextprotocol/server-filesystem@2.0.0"
+      # ruleid: mcp-filesystem-root-too-broad-yaml
+      - C:\
+  - name: Docker
+    command: docker
+    args:
+      - run
+      - -i
+      - --rm
+      - --mount
+      # ruleid: mcp-filesystem-root-too-broad-yaml
+      - type=bind,src=/Users/fixture-user,dst=/projects/home
+      - mcp/filesystem:1.0.2
+      - /projects
+  - name: Shell line
+    command: bash
+    args:
+      - -c
+      # ruleid: mcp-filesystem-root-too-broad-yaml
+      - "npx -y @modelcontextprotocol/server-filesystem@2.0.0 $HOME"
+  - name: Unexpanded variables
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-filesystem@2.0.0"
+      # ok: mcp-filesystem-root-too-broad-yaml
+      - $HOME
+      # ok: mcp-filesystem-root-too-broad-yaml
+      - "${HOME}"
+  - name: Docker variable
+    command: docker
+    # ok: mcp-filesystem-root-too-broad-yaml
+    args: [run, -i, --rm, -v, "${HOME}:/projects/home", "mcp/filesystem:1.0.2", /projects]
+  - name: YAML null
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-filesystem@2.0.0"
+      # ok: mcp-filesystem-root-too-broad-yaml
+      - ~
+  - name: Project
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-filesystem@2.0.0"
+      # ok: mcp-filesystem-root-too-broad-yaml
+      - ~/projects/fixture-app
+      # ok: mcp-filesystem-root-too-broad-yaml
+      - ${{ inputs.workspace }}
+  - name: Other server
+    command: npx
+    # ok: mcp-filesystem-root-too-broad-yaml
+    args: ["-y", "@example-org/notes-mcp@1.4.0", "/"]

@@ -1,0 +1,23 @@
+{
+  "name": "finance-insights",
+  "description": "Revenue-adjacent growth KPIs for the finance team's agent.",
+  "version": "0.9.1",
+  "supportedInterfaces": [
+    { "url": "https://finance-insights.example.com/a2a/jsonrpc", "protocolBinding": "JSONRPC", "protocolVersion": "1.0" }
+  ],
+  "capabilities": { "streaming": false },
+  "securitySchemes": {
+    "partnerKey": { "apiKeySecurityScheme": { "location": "header", "name": "X-Partner-Key" } }
+  },
+  "securityRequirements": [{ "schemes": { "partnerKey": { "list": [] } } }],
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain"],
+  "skills": [
+    {
+      "id": "finance-kpis",
+      "name": "Finance KPIs",
+      "description": "Trial conversions and churn with the revenue team's definitions.",
+      "tags": ["finance", "kpi"]
+    }
+  ]
+}

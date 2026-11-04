@@ -1,0 +1,14 @@
+{
+  // ruleid: a2a-agent-card-without-security-schemes
+  "name": "Fridge Recipes",
+  "description": "Suggests recipes from what is in the fridge.",
+  "url": "https://recipes.example.com/a2a",
+  "preferredTransport": "JSONRPC",
+  "protocolVersion": "0.3.0",
+  "version": "1.3.2",
+  "capabilities": { "streaming": true },
+  "supportsAuthenticatedExtendedCard": true,
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain"],
+  "skills": []
+}

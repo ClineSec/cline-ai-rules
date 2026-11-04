@@ -1,0 +1,64 @@
+# Chores on pull requests that maintainers label: update the changelog and the docs. Uses
+# pull_request_target so the jobs can push to the PR branch.
+name: pr-chores
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  changelog:
+    if: github.event.label.name == 'needs-changelog'
+    runs-on: ubuntu-latest
+    env:
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      PR_BODY: ${{ github.event.pull_request.body }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Draft the changelog entry
+        run: |
+          npm install -g @anthropic-ai/claude-code@2.1.308
+          claude -p "Add a CHANGELOG.md entry for: $PR_TITLE. Context: $PR_BODY" \
+            --permission-mode acceptEdits \
+            --allowedTools "Read"
+      - name: Suggest reviewers
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ":read-only"
+          prompt: "Suggest two reviewers for '${{ github.event.pull_request.title }}' from CODEOWNERS."
+
+  docs:
+    if: github.event.label.name == 'needs-docs'
+    runs-on: ubuntu-latest
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_CLI_TRUST_WORKSPACE: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Update docs for the change
+        run: npx -y @google/gemini-cli@0.65.0 --approval-mode auto_edit -p "Update docs/ for the changes on this branch"
+
+  docs-preview:
+    if: github.event.label.name == 'docs-preview'
+    runs-on: ubuntu-latest
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # The PR is only data here: the workspace root is the base branch.
+      GEMINI_CLI_TRUST_WORKSPACE: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr-head
+      - run: npx -y @google/gemini-cli@0.65.0 -p "Describe the docs changes in pr-head/docs as a bulleted list"

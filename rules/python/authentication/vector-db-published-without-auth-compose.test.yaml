@@ -1,0 +1,271 @@
+x-qdrant-env: &qdrant-env
+  QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?set QDRANT_API_KEY}
+
+x-milvus-image: &milvus-image milvusdb/milvus:v3.0.2
+
+x-weaviate-base: &weaviate-base
+  image: cr.weaviate.io/semitechnologies/weaviate:1.40.2
+  environment:
+    AUTHENTICATION_APIKEY_ENABLED: "true"
+
+services:
+  # Chroma 1.x has no built-in auth: published everywhere, it's open.
+  chroma:
+    # ruleid: vector-db-published-without-auth-compose
+    image: chromadb/chroma
+    ports:
+      - "8000:8000"
+
+  chroma-legacy-settings:
+    # The 0.x auth variables do nothing on 1.x.
+    # ruleid: vector-db-published-without-auth-compose
+    image: chromadb/chroma:1.5.9
+    environment:
+      CHROMA_SERVER_AUTHN_PROVIDER: chromadb.auth.token_authn.TokenAuthenticationServerProvider
+      CHROMA_SERVER_AUTHN_CREDENTIALS: ${CHROMA_TOKEN}
+    ports:
+      - 8001:8000
+
+  chroma-old:
+    # ruleid: vector-db-published-without-auth-compose
+    image: ghcr.io/chroma-core/chroma:0.6.3
+    ports:
+      - "0.0.0.0:8002:8000"
+
+  qdrant:
+    # ruleid: vector-db-published-without-auth-compose
+    image: qdrant/qdrant:v1.20.0
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+
+  qdrant-empty-key:
+    # ruleid: vector-db-published-without-auth-compose
+    image: docker.io/qdrant/qdrant:latest
+    environment:
+      - QDRANT__SERVICE__API_KEY=
+    ports:
+      - target: 6333
+        published: 6335
+
+  qdrant-host-net:
+    # ruleid: vector-db-published-without-auth-compose
+    image: qdrant/qdrant
+    network_mode: host
+
+  weaviate:
+    # ruleid: vector-db-published-without-auth-compose
+    image: cr.weaviate.io/semitechnologies/weaviate:1.40.2
+    command: --host 0.0.0.0 --port '8080' --scheme http
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      PERSISTENCE_DATA_PATH: /var/lib/weaviate
+    ports:
+      - 8080:8080
+      - 50051:50051
+
+  weaviate-both:
+    # Anonymous access stays on next to API keys.
+    # ruleid: vector-db-published-without-auth-compose
+    image: semitechnologies/weaviate:1.40.2
+    environment:
+      - AUTHENTICATION_APIKEY_ENABLED=true
+      - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=True
+    ports: ["8081:8080"]
+
+  weaviate-default:
+    # No method enabled: Weaviate falls back to anonymous access.
+    # ruleid: vector-db-published-without-auth-compose
+    image: semitechnologies/weaviate:1.40.2
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "false"
+      DEFAULT_VECTORIZER_MODULE: none
+    ports:
+      - "8082:8080"
+
+  milvus:
+    # ruleid: vector-db-published-without-auth-compose
+    image: milvusdb/milvus:v3.0.2
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      COMMON_SECURITY_AUTHORIZATIONENABLED: "false"
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+
+  milvus-aliased-image:
+    container_name: milvus-standalone
+    # ruleid: vector-db-published-without-auth-compose
+    image: *milvus-image
+    command: ["milvus", "run", "standalone"]
+    ports:
+      - "19534:19530"
+
+  # Near misses.
+  qdrant-config-entry:
+    # ok: vector-db-published-without-auth-compose
+    image: qdrant/qdrant:v1.20.0
+    configs:
+      - source: qdrant_config
+        target: /qdrant/config/production.yaml
+    ports:
+      - "6342:6333"
+
+  milvus-init:
+    # ok: vector-db-published-without-auth-compose
+    image: *milvus-image
+    command: ["milvus", "run", "standalone", "--init-only"]
+    network_mode: none
+
+  qdrant-keyed:
+    # ok: vector-db-published-without-auth-compose
+    image: qdrant/qdrant:v1.20.0
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
+    ports:
+      - "6336:6333"
+
+  qdrant-read-only-key:
+    # ok: vector-db-published-without-auth-compose
+    image: qdrant/qdrant:v1.20.0
+    environment:
+      - "QDRANT__SERVICE__READ_ONLY_API_KEY=${QDRANT_READ_KEY}"
+    ports:
+      - "6337:6333"
+
+  qdrant-loopback:
+    # ok: vector-db-published-without-auth-compose
+    image: qdrant/qdrant:v1.20.0
+    ports:
+      - "127.0.0.1:6338:6333"
+
+  qdrant-internal:
+    # ok: vector-db-published-without-auth-compose
+    image: qdrant/qdrant:v1.20.0
+    expose:
+      - "6333"
+
+  qdrant-config-file:
+    # ok: vector-db-published-without-auth-compose
+    image: qdrant/qdrant:v1.20.0
+    volumes:
+      - ./qdrant/production.yaml:/qdrant/config/production.yaml:ro
+    ports:
+      - "6339:6333"
+
+  qdrant-env-file:
+    # ok: vector-db-published-without-auth-compose
+    image: qdrant/qdrant:v1.20.0
+    env_file: .env.qdrant
+    ports:
+      - "6340:6333"
+
+  qdrant-alias-env:
+    # ok: vector-db-published-without-auth-compose
+    image: qdrant/qdrant:v1.20.0
+    environment: *qdrant-env
+    ports:
+      - "6341:6333"
+
+  chroma-old-auth:
+    # ok: vector-db-published-without-auth-compose
+    image: chromadb/chroma:0.5.23
+    environment:
+      - CHROMA_SERVER_AUTHN_PROVIDER=chromadb.auth.token_authn.TokenAuthenticationServerProvider
+      - CHROMA_SERVER_AUTHN_CREDENTIALS_FILE=/run/secrets/chroma_token
+    ports:
+      - "8003:8000"
+
+  chroma-loopback:
+    # ok: vector-db-published-without-auth-compose
+    image: chromadb/chroma:1.5.9
+    ports:
+      - "127.0.0.1:8004:8000"
+
+  weaviate-keyed:
+    # ok: vector-db-published-without-auth-compose
+    image: cr.weaviate.io/semitechnologies/weaviate:1.40.2
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'false'
+      AUTHENTICATION_APIKEY_ENABLED: 'true'
+      AUTHENTICATION_APIKEY_ALLOWED_KEYS: ${WEAVIATE_KEYS}
+      AUTHENTICATION_APIKEY_USERS: insights
+    ports:
+      - "8083:8080"
+
+  weaviate-rbac:
+    # ok: vector-db-published-without-auth-compose
+    image: cr.weaviate.io/semitechnologies/weaviate:1.40.2
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      AUTHENTICATION_OIDC_ENABLED: 'true'
+      AUTHORIZATION_RBAC_ENABLED: 'true'
+    ports:
+      - "8084:8080"
+
+  weaviate-merged:
+    # ok: vector-db-published-without-auth-compose
+    <<: *weaviate-base
+    ports:
+      - "8085:8080"
+
+  weaviate-config-file:
+    # ok: vector-db-published-without-auth-compose
+    image: cr.weaviate.io/semitechnologies/weaviate:1.40.2
+    command: --host 0.0.0.0 --port '8080' --scheme http --config-file /weaviate-config/conf.yaml
+    volumes:
+      - ./weaviate/conf.yaml:/weaviate-config/conf.yaml:ro
+    ports:
+      - "8086:8080"
+
+  weaviate-config-file-anonymous:
+    # The environment overrides the config file.
+    # ruleid: vector-db-published-without-auth-compose
+    image: cr.weaviate.io/semitechnologies/weaviate:1.40.2
+    command: --host 0.0.0.0 --port '8080' --scheme http --config-file /weaviate-config/conf.yaml
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+    ports:
+      - "8087:8080"
+
+  milvus-auth:
+    # ok: vector-db-published-without-auth-compose
+    image: milvusdb/milvus:v3.0.2
+    environment:
+      COMMON_SECURITY_AUTHORIZATIONENABLED: "true"
+    ports:
+      - "19531:19530"
+
+  milvus-prefixed:
+    # ok: vector-db-published-without-auth-compose
+    image: milvusdb/milvus:v3.0.2
+    environment:
+      - MILVUS_CONF_COMMON_SECURITY_AUTHORIZATION_ENABLED=true
+    ports:
+      - "19532:19530"
+
+  milvus-user-yaml:
+    # ok: vector-db-published-without-auth-compose
+    image: milvusdb/milvus:v3.0.2
+    volumes:
+      - ./milvus/user.yaml:/milvus/configs/user.yaml
+    ports:
+      - "19533:19530"
+
+  postgres:
+    # ok: vector-db-published-without-auth-compose
+    image: pgvector/pgvector:pg17
+    ports:
+      - "5432:5432"
+
+volumes:
+  qdrant-data:
+
+configs:
+  qdrant_config:
+    file: ./qdrant/production.yaml

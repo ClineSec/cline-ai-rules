@@ -1,0 +1,21 @@
+// Cline's format (cline_mcp_settings.json); Windsurf and Roo Code expand the same ${env:VAR}.
+{
+  "mcpServers": {
+    "home": {
+      "command": "npx",
+      // ruleid: mcp-filesystem-root-too-broad-cline
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${env:HOME}"],
+      "disabled": false
+    },
+    "literal-root": {
+      "command": "npx",
+      // ruleid: mcp-filesystem-root-too-broad-cline
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "/"]
+    },
+    "unexpanded": {
+      "command": "npx",
+      // ok: mcp-filesystem-root-too-broad-cline
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${userHome}", "${HOME}", "$HOME"]
+    }
+  }
+}

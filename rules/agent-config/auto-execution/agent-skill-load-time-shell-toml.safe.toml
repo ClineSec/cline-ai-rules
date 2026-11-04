@@ -1,0 +1,5 @@
+# A read-only lookup spliced into the prompt is fine.
+description = "Summarize the current build status"
+
+# ok: agent-skill-load-time-shell-toml
+prompt = "Branch: !{git branch --show-current}; changes: !{git status --short}. Summarize."

@@ -1,0 +1,37 @@
+name: contrib-smoke
+
+on:
+  push:
+    branches: [main]
+    paths: ["contrib/**", "deploy/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the contrib image
+        run: docker build -f deploy/contrib.Dockerfile -t devtools-contrib:ci .
+      - name: Start the notes server
+        run: |
+          docker run -d --name notes -p 127.0.0.1:8812:8812 -e FASTMCP_HOST=0.0.0.0 devtools-contrib:ci
+          sleep 3
+          docker logs notes
+
+  build-vm:
+    # Runs on the build VM itself, next to the deployed servers.
+    runs-on: [self-hosted, build-vm]
+    env:
+      FASTMCP_TRANSPORT: http
+      FASTMCP_HOST: 0.0.0.0
+      FASTMCP_PORT: "8899"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Notes server against the real notes volume
+        run: |
+          uv run --extra contrib python contrib/notes_server.py &
+          sleep 3
+          uv run --extra dev pytest -q tests

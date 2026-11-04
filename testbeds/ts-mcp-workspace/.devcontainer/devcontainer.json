@@ -1,0 +1,29 @@
+{
+  // Node 22 with the MCP inspector, for working on workspace-mcp in a container.
+  "name": "workspace-mcp",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
+  "postCreateCommand": "npm ci && npm run build",
+  "forwardPorts": [6274],
+  "customizations": {
+    "vscode": {
+      "extensions": ["dbaeumer.vscode-eslint", "vitest.explorer"],
+      "settings": {
+        "editor.formatOnSave": true
+      },
+      "mcp": {
+        "servers": {
+          // The server this repository builds, started from the container's checkout.
+          "workspace": {
+            "type": "stdio",
+            "command": "node",
+            "args": ["/workspaces/workspace-mcp/dist/src/index.js"]
+          },
+          "hosted": {
+            "type": "http",
+            "url": "https://workspace-mcp.example.invalid/mcp"
+          }
+        }
+      }
+    }
+  }
+}

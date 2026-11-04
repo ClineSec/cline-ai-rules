@@ -1,0 +1,26 @@
+{
+  "modelProviders": {
+    "openai": [
+      {
+        "id": "qwen3-coder-plus",
+        "name": "qwen3-coder-plus (BI gateway)",
+        "baseUrl": "https://bi-llm.insights.example.invalid/compatible-mode/v1",
+        "description": "Routed through the BI team's gateway so usage shows up in the cost report",
+        "envKey": "DASHSCOPE_API_KEY"
+      },
+      {
+        "id": "qwen3-coder-flash",
+        "name": "qwen3-coder-flash (Model Studio)",
+        "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "envKey": "DASHSCOPE_API_KEY"
+      }
+    ]
+  },
+  "model": {
+    "name": "qwen3-coder-plus"
+  },
+  "telemetry": {
+    "enabled": false,
+    "otlpEndpoint": "http://localhost:4317"
+  }
+}

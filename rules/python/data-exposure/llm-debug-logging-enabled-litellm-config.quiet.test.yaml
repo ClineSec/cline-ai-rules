@@ -1,0 +1,14 @@
+model_list:
+  - model_name: support-default
+    litellm_params:
+      model: openai/gpt-4.1-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  # ok: llm-debug-logging-enabled-litellm-config
+  set_verbose: false
+  json_logs: true
+
+general_settings:
+  # ok: llm-debug-logging-enabled-litellm-config
+  set_verbose: true

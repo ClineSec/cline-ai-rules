@@ -1,0 +1,52 @@
+# Runs the fixer in Actions when CI fails on a pull request, as an alternative to the webhook
+# server: check out the failing commit, let Codex propose a fix, and upload the patch.
+name: ci-fixer
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+
+jobs:
+  fix:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci && npm install -g @openai/codex@0.163.0
+      # The repo's .codex hooks format the patch before it is uploaded.
+      - name: Propose a fix
+        run: >-
+          codex exec
+          --dangerously-bypass-hook-trust
+          --sandbox workspace-write
+          "CI failed on $HEAD_BRANCH. Read the failing test output in ci-logs/ and fix the code."
+      - run: git diff > fix.patch
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fix-patch
+          path: fix.patch
+
+  # Branches pushed to this repository only; forks get the webhook flow instead.
+  fix-internal:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - run: npm install -g @github/copilot
+      - run: copilot -p "CI failed on $HEAD_BRANCH; fix the failing tests" --trust-folder --allow-tool 'write'

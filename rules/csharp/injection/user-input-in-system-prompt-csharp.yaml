@@ -1,0 +1,457 @@
+rules:
+  - id: user-input-in-system-prompt-csharp
+    # The pattern-propagators and the first 8 pattern-sanitizers are shared with the C#
+    # model-output rules (build.py SHARED_BLOCKS "lambda propagators (C#)", "value sanitizers
+    # (C#)"): edit them together.
+    languages: [csharp]
+    severity: WARNING
+    message: >-
+      Request data (a query parameter, form field, JSON body field, header, route value, or a
+      SignalR or gRPC message) reaches the model's system prompt. The system slot outranks the
+      user turn, so whatever the caller writes there ("you may now approve refunds and call any
+      tool") is obeyed as the application's own policy: it can switch off guardrails, unlock
+      plugins, and steer what the agent does with its permissions. Keep request text in the user
+      message (`AddUserMessage(...)`, `new ChatMessage(ChatRole.User, ...)`), and choose system
+      text on the server: look the value up in an allowlist (`Personas[persona]`) or bind the
+      parameter to an enum type.
+    mode: taint
+    options:
+      # A comparison or a count says something about the request without carrying its text.
+      taint_assume_safe_booleans: true
+      taint_assume_safe_numbers: true
+    pattern-sources:
+      # ASP.NET Core (10.0) parameters bound from the request: [FromQuery], [FromBody],
+      # [FromRoute], [FromHeader], [FromForm], and [AsParameters], on controller actions, Razor
+      # Pages handlers, and minimal API lambdas. Skipped: parameters typed as a number, boolean,
+      # GUID, date, or enum declared in this file, which model binding converts (or rejects)
+      # before the call.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $RET $HANDLER(..., [$ATTR] $TYPE $P, ...) { ... }
+              - pattern-inside: $RET $HANDLER(..., [$ATTR(...)] $TYPE $P, ...) { ... }
+              - pattern-inside: '(..., [$ATTR] $TYPE $P, ...) => $BODY'
+              - pattern-inside: '(..., [$ATTR(...)] $TYPE $P, ...) => $BODY'
+              - pattern-inside: '(..., [$ATTR] $TYPE $P, ...) => { ... }'
+              - pattern-inside: '(..., [$ATTR(...)] $TYPE $P, ...) => { ... }'
+              - pattern-inside: 'async (..., [$ATTR] $TYPE $P, ...) => $BODY'
+              - pattern-inside: 'async (..., [$ATTR(...)] $TYPE $P, ...) => $BODY'
+              - pattern-inside: 'async (..., [$ATTR] $TYPE $P, ...) => { ... }'
+              - pattern-inside: 'async (..., [$ATTR(...)] $TYPE $P, ...) => { ... }'
+          - metavariable-regex:
+              metavariable: $ATTR
+              regex: ^(?:Microsoft\.AspNetCore\.Mvc\.)?(?:FromQuery|FromBody|FromRoute|FromHeader|FromForm|AsParameters)(?:Attribute)?$
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: ^(?!(?:System\.)?(?:int|long|short|byte|uint|ulong|ushort|sbyte|double|float|decimal|bool|char|Int16|Int32|Int64|UInt16|UInt32|UInt64|Byte|SByte|Double|Single|Decimal|Boolean|Char|Guid|DateTime|DateTimeOffset|DateOnly|TimeOnly|TimeSpan|CancellationToken)\??$)
+          - pattern-not-inside: |
+              enum $TYPE { ... }
+              ...
+          - pattern: $P
+      # Parameters with no binding attribute that ASP.NET Core still fills from the request,
+      # when typed as text or as a request object (`string persona`, `AskRequest body`):
+      # controller actions marked [HttpGet] / [HttpPost] / ... or [Route], minimal API handlers
+      # (an inline lambda, or a method in this class passed to MapGet / MapPost / ...), Razor
+      # Pages OnGet / OnPost handlers, and public SignalR hub methods. Services, HttpContext, and
+      # other non-text types are left out by the type test.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  [$VERB]
+                  $RET $HANDLER(..., $TYPE $P, ...) { ... }
+              - pattern-inside: |
+                  [$VERB(...)]
+                  $RET $HANDLER(..., $TYPE $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $VERB
+              regex: ^(?:Microsoft\.AspNetCore\.Mvc\.)?(?:Http(?:Get|Post|Put|Patch|Delete)|Route|AcceptVerbs)(?:Attribute)?$
+          - pattern-not-inside: $RET $HANDLER(..., [$ANY] $TYPE $P, ...) { ... }
+          - pattern-not-inside: $RET $HANDLER(..., [$ANY(...)] $TYPE $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: ^(?:string\??|String\??|string\[\]|IEnumerable<string>|List<string>|IFormFile|IFormCollection|JsonElement|JsonNode|JsonObject|\w*(?:Request|Dto|Input|Model|Form|Command|Query|Payload|Body|Args|Prompt|Message|Question|Params|Parameters)\??)$
+          - pattern: $P
+      - patterns:
+          - pattern-inside: $APP.$MAP($ROUTE, ...)
+          - pattern-either:
+              - pattern-inside: '(..., $TYPE $P, ...) => $BODY'
+              - pattern-inside: '(..., $TYPE $P, ...) => { ... }'
+              - pattern-inside: 'async (..., $TYPE $P, ...) => $BODY'
+              - pattern-inside: 'async (..., $TYPE $P, ...) => { ... }'
+          - metavariable-regex:
+              metavariable: $MAP
+              regex: ^Map(?:Get|Post|Put|Patch|Delete|Methods)$
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: ^(?:string\??|String\??|string\[\]|IEnumerable<string>|List<string>|IFormFile|IFormCollection|JsonElement|JsonNode|JsonObject|\w*(?:Request|Dto|Input|Model|Form|Command|Query|Payload|Body|Args|Prompt|Message|Question|Params|Parameters)\??)$
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    $R1 $SETUP(...) { ... $APP.$MAP($ROUTE, $HANDLER); ... }
+                    ...
+                    $RET $HANDLER(..., $TYPE $P, ...) { ... }
+                    ...
+                  }
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    $RET $HANDLER(..., $TYPE $P, ...) { ... }
+                    ...
+                    $R1 $SETUP(...) { ... $APP.$MAP($ROUTE, $HANDLER); ... }
+                    ...
+                  }
+          - pattern-inside: $RET $HANDLER(..., $TYPE $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $MAP
+              regex: ^Map(?:Get|Post|Put|Patch|Delete|Methods)$
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: ^(?:string\??|String\??|string\[\]|IEnumerable<string>|List<string>|IFormFile|IFormCollection|JsonElement|JsonNode|JsonObject|\w*(?:Request|Dto|Input|Model|Form|Command|Query|Payload|Body|Args|Prompt|Message|Question|Params|Parameters)\??)$
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          class $CLS : PageModel { ... }
+                      - pattern-inside: |
+                          class $CLS : Microsoft.AspNetCore.Mvc.RazorPages.PageModel { ... }
+                  - pattern-inside: $RET $HANDLER(..., $TYPE $P, ...) { ... }
+                  - metavariable-regex:
+                      metavariable: $HANDLER
+                      regex: ^On(?:Get|Post|Put|Patch|Delete)\w*$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          class $CLS : Hub { ... }
+                      - pattern-inside: |
+                          class $CLS : Hub<$CLIENT> { ... }
+                  - pattern-inside: public $RET $HANDLER(..., $TYPE $P, ...) { ... }
+                  - metavariable-regex:
+                      metavariable: $HANDLER
+                      regex: ^(?!On(?:Connected|Disconnected)Async$)
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: ^(?:string\??|String\??|string\[\]|IEnumerable<string>|List<string>|IFormFile|IFormCollection|JsonElement|JsonNode|JsonObject|\w*(?:Request|Dto|Input|Model|Form|Command|Query|Payload|Body|Args|Prompt|Message|Question|Params|Parameters)\??)$
+          - pattern: $P
+      # Razor Pages and Blazor properties bound from the request ([BindProperty],
+      # [SupplyParameterFromQuery], [SupplyParameterFromForm], [FromQuery], ...), read anywhere in
+      # the class.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    [$BIND]
+                    public $TYPE $PROP { get; set; }
+                    ...
+                  }
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    [$BIND(...)]
+                    public $TYPE $PROP { get; set; }
+                    ...
+                  }
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    [$BIND]
+                    public $TYPE $PROP { get; set; } = $INIT;
+                    ...
+                  }
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    [$BIND(...)]
+                    public $TYPE $PROP { get; set; } = $INIT;
+                    ...
+                  }
+          - metavariable-regex:
+              metavariable: $BIND
+              regex: ^(?:BindProperty|SupplyParameterFromQuery|SupplyParameterFromForm|FromQuery|FromForm|FromRoute|FromHeader)(?:Attribute)?$
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: ^(?!(?:System\.)?(?:int|long|short|byte|uint|ulong|ushort|sbyte|double|float|decimal|bool|char|Int16|Int32|Int64|UInt16|UInt32|UInt64|Byte|SByte|Double|Single|Decimal|Boolean|Char|Guid|DateTime|DateTimeOffset|DateOnly|TimeOnly|TimeSpan|CancellationToken)\??$)
+          - pattern-either:
+              - pattern: $PROP
+              - pattern: this.$PROP
+      # gRPC service methods (Grpc.AspNetCore): the request message of a handler that takes a
+      # ServerCallContext.
+      - patterns:
+          - pattern-inside: $RET $HANDLER($TYPE $P, ServerCallContext $CTX) { ... }
+          - pattern: $P
+      # Reads from the HttpRequest (controller `Request`, `HttpContext.Request`, a `req`
+      # parameter in a minimal API or an Azure Functions HTTP trigger).
+      - patterns:
+          - pattern-either:
+              - pattern: $REQ.$PART
+              - pattern: $REQ.ReadFromJsonAsync(...)
+              - pattern: $REQ.ReadFromJsonAsync<$T>(...)
+              - pattern: $REQ.ReadFormAsync(...)
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: (?i)^(?:[\w.]*\.)?(?:request|req|httpRequest)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(?:Query|Form|Headers|Cookies|RouteValues|Body|QueryString)$
+    pattern-propagators:
+      # In --taint-intrafile mode OpenGrep drops taint through a call that takes a lambda
+      # (messages.Where(m => ...).Select(m => m.Text)), so carry it from the receiver to the
+      # call's result, and into the parameter of a callback over a tainted collection or task
+      # (`replies.ToList().ForEach(r => ...)`, `task.ContinueWith(t => ...)`).
+      - patterns:
+          - pattern: $CALL
+          - pattern-either:
+              - pattern: $R.$M(..., ($P) => $B, ...)
+              - pattern: $R.$M(..., ($P, $Q) => $B, ...)
+        from: $R
+        to: $CALL
+      - patterns:
+          - pattern-inside: $R.$M(($P) => $B)
+          - pattern: $P
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(?:Select|SelectMany|Where|ForEach|ContinueWith|Aggregate|Any|All|First|FirstOrDefault|Last|LastOrDefault|Single|SingleOrDefault|OrderBy|OrderByDescending|ThenBy|GroupBy|ToDictionary|ToLookup|TakeWhile|SkipWhile)$
+        from: $R
+        to: $P
+    pattern-sinks:
+      # Semantic Kernel ChatHistory (1.81.0): AddSystemMessage, AddDeveloperMessage, the
+      # one-argument constructor (whose text becomes the system message), and a message added
+      # with the system or developer role (ChatMessageContent). Microsoft.Extensions.AI
+      # (10.11.0) ChatMessage with ChatRole.System, also as a target-typed
+      # `new(ChatRole.System, text)`.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $H.AddSystemMessage($X)
+              - pattern-inside: $H.AddDeveloperMessage($X)
+          - pattern: $X
+      - patterns:
+          - pattern-inside: new ChatHistory($X)
+          - pattern: $X
+          # The collection constructor copies a whole message list.
+          - metavariable-regex:
+              metavariable: $X
+              regex: ^(?!\[|new\b|(?i:[\w.]*(?:messages|history|turns|transcript|chat))$|.*\.To(?:List|Array)\(\)$)
+      - patterns:
+          - pattern-either:
+              - pattern-inside: new ChatHistory($X, $ROLE)
+              - pattern-inside: $H.AddMessage($ROLE, $X, ...)
+              - pattern-inside: new $MESSAGE($ROLE, $X, ...)
+              - pattern-inside: new($ROLE, $X, ...)
+          - metavariable-regex:
+              metavariable: $ROLE
+              regex: ^(?:[\w.]*\.)?(?:AuthorRole|ChatRole)\.(?:System|Developer)$
+          - pattern: $X
+      # Agent and request instructions: Semantic Kernel agents (Agent.Instructions, and
+      # AgentInvokeOptions.AdditionalInstructions, which is added as a system message), Agent
+      # Framework (ChatClientAgent instructions, AIContext.Instructions),
+      # Microsoft.Extensions.AI ChatOptions.Instructions, OpenAI Responses options
+      # (CreateResponseOptions; ResponseCreationOptions before 2.8.0), and Semantic Kernel's
+      # OpenAI execution settings (ChatSystemPrompt, ChatDeveloperPrompt).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: 'new $TYPE { ..., $PROP = $X, ... }'
+              - pattern-inside: 'new $TYPE(...) { ..., $PROP = $X, ... }'
+              - pattern-inside: '$TYPE $V = new() { ..., $PROP = $X, ... };'
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: ^(?:[\w.]*\.)?(?:\w*Agent|ChatOptions|ChatClientAgentOptions|AIContext|CreateResponseOptions|ResponseCreationOptions|\w*InvokeOptions|\w*PromptExecutionSettings)$
+          - metavariable-regex:
+              metavariable: $PROP
+              regex: ^(?:Instructions|AdditionalInstructions|ChatSystemPrompt|ChatDeveloperPrompt)$
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: (ChatOptions $O).Instructions = $X
+              - pattern-inside: (AIContext $O).Instructions = $X
+              - pattern-inside: (CreateResponseOptions $O).Instructions = $X
+              - pattern-inside: (ResponseCreationOptions $O).Instructions = $X
+              - pattern-inside: (OpenAIPromptExecutionSettings $O).ChatSystemPrompt = $X
+              - pattern-inside: (OpenAIPromptExecutionSettings $O).ChatDeveloperPrompt = $X
+              - pattern-inside: (AzureOpenAIPromptExecutionSettings $O).ChatSystemPrompt = $X
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: new ChatClientAgent($CLIENT, $X, ...)
+              - pattern-inside: 'new ChatClientAgent($CLIENT, ..., instructions: $X, ...)'
+          - pattern: $X
+          - metavariable-regex:
+              metavariable: $X
+              regex: ^(?!new\b)
+      - patterns:
+          - pattern-either:
+              - pattern-inside: '$CLIENT.$AS($X, ...)'
+              - pattern-inside: '$CLIENT.$AS(..., instructions: $X, ...)'
+          - metavariable-regex:
+              metavariable: $AS
+              regex: ^(?:AsAIAgent|CreateAIAgent)$
+          - pattern: $X
+          # AsAIAgent(options) takes a ChatClientAgentOptions object instead.
+          - metavariable-regex:
+              metavariable: $X
+              regex: ^(?!new\b)
+      # OpenAI .NET (2.14.0): system and developer chat messages and Responses input items.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: new SystemChatMessage($X)
+              - pattern-inside: new DeveloperChatMessage($X)
+              - pattern-inside: $FACTORY.CreateSystemMessage($X)
+              - pattern-inside: $FACTORY.CreateDeveloperMessage($X)
+              - pattern-inside: $FACTORY.CreateSystemMessageItem($X)
+              - pattern-inside: $FACTORY.CreateDeveloperMessageItem($X)
+          - pattern: $X
+      # A Semantic Kernel prompt template whose <message role="system"> (or "developer") block
+      # has request text spliced in by string interpolation or concatenation: the kernel parses
+      # the rendered prompt into chat messages, so the text becomes part of the system message.
+      # Only the interpolated expression is reported; `{{$var}}` template variables are not
+      # interpolation holes.
+      - pattern-regex: (?:<message\s+role=(?:\\|")?["'](?:system|developer)(?:\\|")?["']\s*>|\G\})[^<{}]*?\{\K[^{}<\n]++(?=\})
+      - pattern-regex: <message\s+role=(?:\\|")?["'](?:system|developer)(?:\\|")?["']\s*>[^<"\n]*+"\s*\+\s*\K[\w.]+(?:\([^()\n]*\))?
+    pattern-sanitizers:
+      # Values that can't carry text: numbers, booleans, GUIDs, dates, and enums parsed from the
+      # string (int.Parse(x), Guid.Parse(x), Enum.Parse<Tone>(x), Convert.ToInt32(x)), and LINQ
+      # counts and checks. The out
+      # value of TryParse is not tainted to begin with.
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $NUM.Parse(...)
+              - pattern: $NUM.ParseExact(...)
+          - metavariable-regex:
+              metavariable: $NUM
+              regex: ^(?:System\.)?(?:int|long|short|byte|uint|ulong|ushort|sbyte|double|float|decimal|bool|Int16|Int32|Int64|UInt16|UInt32|UInt64|Byte|SByte|Double|Single|Decimal|Boolean|Guid|DateTime|DateTimeOffset|DateOnly|TimeOnly|TimeSpan)$
+      - exact: true
+        pattern-either:
+          - pattern: Enum.Parse<$E>(...)
+          - pattern: Enum.Parse(...)
+      - exact: true
+        patterns:
+          - pattern: Convert.$TO(...)
+          - metavariable-regex:
+              metavariable: $TO
+              regex: ^To(?:Int16|Int32|Int64|UInt16|UInt32|UInt64|Byte|SByte|Double|Single|Decimal|Boolean|DateTime)$
+      # LINQ aggregates that return a number or a bool (replies.Count(r => ...), items.Any()).
+      - exact: true
+        patterns:
+          - pattern: $SEQ.$AGG(...)
+          - metavariable-regex:
+              metavariable: $AGG
+              regex: ^(?:Count|LongCount|Any|All|Sum|Average)$
+      # An allowlist lookup in a table held in a field or static member (`Personas[choice]`,
+      # `PromptLibrary.Personas[choice]`, `_commands.GetValueOrDefault(key)`); request
+      # collections (`Request.Query[...]`, `HttpContext.Items[...]`) don't count.
+      - patterns:
+          - pattern-either:
+              - pattern: $TABLE[$KEY]
+              - pattern: $TABLE.GetValueOrDefault($KEY, ...)
+          - metavariable-regex:
+              metavariable: $TABLE
+              regex: ^(?!(?:\w+\.)*(?:Request|HttpContext)\b)(?!.*\.(?:Query|Form|Headers|Cookies|RouteValues|Items|Session)$)(?:this\.|(?:[A-Z]\w*\.)+)?(?:[A-Z][A-Za-z0-9_]*|_[A-Za-z]\w*|s_\w+)$
+      # A check against such a set before use (`if (!AllowedTeams.Contains(team)) return ...;`,
+      # or use inside `if (Personas.ContainsKey(p)) { ... }`). OpenGrep 1.30.2 ignores
+      # by-side-effect sanitizers in C#, so the checked value is cleared in the code after the
+      # check instead.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$SET.$HAS($X)) return ...;
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($X)) return;
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($X)) throw ...;
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($X)) { ... }
+                  ...
+              - pattern-inside: |
+                  if ($SET.$HAS($X)) { ... }
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(?:Contains|ContainsKey)$
+          - metavariable-regex:
+              metavariable: $SET
+              regex: ^(?!(?:\w+\.)*(?:Request|HttpContext)\b)(?!.*\.(?:Query|Form|Headers|Cookies|RouteValues|Items|Session)$)(?:this\.|(?:[A-Z]\w*\.)+)?(?:[A-Z][A-Za-z0-9_]*|_[A-Za-z]\w*|s_\w+)$
+          - pattern: $X
+      # ... and against an anchored pattern (`Regex.IsMatch(x, "^[a-z-]+$")`, or a Regex field
+      # or [GeneratedRegex] method: `SlugRegex().IsMatch(x)`).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$RX.IsMatch($X)) return ...;
+                  ...
+              - pattern-inside: |
+                  if (!$RX.IsMatch($X)) throw ...;
+                  ...
+              - pattern-inside: |
+                  if (!$RX.IsMatch($X)) { ... }
+                  ...
+              - pattern-inside: |
+                  if ($RX.IsMatch($X)) { ... }
+          - metavariable-regex:
+              metavariable: $RX
+              regex: ^(?:this\.)?(?:_?\w*(?:Regex|Pattern|Re)|\w+\(\))$
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!Regex.IsMatch($X, "$RE", ...)) return ...;
+                  ...
+              - pattern-inside: |
+                  if (!Regex.IsMatch($X, "$RE", ...)) throw ...;
+                  ...
+              - pattern-inside: |
+                  if (!Regex.IsMatch($X, "$RE", ...)) { ... }
+                  ...
+              - pattern-inside: |
+                  if (Regex.IsMatch($X, "$RE", ...)) { ... }
+          - metavariable-regex:
+              metavariable: $RE
+              regex: (?s)^\^.*(?:\$|\\z)$
+          - pattern: $X
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM01:2026 - Prompt Injection"
+        - "LLM01:2025 - Prompt Injection"
+      owasp-agentic:
+        - "ASI01 - Agent Goal Hijack"
+      owasp-aisvs:
+        - "v1.01-C2.1.6 - Prompt Injection Defenses"
+      mitre-atlas:
+        - "AML.T0051.000 - LLM Prompt Injection: Direct"
+      cwe:
+        - "CWE-1427: Improper Neutralization of Input Used for LLM Prompting"
+      # Validation the rule can't see (a check in another class, a FluentValidation validator,
+      # a database constraint) makes some findings safe in practice.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [semantic-kernel, microsoft-extensions-ai, agent-framework, openai, aspnetcore, signalr, grpc]
+      # API shapes checked 2026-10-25 against source at release tags: semantic-kernel
+      # dotnet-1.81.0 (ChatHistory constructors and AddSystemMessage / AddDeveloperMessage /
+      # AddMessage, ChatMessageContent, AuthorRole.Developer, Agent.Instructions,
+      # AgentInvokeOptions.AdditionalInstructions, ChatCompletionAgent instructions as a system
+      # message, OpenAIPromptExecutionSettings.ChatSystemPrompt), dotnet/extensions v10.11.0
+      # (Microsoft.Extensions.AI ChatMessage, ChatRole, ChatOptions.Instructions),
+      # agent-framework dotnet-1.26.0 (ChatClientAgent and AsAIAgent instructions,
+      # AIContext.Instructions), and openai-dotnet OpenAI_2.14.0 (SystemChatMessage,
+      # DeveloperChatMessage, ResponseItem.CreateSystemMessageItem, CreateResponseOptions;
+      # ResponseCreationOptions in OpenAI_2.5.0). Not covered: a request value passed in
+      # KernelArguments that fills a {{$variable}} inside a separate template's system message
+      # (OpenGrep 1.30.2 can't compare the argument's key with a placeholder found inside the
+      # template text), and raw interpolated strings that open with `$$`, which OpenGrep 1.30.2 doesn't parse.
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM01_PromptInjection.md
+        - https://cwe.mitre.org/data/definitions/1427.html
+        - https://github.com/microsoft/semantic-kernel/blob/dotnet-1.81.0/dotnet/src/SemanticKernel.Abstractions/AI/ChatCompletion/ChatHistory.cs
+        - https://github.com/microsoft/semantic-kernel/blob/dotnet-1.81.0/dotnet/src/Agents/Core/ChatCompletionAgent.cs
+        - https://github.com/dotnet/extensions/blob/v10.11.0/src/Libraries/Microsoft.Extensions.AI.Abstractions/ChatCompletion/ChatOptions.cs
+        - https://github.com/openai/openai-dotnet/blob/OpenAI_2.14.0/OpenAI/src/Custom/Chat/Messages/SystemChatMessage.cs
+        - https://learn.microsoft.com/aspnet/core/mvc/models/model-binding

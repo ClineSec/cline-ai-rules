@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "buildbox": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "BUILDBOX_DATABASE_URL",
+        "--mount", "type=bind,src=${env:HOME},dst=/root,readonly",
+        "ghcr.io/example-org/buildbox-mcp:1.8.0", "buildbox"
+      ],
+      "disabled": false
+    },
+    "build-logs": {
+      "command": "npx",
+      "args": [
+        "-y", "@modelcontextprotocol/server-filesystem@2.0.0",
+        "${env:USERPROFILE}"
+      ],
+      "disabled": false
+    }
+  }
+}

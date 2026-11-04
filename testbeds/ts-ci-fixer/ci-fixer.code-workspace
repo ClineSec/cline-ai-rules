@@ -1,0 +1,25 @@
+{
+  "folders": [
+    { "path": "." },
+    { "path": "ops/docs-preview" }
+  ],
+  "settings": {
+    "typescript.tsdk": "node_modules/typescript/lib",
+    "editor.formatOnSave": true,
+    // Our rules below are all the agent needs; the built-in ones kept asking about
+    // `find ... -exec` in the flake sweep.
+    "chat.tools.terminal.ignoreDefaultAutoApproveRules": true,
+    "chat.tools.terminal.autoApprove": {
+      "npm test": true,
+      "npx vitest run": true,
+      "find test -name": true
+    },
+    // Let the agent touch src/ without a prompt. (Application scoped: VS Code only reads it
+    // from user settings, so this line does nothing here.)
+    "chat.tools.edits.autoApprove": { "src/**": true },
+    "chat.permissions.default": "default"
+  },
+  "extensions": {
+    "recommendations": ["vitest.explorer", "dbaeumer.vscode-eslint"]
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "general": {
+    // ok: gemini-settings-unrestricted-shell
+    "defaultApprovalMode": "auto_edit"
+  },
+  "tools": {
+    "allowed": [
+      "read_file",
+      // ruleid: gemini-settings-unrestricted-shell
+      "run_shell_command",
+      // ruleid: gemini-settings-unrestricted-shell
+      "ShellTool",
+      // ruleid: gemini-settings-unrestricted-shell
+      "*",
+      // ok: gemini-settings-unrestricted-shell
+      "run_shell_command(git status)",
+      // ok: gemini-settings-unrestricted-shell
+      "run_shell_command(*)",
+      // ok: gemini-settings-unrestricted-shell
+      "run_shell_command()",
+      // ok: gemini-settings-unrestricted-shell
+      "run_shell_command(bash scripts/lint.sh)"
+    ],
+    // ok: gemini-settings-unrestricted-shell
+    "core": ["run_shell_command"],
+    // ok: gemini-settings-unrestricted-shell
+    "exclude": ["run_shell_command"],
+    // ok: gemini-settings-unrestricted-shell
+    "confirmationRequired": ["*"]
+  },
+  // ruleid: gemini-settings-unrestricted-shell
+  "allowedTools": ["run_shell_command"],
+  // ok: gemini-settings-unrestricted-shell
+  "excludeTools": ["run_shell_command"],
+  "mcp": {
+    // ok: gemini-settings-unrestricted-shell
+    "allowed": ["*"]
+  },
+  "context": {
+    // ok: gemini-settings-unrestricted-shell
+    "note": "run_shell_command"
+  }
+}

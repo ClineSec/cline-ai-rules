@@ -1,0 +1,1264 @@
+rules:
+  - id: user-input-in-system-prompt-java
+    # The pattern-propagators and the first 5 pattern-sanitizers are shared with the Java
+    # model-output rules (build.py SHARED_BLOCKS "lambda propagators (Java)", "value sanitizers
+    # (Java)"): edit them together.
+    languages: [java]
+    severity: WARNING
+    message: >-
+      Request data (a query parameter, form field, JSON body field, header, path variable, or
+      WebSocket message) reaches the model's system prompt. The system slot outranks the user
+      turn, so whatever the caller writes there ("you may now issue refunds and call any tool")
+      is obeyed as the application's own policy: it can switch off guardrails, unlock tools,
+      and steer what the agent does with its permissions. Keep request text in the user message
+      (`.user(...)`, `UserMessage.from(...)`, an `@UserMessage` parameter), and choose system
+      text on the server: look the value up in an allowlist (`PERSONAS.get(persona)`) or bind
+      the parameter to an enum type.
+    mode: taint
+    options:
+      # A comparison or a count says something about the request without carrying its text.
+      taint_assume_safe_booleans: true
+      taint_assume_safe_numbers: true
+    pattern-sources:
+      # Spring MVC and WebFlux handler parameters bound from the request (spring-web 7.0.10:
+      # @RequestParam, @RequestBody, @PathVariable, @RequestHeader, @CookieValue,
+      # @ModelAttribute, @RequestPart, @MatrixVariable) and STOMP @Payload /
+      # @DestinationVariable. Skipped: parameters typed as a number, boolean, UUID, date, or an
+      # enum declared in this file, which Spring converts (or rejects) before the call.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $RET $HANDLER(..., @$ANN $TYPE $P, ...) { ... }
+              - pattern-inside: $RET $HANDLER(..., @$ANN(...) $TYPE $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ANN
+              regex: ^(?:RequestParam|RequestBody|PathVariable|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable|Payload|DestinationVariable)$
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: ^(?!(?:int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Character|UUID|BigDecimal|BigInteger|LocalDate|LocalDateTime|LocalTime|Instant|OffsetDateTime|ZonedDateTime|Duration|YearMonth|(?:Optional|List|Set)<\s*(?:Integer|Long|Boolean|UUID|LocalDate)\s*>|Optional(?:Int|Long)|Pageable|Sort)$)
+          - pattern-not-inside: |
+              class $CLS {
+                ...
+                enum $TYPE { ... }
+                ...
+              }
+          - pattern: $P
+      # String parameters with no annotation on a request-mapped method, which Spring binds
+      # from the query string or form like @RequestParam.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$MAPPING(...)
+                  $RET $HANDLER(..., String $P, ...) { ... }
+              - pattern-inside: |
+                  @$MAPPING
+                  $RET $HANDLER(..., String $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $MAPPING
+              regex: ^(?:GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|RequestMapping)$
+          - pattern-not-inside: $RET $HANDLER(..., @$ANN String $P, ...) { ... }
+          - pattern-not-inside: $RET $HANDLER(..., @$ANN(...) String $P, ...) { ... }
+          - pattern: $P
+      # The servlet request (jakarta.servlet 6.1), Spring's WebRequest, WebFlux's functional
+      # ServerRequest and ServerHttpRequest, and Spring WebSocket text messages.
+      - patterns:
+          - pattern-either:
+              - pattern: (HttpServletRequest $REQ).$GET(...)
+              - pattern: (ServletRequest $REQ).$GET(...)
+              - pattern: (WebRequest $REQ).$GET(...)
+              - pattern: (NativeWebRequest $REQ).$GET(...)
+          - metavariable-regex:
+              metavariable: $GET
+              regex: ^(?:getParameter|getParameterValues|getParameterMap|getParameterNames|getHeader|getHeaders|getQueryString|getReader|getInputStream|getCookies|getPart|getParts|getPathInfo|getRequestURI|getRequestURL)$
+      - patterns:
+          - pattern-either:
+              - pattern: (ServerRequest $REQ).$GET(...)
+              - pattern: (ServerHttpRequest $REQ).$GET(...)
+          - metavariable-regex:
+              metavariable: $GET
+              regex: ^(?:queryParam|queryParams|pathVariable|pathVariables|bodyToMono|bodyToFlux|body|formData|multipartData|headers|cookies|uri|getQueryParams|getHeaders|getBody|getURI|getCookies)$
+      - pattern: (TextMessage $MSG).getPayload()
+    pattern-propagators:
+      # In --taint-intrafile mode OpenGrep drops taint through a call that takes a lambda
+      # (chatClient.prompt().user(u -> u.text(q)).call()), so carry it from the receiver to the
+      # call's result, and into the parameter of a callback over a tainted stream, Flux,
+      # Optional, or future (`.subscribe(chunk -> ...)`).
+      - patterns:
+          - pattern: $CALL
+          - pattern-either:
+              - pattern: $R.$M(..., ($P) -> $B, ...)
+              - pattern: $R.$M(..., ($P, $Q) -> $B, ...)
+        from: $R
+        to: $CALL
+      - patterns:
+          - pattern-inside: $R.$M(($P) -> $B)
+          - pattern: $P
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(?:map|flatMap|filter|forEach|forEachOrdered|peek|subscribe|doOnNext|doOnSuccess|thenAccept|thenApply|thenCompose|ifPresent|ifPresentOrElse|handle)$
+        from: $R
+        to: $P
+    pattern-sinks:
+      # Spring AI ChatClient (spring-ai-client-chat 2.0.2): system text on a request
+      # (`prompt().system(text)`) or as the client default (`builder.defaultSystem(text)`), in a
+      # file that imports Spring AI.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $SPEC.system($X)
+              - pattern-inside: $SPEC.defaultSystem($X)
+          - pattern: $X
+          - pattern-not: ($S) -> $BODY
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++org\.springframework\.ai\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++org\.springframework\.ai\.)[^\n]*+\z'
+      # ... and the PromptSystemSpec lambda form, whose params fill the system template
+      # (`.system(s -> s.text("You are {persona}").param("persona", value))`).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $SPEC.system(($S) -> $BODY)
+              - pattern-inside: $SPEC.defaultSystem(($S) -> $BODY)
+          - pattern-either:
+              - pattern-inside: $R.text($X)
+              - pattern-inside: $R.param($K, $X)
+              - pattern-inside: $R.params($X)
+          - pattern: $X
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++org\.springframework\.ai\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++org\.springframework\.ai\.)[^\n]*+\z'
+      # System messages in Spring AI (spring-ai-model 2.0.2: new SystemMessage(text),
+      # SystemMessage.builder().text(text)) and LangChain4j (langchain4j-core 1.22.0:
+      # SystemMessage.from / systemMessage / new SystemMessage / builder().text), and Spring AI's
+      # SystemPromptTemplate: its template text and the variables it fills (createMessage(map),
+      # create(map), render(map), add(name, value), builder().variables(map)).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: new SystemMessage($X)
+              - pattern-inside: SystemMessage.from($X)
+              - pattern-inside: SystemMessage.systemMessage($X)
+              - pattern-inside: SystemMessage.builder().text($X)
+              - pattern-inside: new SystemPromptTemplate($X)
+              - pattern-inside: SystemPromptTemplate.builder().template($X)
+              - pattern-inside: SystemPromptTemplate.builder().variables($X)
+              - pattern-inside: SystemPromptTemplate.builder().$B(...).template($X)
+              - pattern-inside: SystemPromptTemplate.builder().$B(...).variables($X)
+              - pattern-inside: (SystemPromptTemplate $SPT).add($NAME, $X)
+          - pattern: $X
+      - patterns:
+          - pattern-inside: $OWNER.$FILL($X, ...)
+          - metavariable-regex:
+              metavariable: $FILL
+              regex: ^(?:createMessage|create|render)$
+          - pattern-either:
+              - pattern-inside: new SystemPromptTemplate($TPL).$FILL($X, ...)
+              - pattern-inside: (SystemPromptTemplate $SPT).$FILL($X, ...)
+          - pattern: $X
+      # LangChain4j AiServices (langchain4j 1.22.0): systemMessage(text) and the
+      # systemMessageProvider / systemMessageProviderWithContext / systemMessageTransformer
+      # lambdas, whose result is the system message (and may hold {{variables}}), and a
+      # PromptTemplate turned into a system message (`PromptTemplate.from(t).apply(vars)
+      # .toSystemMessage()`), in a file that imports LangChain4j.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $AIS.systemMessage($X)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: $AIS.$PROVIDER(($ID) -> $X)
+                      - patterns:
+                          - pattern-inside: '$AIS.$PROVIDER(($ID) -> { ... })'
+                          - pattern-inside: return $X;
+                  - metavariable-regex:
+                      metavariable: $PROVIDER
+                      regex: ^(?:systemMessageProvider|systemMessageProviderWithContext|systemMessageTransformer)$
+              - pattern-inside: $PT.apply($X).toSystemMessage()
+              - pattern-inside: PromptTemplate.from($X, ...).apply($VARS).toSystemMessage()
+          - pattern: $X
+          - pattern-not: '{ ... }'
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\z'
+      # A call to a LangChain4j AI service whose interface is declared in this file, passing a
+      # value into a {{variable}} of the method's or the interface's @SystemMessage template:
+      # the variable named by @V("name"), or, when compiled with -parameters (the Spring Boot
+      # default), by the parameter's own name. The first three parameters are checked.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  interface $I {
+                    ...
+                    @$SMA($SM)
+                    $RT $M(@V($K) $TX $PX, ...);
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  interface $I {
+                    ...
+                    @$SMA({..., $SM, ...})
+                    $RT $M(@V($K) $TX $PX, ...);
+                    ...
+                  }
+                  ...
+          - pattern-inside: $SVC.$M($X, ...)
+          - metavariable-regex:
+              metavariable: $SMA
+              regex: ^(?:dev\.langchain4j\.service\.)?SystemMessage$
+          - metavariable-regex:
+              metavariable: $SM
+              regex: (?s).*\{\{
+          - metavariable-comparison:
+              comparison: str($K) in str($SM)
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  interface $I {
+                    ...
+                    @$SMA($SM)
+                    $RT $M($TX $PX, ...);
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  interface $I {
+                    ...
+                    @$SMA({..., $SM, ...})
+                    $RT $M($TX $PX, ...);
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M(@UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M(@UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M(@MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M(@MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M(@UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M(@UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M(@dev.langchain4j.service.UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M(@dev.langchain4j.service.UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M(@dev.langchain4j.service.MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M(@dev.langchain4j.service.MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M(@dev.langchain4j.service.UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M(@dev.langchain4j.service.UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M(@V($KV) $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M(@V($KV) $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-inside: $SVC.$M($X, ...)
+          - metavariable-regex:
+              metavariable: $SMA
+              regex: ^(?:dev\.langchain4j\.service\.)?SystemMessage$
+          - metavariable-regex:
+              metavariable: $SM
+              regex: (?s).*\{\{
+          - metavariable-comparison:
+              comparison: str($PX) in str($SM)
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  interface $I {
+                    ...
+                    @$SMA($SM)
+                    $RT $M($T0 $P0, @V($K) $TX $PX, ...);
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  interface $I {
+                    ...
+                    @$SMA({..., $SM, ...})
+                    $RT $M($T0 $P0, @V($K) $TX $PX, ...);
+                    ...
+                  }
+                  ...
+          - pattern-inside: $SVC.$M($A0, $X, ...)
+          - metavariable-regex:
+              metavariable: $SMA
+              regex: ^(?:dev\.langchain4j\.service\.)?SystemMessage$
+          - metavariable-regex:
+              metavariable: $SM
+              regex: (?s).*\{\{
+          - metavariable-comparison:
+              comparison: str($K) in str($SM)
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  interface $I {
+                    ...
+                    @$SMA($SM)
+                    $RT $M($T0 $P0, $TX $PX, ...);
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  interface $I {
+                    ...
+                    @$SMA({..., $SM, ...})
+                    $RT $M($T0 $P0, $TX $PX, ...);
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M($T0 $P0, @UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M($T0 $P0, @UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M($T0 $P0, @MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M($T0 $P0, @MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M($T0 $P0, @UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M($T0 $P0, @UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M($T0 $P0, @dev.langchain4j.service.UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M($T0 $P0, @dev.langchain4j.service.UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M($T0 $P0, @dev.langchain4j.service.MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M($T0 $P0, @dev.langchain4j.service.MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M($T0 $P0, @dev.langchain4j.service.UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M($T0 $P0, @dev.langchain4j.service.UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M($T0 $P0, @V($KV) $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M($T0 $P0, @V($KV) $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-inside: $SVC.$M($A0, $X, ...)
+          - metavariable-regex:
+              metavariable: $SMA
+              regex: ^(?:dev\.langchain4j\.service\.)?SystemMessage$
+          - metavariable-regex:
+              metavariable: $SM
+              regex: (?s).*\{\{
+          - metavariable-comparison:
+              comparison: str($PX) in str($SM)
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  interface $I {
+                    ...
+                    @$SMA($SM)
+                    $RT $M($T0 $P0, $T1 $P1, @V($K) $TX $PX, ...);
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  interface $I {
+                    ...
+                    @$SMA({..., $SM, ...})
+                    $RT $M($T0 $P0, $T1 $P1, @V($K) $TX $PX, ...);
+                    ...
+                  }
+                  ...
+          - pattern-inside: $SVC.$M($A0, $A1, $X, ...)
+          - metavariable-regex:
+              metavariable: $SMA
+              regex: ^(?:dev\.langchain4j\.service\.)?SystemMessage$
+          - metavariable-regex:
+              metavariable: $SM
+              regex: (?s).*\{\{
+          - metavariable-comparison:
+              comparison: str($K) in str($SM)
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  interface $I {
+                    ...
+                    @$SMA($SM)
+                    $RT $M($T0 $P0, $T1 $P1, $TX $PX, ...);
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  interface $I {
+                    ...
+                    @$SMA({..., $SM, ...})
+                    $RT $M($T0 $P0, $T1 $P1, $TX $PX, ...);
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M($T0 $P0, $T1 $P1, @UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M($T0 $P0, $T1 $P1, @UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M($T0 $P0, $T1 $P1, @MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M($T0 $P0, $T1 $P1, @MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M($T0 $P0, $T1 $P1, @UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M($T0 $P0, $T1 $P1, @UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M($T0 $P0, $T1 $P1, @dev.langchain4j.service.UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M($T0 $P0, $T1 $P1, @dev.langchain4j.service.UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M($T0 $P0, $T1 $P1, @dev.langchain4j.service.MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M($T0 $P0, $T1 $P1, @dev.langchain4j.service.MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M($T0 $P0, $T1 $P1, @dev.langchain4j.service.UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M($T0 $P0, $T1 $P1, @dev.langchain4j.service.UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA($SM)
+                $RT $M($T0 $P0, $T1 $P1, @V($KV) $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              interface $I {
+                ...
+                @$SMA({..., $SM, ...})
+                $RT $M($T0 $P0, $T1 $P1, @V($KV) $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-inside: $SVC.$M($A0, $A1, $X, ...)
+          - metavariable-regex:
+              metavariable: $SMA
+              regex: ^(?:dev\.langchain4j\.service\.)?SystemMessage$
+          - metavariable-regex:
+              metavariable: $SM
+              regex: (?s).*\{\{
+          - metavariable-comparison:
+              comparison: str($PX) in str($SM)
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$SMA($SM)
+                  interface $I {
+                    ...
+                    $RT $M(@V($K) $TX $PX, ...);
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  @$SMA({..., $SM, ...})
+                  interface $I {
+                    ...
+                    $RT $M(@V($K) $TX $PX, ...);
+                    ...
+                  }
+                  ...
+          - pattern-inside: $SVC.$M($X, ...)
+          - metavariable-regex:
+              metavariable: $SMA
+              regex: ^(?:dev\.langchain4j\.service\.)?SystemMessage$
+          - metavariable-regex:
+              metavariable: $SM
+              regex: (?s).*\{\{
+          - metavariable-comparison:
+              comparison: str($K) in str($SM)
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$SMA($SM)
+                  interface $I {
+                    ...
+                    $RT $M($TX $PX, ...);
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  @$SMA({..., $SM, ...})
+                  interface $I {
+                    ...
+                    $RT $M($TX $PX, ...);
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M(@UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M(@UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M(@MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M(@MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M(@UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M(@UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M(@dev.langchain4j.service.UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M(@dev.langchain4j.service.UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M(@dev.langchain4j.service.MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M(@dev.langchain4j.service.MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M(@dev.langchain4j.service.UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M(@dev.langchain4j.service.UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M(@V($KV) $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M(@V($KV) $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-inside: $SVC.$M($X, ...)
+          - metavariable-regex:
+              metavariable: $SMA
+              regex: ^(?:dev\.langchain4j\.service\.)?SystemMessage$
+          - metavariable-regex:
+              metavariable: $SM
+              regex: (?s).*\{\{
+          - metavariable-comparison:
+              comparison: str($PX) in str($SM)
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$SMA($SM)
+                  interface $I {
+                    ...
+                    $RT $M($T0 $P0, @V($K) $TX $PX, ...);
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  @$SMA({..., $SM, ...})
+                  interface $I {
+                    ...
+                    $RT $M($T0 $P0, @V($K) $TX $PX, ...);
+                    ...
+                  }
+                  ...
+          - pattern-inside: $SVC.$M($A0, $X, ...)
+          - metavariable-regex:
+              metavariable: $SMA
+              regex: ^(?:dev\.langchain4j\.service\.)?SystemMessage$
+          - metavariable-regex:
+              metavariable: $SM
+              regex: (?s).*\{\{
+          - metavariable-comparison:
+              comparison: str($K) in str($SM)
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$SMA($SM)
+                  interface $I {
+                    ...
+                    $RT $M($T0 $P0, $TX $PX, ...);
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  @$SMA({..., $SM, ...})
+                  interface $I {
+                    ...
+                    $RT $M($T0 $P0, $TX $PX, ...);
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M($T0 $P0, @UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M($T0 $P0, @UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M($T0 $P0, @MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M($T0 $P0, @MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M($T0 $P0, @UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M($T0 $P0, @UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M($T0 $P0, @dev.langchain4j.service.UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M($T0 $P0, @dev.langchain4j.service.UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M($T0 $P0, @dev.langchain4j.service.MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M($T0 $P0, @dev.langchain4j.service.MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M($T0 $P0, @dev.langchain4j.service.UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M($T0 $P0, @dev.langchain4j.service.UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M($T0 $P0, @V($KV) $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M($T0 $P0, @V($KV) $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-inside: $SVC.$M($A0, $X, ...)
+          - metavariable-regex:
+              metavariable: $SMA
+              regex: ^(?:dev\.langchain4j\.service\.)?SystemMessage$
+          - metavariable-regex:
+              metavariable: $SM
+              regex: (?s).*\{\{
+          - metavariable-comparison:
+              comparison: str($PX) in str($SM)
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$SMA($SM)
+                  interface $I {
+                    ...
+                    $RT $M($T0 $P0, $T1 $P1, @V($K) $TX $PX, ...);
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  @$SMA({..., $SM, ...})
+                  interface $I {
+                    ...
+                    $RT $M($T0 $P0, $T1 $P1, @V($K) $TX $PX, ...);
+                    ...
+                  }
+                  ...
+          - pattern-inside: $SVC.$M($A0, $A1, $X, ...)
+          - metavariable-regex:
+              metavariable: $SMA
+              regex: ^(?:dev\.langchain4j\.service\.)?SystemMessage$
+          - metavariable-regex:
+              metavariable: $SM
+              regex: (?s).*\{\{
+          - metavariable-comparison:
+              comparison: str($K) in str($SM)
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$SMA($SM)
+                  interface $I {
+                    ...
+                    $RT $M($T0 $P0, $T1 $P1, $TX $PX, ...);
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  @$SMA({..., $SM, ...})
+                  interface $I {
+                    ...
+                    $RT $M($T0 $P0, $T1 $P1, $TX $PX, ...);
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M($T0 $P0, $T1 $P1, @UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M($T0 $P0, $T1 $P1, @UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M($T0 $P0, $T1 $P1, @MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M($T0 $P0, $T1 $P1, @MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M($T0 $P0, $T1 $P1, @UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M($T0 $P0, $T1 $P1, @UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M($T0 $P0, $T1 $P1, @dev.langchain4j.service.UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M($T0 $P0, $T1 $P1, @dev.langchain4j.service.UserMessage $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M($T0 $P0, $T1 $P1, @dev.langchain4j.service.MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M($T0 $P0, $T1 $P1, @dev.langchain4j.service.MemoryId $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M($T0 $P0, $T1 $P1, @dev.langchain4j.service.UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M($T0 $P0, $T1 $P1, @dev.langchain4j.service.UserName $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA($SM)
+              interface $I {
+                ...
+                $RT $M($T0 $P0, $T1 $P1, @V($KV) $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              @$SMA({..., $SM, ...})
+              interface $I {
+                ...
+                $RT $M($T0 $P0, $T1 $P1, @V($KV) $TX $PX, ...);
+                ...
+              }
+              ...
+          - pattern-inside: $SVC.$M($A0, $A1, $X, ...)
+          - metavariable-regex:
+              metavariable: $SMA
+              regex: ^(?:dev\.langchain4j\.service\.)?SystemMessage$
+          - metavariable-regex:
+              metavariable: $SM
+              regex: (?s).*\{\{
+          - metavariable-comparison:
+              comparison: str($PX) in str($SM)
+          - pattern: $X
+    pattern-sanitizers:
+      # Values that can't carry text: numbers, booleans, UUIDs, dates, and enum constants
+      # parsed from the string (Integer.parseInt(x), Tone.valueOf(x); not String.valueOf).
+      - exact: true
+        patterns:
+          - pattern: $NUM.$PARSE(...)
+          - metavariable-regex:
+              metavariable: $NUM
+              regex: ^(?:java\.lang\.)?(?:Integer|Long|Short|Byte|Double|Float|Boolean)$|^(?:java\.util\.)?UUID$|^(?:java\.time\.)?(?:LocalDate|LocalDateTime|LocalTime|Instant|OffsetDateTime|ZonedDateTime|Duration)$
+          - metavariable-regex:
+              metavariable: $PARSE
+              regex: ^(?:parse\w*|valueOf|fromString)$
+      - exact: true
+        patterns:
+          - pattern: $CLS.valueOf(...)
+          - metavariable-regex:
+              metavariable: $CLS
+              regex: ^(?!(?:java\.lang\.)?(?:String|Object|CharSequence|StringBuilder|StringBuffer|Character)$)(?:\w+\.)*[A-Z]\w*$
+      # An allowlist lookup in a constant table (`PERSONAS.get(choice)`, `COMMANDS.getOrDefault(k,
+      # ...)`), and a check against a constant set or an anchored pattern before use
+      # (`if (!ALLOWED.contains(x)) throw ...`, `x.matches("[a-z_]+")`).
+      - patterns:
+          - pattern-either:
+              - pattern: $TABLE.get($KEY)
+              - pattern: $TABLE.getOrDefault($KEY, $DEF)
+          - metavariable-regex:
+              metavariable: $TABLE
+              regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+      - by-side-effect: true
+        patterns:
+          - pattern: $SET.contains($X)
+          - metavariable-regex:
+              metavariable: $SET
+              regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+          - focus-metavariable: $X
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X.matches("$RE")
+              - pattern: Pattern.matches("$RE", $X)
+              - pattern: $PAT.matcher($X).matches()
+          - focus-metavariable: $X
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM01:2026 - Prompt Injection"
+        - "LLM01:2025 - Prompt Injection"
+      owasp-agentic:
+        - "ASI01 - Agent Goal Hijack"
+      owasp-aisvs:
+        - "v1.01-C2.1.6 - Prompt Injection Defenses"
+      mitre-atlas:
+        - "AML.T0051.000 - LLM Prompt Injection: Direct"
+      cwe:
+        - "CWE-1427: Improper Neutralization of Input Used for LLM Prompting"
+      # Validation the rule can't see (a check in another class, a database constraint, a
+      # length-limited slug) makes some findings safe in practice.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [spring-ai, langchain4j, spring-mvc, spring-webflux, servlet]
+      # API shapes checked 2026-10-24 against Maven Central sources: spring-ai-client-chat and
+      # spring-ai-model 2.0.2 and 1.1.8 (ChatClient.ChatClientRequestSpec.system,
+      # Builder.defaultSystem, PromptSystemSpec text / param / params, SystemMessage,
+      # SystemPromptTemplate), langchain4j and langchain4j-core 1.22.0 (AiServices.systemMessage /
+      # systemMessageProvider / systemMessageProviderWithContext / systemMessageTransformer;
+      # @SystemMessage on TYPE and METHOD; @V optional with -parameters, per V.java;
+      # SystemMessage.from / systemMessage / builder; PromptTemplate.apply -> Prompt.toSystemMessage),
+      # spring-web and spring-webflux 7.0.10 (handler parameter annotations, ServerRequest), and
+      # jakarta.servlet 6.1. AI service interfaces declared in another file (a Spring Boot
+      # @AiService bean) can't be followed by a single-file scan.
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM01_PromptInjection.md
+        - https://cwe.mitre.org/data/definitions/1427.html
+        - https://github.com/spring-projects/spring-ai/blob/v2.0.2/spring-ai-client-chat/src/main/java/org/springframework/ai/chat/client/ChatClient.java
+        - https://github.com/spring-projects/spring-ai/blob/v2.0.2/spring-ai-model/src/main/java/org/springframework/ai/chat/prompt/SystemPromptTemplate.java
+        - https://github.com/langchain4j/langchain4j/blob/1.22.0/langchain4j/src/main/java/dev/langchain4j/service/AiServices.java
+        - https://github.com/langchain4j/langchain4j/blob/1.22.0/langchain4j/src/main/java/dev/langchain4j/service/V.java
+        - https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-controller/ann-methods/arguments.html

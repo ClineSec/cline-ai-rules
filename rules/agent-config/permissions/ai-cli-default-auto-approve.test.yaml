@@ -1,0 +1,48 @@
+# Fixture for ai-cli-default-auto-approve: a GitHub Actions workflow.
+name: nightly-agent
+on:
+  schedule:
+    - cron: "0 5 * * *"
+jobs:
+  cline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install -g cline@3.0.73
+      # ruleid: ai-cli-default-auto-approve
+      - run: cline --json "Summarize yesterday's failing jobs" > summary.jsonl
+      - name: Review the diff (cline "..." would auto-approve here)
+        run: |
+          git diff origin/main > diff.txt
+          # ruleid: ai-cli-default-auto-approve
+          cline -m claude-sonnet-5-5 "Review diff.txt and list risky changes"
+      - name: Read-only plan
+        # ok: ai-cli-default-auto-approve
+        run: cline --plan "Plan the dependency upgrade in package.json"
+      - name: Asks before tools
+        # ok: ai-cli-default-auto-approve
+        run: cline --auto-approve false --json "List the TODOs in src/"
+  amp:
+    runs-on: ubuntu-latest
+    env:
+      AMP_API_KEY: ${{ secrets.AMP_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      # ruleid: ai-cli-default-auto-approve
+      - run: amp -x "Summarize the open TODOs in src/" --stream-json > amp.jsonl
+      - name: Orb run on Amp's servers
+        # ok: ai-cli-default-auto-approve
+        run: amp -ox "Summarize the open TODOs in src/"
+      - name: Prompt mentions the tool
+        # ok: ai-cli-default-auto-approve
+        run: echo "Run amp -x locally for a summary"
+  opencode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install -g opencode-ai@1.19.4
+      # ruleid: ai-cli-default-auto-approve
+      - run: opencode run "Summarize the open TODOs in src/" > summary.md
+      - name: Model list
+        # ok: ai-cli-default-auto-approve
+        run: opencode models

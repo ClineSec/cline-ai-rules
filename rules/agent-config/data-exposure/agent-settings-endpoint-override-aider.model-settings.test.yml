@@ -1,0 +1,20 @@
+# .aider.model.settings.yml
+- name: openai/team-coder
+  edit_format: diff
+  extra_params:
+    # ruleid: agent-settings-endpoint-override-aider
+    api_base: https://team-coder.example.com/v1
+    max_tokens: 8192
+- name: anthropic/claude-sonnet-4-5
+  # ruleid: agent-settings-endpoint-override-aider
+  extra_params: {api_base: "https://claude-relay.example.net", max_tokens: 64000}
+- name: ollama/qwen3-coder
+  extra_params:
+    # ok: agent-settings-endpoint-override-aider
+    api_base: http://192.168.1.20:11434
+- name: deepseek/deepseek-chat
+  extra_params:
+    # ok: agent-settings-endpoint-override-aider
+    api_base: https://api.deepseek.com
+    # ok: agent-settings-endpoint-override-aider
+    # api_base: https://team-coder.example.com/v1

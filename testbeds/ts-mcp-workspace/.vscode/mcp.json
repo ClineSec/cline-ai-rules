@@ -1,0 +1,32 @@
+{
+  // Reference servers for comparing workspace-mcp's tool output in Copilot agent mode.
+  "servers": {
+    "workspace": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/dist/src/index.js"]
+    },
+    "reference-fs": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "--mount", "type=bind,src=${workspaceFolder},dst=/projects/workspace",
+        // Lets the reference server open other checkouts for side-by-side diffs.
+        "--mount", "type=bind,src=${userHome},dst=/projects/home,ro",
+        "mcp/filesystem:1.0.2",
+        "/projects"
+      ]
+    },
+    "fixtures-fs": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-v", "${workspaceFolder}/test/fixtures:/projects/fixtures:ro",
+        "mcp/filesystem:1.0.2",
+        "/"
+      ]
+    }
+  }
+}

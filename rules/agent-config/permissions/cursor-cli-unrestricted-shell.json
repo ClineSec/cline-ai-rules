@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "permissions": {
+    "allow": [
+      "Read(src/**)",
+      // ruleid: cursor-cli-unrestricted-shell
+      "Shell(*)",
+      // ruleid: cursor-cli-unrestricted-shell
+      "Shell(**)",
+      // ruleid: cursor-cli-unrestricted-shell
+      "Shell(*:*)",
+      // ok: cursor-cli-unrestricted-shell
+      "Shell(git)",
+      // ok: cursor-cli-unrestricted-shell
+      "Shell(curl:*)",
+      // ok: cursor-cli-unrestricted-shell
+      "Shell(npm:test)",
+      // ok: cursor-cli-unrestricted-shell
+      "Write(src/**)",
+      // ok: cursor-cli-unrestricted-shell
+      "WebFetch(*)"
+    ],
+    "deny": [
+      // ok: cursor-cli-unrestricted-shell
+      "Shell(*)"
+    ]
+  },
+  "notes": {
+    // ok: cursor-cli-unrestricted-shell
+    "allow": ["Shell(*)"]
+  }
+}

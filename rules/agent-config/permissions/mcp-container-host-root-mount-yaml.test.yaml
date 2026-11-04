@@ -1,0 +1,47 @@
+name: Fixture servers
+version: 0.0.1
+schema: v1
+# ok: mcp-container-host-root-mount-yaml
+docs: /
+mcpServers:
+  - name: Tree
+    command: docker
+    args:
+      - run
+      - -i
+      - --rm
+      - -v
+      # ruleid: mcp-container-host-root-mount-yaml
+      - /:/host:ro
+      - example-org/tree-mcp:1.4.0
+  - name: Flow args
+    command: docker
+    # ruleid: mcp-container-host-root-mount-yaml
+    args: ["run", "-i", "--rm", "--mount", "type=bind,source=/Users/fixture-user,target=/home", "example-org/notes-mcp:3.1.0"]
+  - name: Windows home
+    command: docker
+    args:
+      - run
+      - -i
+      - -v
+      # ruleid: mcp-container-host-root-mount-yaml
+      - C:\Users\fixture-user:/home/user
+      - example-org/notes-mcp:3.1.0
+  - name: Shell
+    command: bash
+    args:
+      - -c
+      # ruleid: mcp-container-host-root-mount-yaml
+      - exec docker run -i --rm -v $HOME:/home/user example-org/notes-mcp:3.1.0
+  - name: Unexpanded variable
+    command: docker
+    # ok: mcp-container-host-root-mount-yaml
+    args: ["run", "-i", "--rm", "-v", "${HOME}:/home/user", "example-org/notes-mcp:3.1.0"]
+  - name: Project folder
+    command: docker
+    # ok: mcp-container-host-root-mount-yaml
+    args: ["run", "-i", "--rm", "-v", "/Users/fixture-user/src/fixture-app:/workspace", "example-org/notes-mcp:3.1.0"]
+  - name: Filesystem server
+    command: docker
+    # ok: mcp-container-host-root-mount-yaml
+    args: ["run", "-i", "--rm", "-v", "/:/projects/host:ro", "mcp/filesystem:1.0.2", "/projects"]

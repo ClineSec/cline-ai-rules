@@ -1,0 +1,22 @@
+{
+  // ruleid: a2a-agent-card-without-security-schemes
+  "name": "Fridge Recipes",
+  "description": "Suggests recipes from what is in the fridge.",
+  "version": "1.4.0",
+  "supportedInterfaces": [
+    { "url": "https://recipes.example.com/a2a/v1", "protocolBinding": "JSONRPC", "protocolVersion": "1.0" },
+    { "url": "recipes.example.com:50051", "protocolBinding": "GRPC", "protocolVersion": "1.0" }
+  ],
+  "capabilities": { "streaming": true, "extendedAgentCard": true },
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain"],
+  "skills": [
+    {
+      // ok: a2a-agent-card-without-security-schemes
+      "name": "Suggest a recipe",
+      "id": "suggest",
+      "description": "Picks a recipe for the listed ingredients.",
+      "tags": ["food"]
+    }
+  ]
+}

@@ -1,0 +1,335 @@
+rules:
+  - id: torch-hub-untrusted-repo
+    languages: [python]
+    severity: WARNING
+    message: >-
+      `torch.hub.load`, `list`, and `help` download a GitHub repository and import its
+      `hubconf.py`, which runs that repository's Python in this process. Here the repository is
+      not owned by PyTorch's own organizations, its ref can move (no ref means the default
+      branch; a branch or tag can be pushed), and the trust prompt is off: `trust_repo=True`,
+      `None`, or any value other than `False` or `"check"` skips it (an environment string such
+      as "false" too), and before torch 2.11 leaving it out only printed a warning. Or the repo
+      string is built at run time with `skip_validation=True`, so the ref can name a commit from
+      any fork. Whoever can push to that repository, or choose the string, gets code execution.
+      Pin the repo to a reviewed full commit SHA (`owner/repo:<40-hex sha>`, which needs
+      `skip_validation=True` unless it is a branch or tag tip), or vendor the code and load it
+      with `source="local"`; keep `trust_repo="check"` for anything unpinned.
+    # Every branch matches a call $HEAD(...) that is either the hub function itself
+    # (torch.hub.load / list / help, under any import alias) or functools.partial over one
+    # ($H). Keyword conditions written as $HEAD(..., k=v, ...) cover both, because the leading
+    # `...` also absorbs partial's first argument. $REPO is the repo argument (first
+    # positional, repo_or_dir for load, github for list and help). source="local" imports
+    # hubconf.py from a folder on disk without downloading anything (torch lower-cases it).
+    pattern-either:
+      # --- A third-party repo at a moving ref, loaded without a trust prompt ---------------
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: torch.hub.$FN(...)
+                  - pattern-either:
+                      - pattern: $HEAD($REPO, ...)
+                      - pattern: $HEAD(..., repo_or_dir=$REPO, ...)
+                      - pattern: $HEAD(..., github=$REPO, ...)
+                  - metavariable-pattern:
+                      metavariable: $HEAD
+                      pattern-either:
+                        - pattern: torch.hub.load
+                        - pattern: torch.hub.list
+                        - pattern: torch.hub.help
+              - patterns:
+                  - pattern: functools.partial(torch.hub.$FN, ...)
+                  - pattern-either:
+                      - pattern: $HEAD($H, $REPO, ...)
+                      - pattern: $HEAD($H, ..., repo_or_dir=$REPO, ...)
+                      - pattern: $HEAD($H, ..., github=$REPO, ...)
+                  - metavariable-pattern:
+                      metavariable: $HEAD
+                      pattern: functools.partial
+                  - metavariable-pattern:
+                      metavariable: $H
+                      pattern-either:
+                        - pattern: torch.hub.load
+                        - pattern: torch.hub.list
+                        - pattern: torch.hub.help
+          - pattern-not: $HEAD(..., source="=~/^(?i:local)$/", ...)
+          - pattern-either:
+              # trust_repo left out. Its default was None (warn only) through torch 2.10 and
+              # is "check" (prompt) from 2.11. A call with **kwargs is left to the dict
+              # branch, and a partial whose later call passes trust_repo is left alone.
+              - patterns:
+                  - pattern: $HEAD(...)
+                  - pattern-not: $HEAD(..., trust_repo=$T, ...)
+                  - pattern-not: $HEAD(..., **$KW)
+                  - pattern-not: torch.hub.list($A, $B, $D, $T, ...)
+                  - pattern-not: torch.hub.help($A, $B, $D, $E, $T, ...)
+                  - pattern-not: functools.partial(torch.hub.list, $A, $B, $D, $T, ...)
+                  - pattern-not: functools.partial(torch.hub.help, $A, $B, $D, $E, $T, ...)
+                  # Tied to this partial's own assignment ($PV), so the region of another
+                  # partial assigned earlier doesn't cover it.
+                  - pattern-not-inside:
+                      patterns:
+                        - pattern-inside: |
+                            $PS = $PC
+                            ...
+                            $PS(..., trust_repo=$PT, ...)
+                        - pattern: $PC
+              # A partial bound to the repo whose later call turns the prompt off: a keyword
+              # given at call time overrides the partial's own (functools.partial), so this
+              # counts whatever the partial itself sets. Reported on the partial, where the
+              # repo is; $PV ties the finding to the partial that $P names. A later call that
+              # keeps the prompt ("check", False) stays quiet.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $P = $PV
+                          ...
+                          $P(..., trust_repo=True, ...)
+                      - pattern-inside: |
+                          $P = $PV
+                          ...
+                          $P(..., trust_repo=None, ...)
+                      - patterns:
+                          - pattern-inside: |
+                              $P = $PV
+                              ...
+                              $P(..., trust_repo="$LS", ...)
+                          - metavariable-regex:
+                              metavariable: $LS
+                              regex: ^(?!check$)
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  $P = $PV
+                                  ...
+                                  $P(..., trust_repo=os.getenv(...), ...)
+                              - pattern-inside: |
+                                  $P = $PV
+                                  ...
+                                  $P(..., trust_repo=os.environ.get(...), ...)
+                              - pattern-inside: |
+                                  $P = $PV
+                                  ...
+                                  $P(..., trust_repo=os.environ[$K], ...)
+                          - pattern-not-inside: |
+                              $P = $PV
+                              ...
+                              $P(..., trust_repo=os.getenv($K, "check"), ...)
+                          - pattern-not-inside: |
+                              $P = $PV
+                              ...
+                              $P(..., trust_repo=os.environ.get($K, "check"), ...)
+                  - pattern: $PV
+              # A value the call (or the partial) sets itself. For a partial, a later call that
+              # keeps the prompt (trust_repo=False or "check") overrides it.
+              - patterns:
+                  - pattern-either:
+                      # _check_repo_is_trusted prompts only for False, or for "check" when the repo
+                      # isn't trusted yet. True, None, and every other string skip the prompt.
+                      - pattern: $HEAD(..., trust_repo=True, ...)
+                      - pattern: $HEAD(..., trust_repo=None, ...)
+                      - pattern: torch.hub.list($A, $B, $D, True, ...)
+                      - pattern: torch.hub.list($A, $B, $D, None, ...)
+                      - pattern: torch.hub.help($A, $B, $D, $E, True, ...)
+                      - pattern: torch.hub.help($A, $B, $D, $E, None, ...)
+                      - pattern: functools.partial(torch.hub.list, $A, $B, $D, True, ...)
+                      - pattern: functools.partial(torch.hub.list, $A, $B, $D, None, ...)
+                      - pattern: functools.partial(torch.hub.help, $A, $B, $D, $E, True, ...)
+                      - pattern: functools.partial(torch.hub.help, $A, $B, $D, $E, None, ...)
+                      - patterns:
+                          - pattern: $HEAD(..., trust_repo="$S", ...)
+                          - metavariable-regex:
+                              metavariable: $S
+                              regex: ^(?!check$)
+                      # An environment value is always a string, so it skips the prompt unless it
+                      # reads exactly "check".
+                      - patterns:
+                          - pattern-either:
+                              - pattern: $HEAD(..., trust_repo=os.getenv(...), ...)
+                              - pattern: $HEAD(..., trust_repo=os.environ.get(...), ...)
+                              - pattern: $HEAD(..., trust_repo=os.environ[$K], ...)
+                          - pattern-not: $HEAD(..., trust_repo=os.getenv($K, "check"), ...)
+                          - pattern-not: $HEAD(..., trust_repo=os.environ.get($K, "check"), ...)
+                      # The same value read into a variable first (constant propagation doesn't
+                      # follow it), unless the variable is assigned again.
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  $TV = os.getenv(...)
+                                  ...
+                              - pattern-inside: |
+                                  $TV = os.environ.get(...)
+                                  ...
+                              - pattern-inside: |
+                                  $TV = os.environ[$K]
+                                  ...
+                          - pattern-not-inside: |
+                              $TV = os.getenv($K, "check")
+                              ...
+                          - pattern-not-inside: |
+                              $TV = os.environ.get($K, "check")
+                              ...
+                          - pattern-not-inside: |
+                              $TV = $Y
+                              ...
+                              $TV = $Z
+                              ...
+                          - pattern: $HEAD(..., trust_repo=$TV, ...)
+                      # Load options kept in a dict and passed as **kwargs.
+                      - patterns:
+                          - pattern-inside: |
+                              $KW = {..., "trust_repo": $T, ...}
+                              ...
+                          - pattern: $HEAD(..., **$KW)
+                          - metavariable-regex:
+                              metavariable: $T
+                              regex: ^(?:True|None|["'](?!check["']).*)$
+                  - pattern-not-inside:
+                      patterns:
+                        - pattern-either:
+                            - pattern-inside: |
+                                $PS = $PC
+                                ...
+                                $PS(..., trust_repo=False, ...)
+                            - pattern-inside: |
+                                $PS = $PC
+                                ...
+                                $PS(..., trust_repo="check", ...)
+                        - pattern: $PC
+          # A full commit SHA is content-addressed, so the code can't change under it. Constant
+          # propagation resolves module constants, concatenation, and f-strings made only of
+          # constants.
+          - pattern-not: $HEAD("=~/^[^/:]+/[^/:]+:[0-9a-fA-F]{40}$/", ...)
+          - pattern-not: $HEAD($H, "=~/^[^/:]+/[^/:]+:[0-9a-fA-F]{40}$/", ...)
+          - pattern-not: $HEAD(..., repo_or_dir="=~/^[^/:]+/[^/:]+:[0-9a-fA-F]{40}$/", ...)
+          - pattern-not: $HEAD(..., github="=~/^[^/:]+/[^/:]+:[0-9a-fA-F]{40}$/", ...)
+          # torch trusts these owners without asking (_TRUSTED_REPO_OWNERS), so trust_repo
+          # changes nothing for them, and a ref chosen at run time is still checked against
+          # the repo's own branches and tags (the next branch covers turning that check off).
+          # The constant forms go through constant propagation; an f-string whose ref is a
+          # placeholder is read as raw text, inline or assigned to the variable passed.
+          - pattern-not: $HEAD("=~/^(?i:pytorch|facebookresearch|facebookincubator|fairinternal)/[^/:]+(?::.*)?$/", ...)
+          - pattern-not: $HEAD($H, "=~/^(?i:pytorch|facebookresearch|facebookincubator|fairinternal)/[^/:]+(?::.*)?$/", ...)
+          - pattern-not: $HEAD(..., repo_or_dir="=~/^(?i:pytorch|facebookresearch|facebookincubator|fairinternal)/[^/:]+(?::.*)?$/", ...)
+          - pattern-not: $HEAD(..., github="=~/^(?i:pytorch|facebookresearch|facebookincubator|fairinternal)/[^/:]+(?::.*)?$/", ...)
+          - metavariable-regex:
+              metavariable: $REPO
+              regex: ^(?![rRfF]{0,2}["'](?i:pytorch|facebookresearch|facebookincubator|fairinternal)/)
+          # A negative inside a nested branch only sees metavariables bound by a positive
+          # pattern in that same branch, so the repo argument is bound again here.
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: $HEAD($REPO, ...)
+                      - pattern: $HEAD($H, $REPO, ...)
+                      - pattern: $HEAD(..., repo_or_dir=$REPO, ...)
+                      - pattern: $HEAD(..., github=$REPO, ...)
+                  - pattern-not-inside: |
+                      $REPO = $V
+                      ...
+              - patterns:
+                  - pattern-inside: |
+                      $REPO = $V
+                      ...
+                  - metavariable-regex:
+                      metavariable: $V
+                      regex: ^(?![rRfF]{0,2}["'](?i:pytorch|facebookresearch|facebookincubator|fairinternal)/)
+      # A partial with no repo yet but the trust prompt turned off: a loader for any repo.
+      - patterns:
+          - pattern: functools.partial(torch.hub.$FN, ...)
+          - pattern: $HEAD($H, ..., trust_repo=$T, ...)
+          - metavariable-pattern:
+              metavariable: $HEAD
+              pattern: functools.partial
+          - metavariable-pattern:
+              metavariable: $H
+              pattern-either:
+                - pattern: torch.hub.load
+                - pattern: torch.hub.list
+                - pattern: torch.hub.help
+          - pattern-not: $HEAD($H, $REPO, ...)
+          - pattern-not: $HEAD(..., repo_or_dir=$REPO, ...)
+          - pattern-not: $HEAD(..., github=$REPO, ...)
+          - pattern-not: $HEAD(..., source="=~/^(?i:local)$/", ...)
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^(?:True|None|["'](?!check["']).*|os\.(?:getenv|environ)\b(?!.*["']check["']\s*\)$).*)$
+      # --- A repo string built at run time, with the fork check off ------------------------
+      # skip_validation=True skips _validate_not_a_forked_repo, and GitHub serves a fork's
+      # commits from the parent's archive URL, so a chosen ref runs any fork's code, even under
+      # a trusted owner. trust_repo=False still asks every time. A variable holding an
+      # f-string with a run-time placeholder doesn't resolve to a constant, so it counts.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: torch.hub.$FN(...)
+                  - pattern-either:
+                      - pattern: $HEAD($REPO, ...)
+                      - pattern: $HEAD(..., repo_or_dir=$REPO, ...)
+                      - pattern: $HEAD(..., github=$REPO, ...)
+                  - metavariable-pattern:
+                      metavariable: $HEAD
+                      pattern-either:
+                        - pattern: torch.hub.load
+                        - pattern: torch.hub.list
+                        - pattern: torch.hub.help
+              - patterns:
+                  - pattern: functools.partial(torch.hub.$FN, ...)
+                  - pattern-either:
+                      - pattern: $HEAD($H, $REPO, ...)
+                      - pattern: $HEAD($H, ..., repo_or_dir=$REPO, ...)
+                      - pattern: $HEAD($H, ..., github=$REPO, ...)
+                  - metavariable-pattern:
+                      metavariable: $HEAD
+                      pattern: functools.partial
+                  - metavariable-pattern:
+                      metavariable: $H
+                      pattern-either:
+                        - pattern: torch.hub.load
+                        - pattern: torch.hub.list
+                        - pattern: torch.hub.help
+          - pattern-not: $HEAD(..., source="=~/^(?i:local)$/", ...)
+          - pattern: $HEAD(..., skip_validation=True, ...)
+          - pattern-not: $HEAD(..., trust_repo=False, ...)
+          - metavariable-pattern:
+              metavariable: $REPO
+              pattern-either:
+                # A name or expression that doesn't resolve to a string constant.
+                - patterns:
+                    - pattern: $X
+                    - pattern-not: '"$S"'
+                # An f-string with a placeholder.
+                - patterns:
+                    - pattern: '"$S"'
+                    - metavariable-regex:
+                        metavariable: $S
+                        regex: (?s).*\{
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-aisvs:
+        - "v1.01-C4.1.2 - AI Workload Sandboxing & Validation"
+        - "v1.01-C6.1.3 - Model Artifact Integrity"
+      mitre-atlas:
+        - "AML.T0010.003 - AI Supply Chain Compromise: Model"
+        - "AML.T0011.000 - User Execution: Unsafe AI Artifacts"
+      cwe:
+        - "CWE-494: Download of Code Without Integrity Check"
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      technology: [pytorch, torch-hub]
+      # Verified 2026-10-23 against torch v2.14.1 torch/hub.py (load, list, help,
+      # _get_cache_or_reload, _check_repo_is_trusted, _parse_repo_info,
+      # _validate_not_a_forked_repo), and v2.10.0 / v2.11.0 for the trust_repo default change;
+      # v2.15.0 (2026-10-28) changes only a docstring. A call-time keyword overriding a
+      # partial's: CPython 3.15.2 Doc/library/functools.rst.
+      references:
+        - https://github.com/pytorch/pytorch/blob/v2.14.1/torch/hub.py
+        - https://github.com/pytorch/pytorch/blob/v2.10.0/torch/hub.py
+        - https://docs.pytorch.org/docs/stable/hub.html
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md
+        - https://cwe.mitre.org/data/definitions/494.html

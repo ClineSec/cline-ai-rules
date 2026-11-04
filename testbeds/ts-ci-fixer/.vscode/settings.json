@@ -1,0 +1,17 @@
+{
+  "editor.formatOnSave": true,
+  "typescript.tsdk": "node_modules/typescript/lib",
+  // Copilot agent mode runs the test loop without asking.
+  "chat.tools.terminal.autoApprove": {
+    "npm test": true,
+    "npx vitest run": true,
+    "/^git (status|diff|log)\\b/": true,
+    "rm": false,
+    // Pull a failed run's log while fixing it.
+    "curl": true,
+    "nc": false
+  },
+  // Roo Code: commands it may run once auto-approve for commands is on.
+  "roo-cline.allowedCommands": ["npm test", "npx vitest run", "git log", "git diff", "wget -qO-"],
+  "roo-cline.deniedCommands": ["git push", "curl"]
+}

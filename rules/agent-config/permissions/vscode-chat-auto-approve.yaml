@@ -1,0 +1,149 @@
+rules:
+  - id: vscode-chat-auto-approve
+    # Regex, not JSON: OpenGrep's JSON parser skips *.code-workspace files (unknown extension),
+    # and a workspace file's "settings" block applies like .vscode/settings.json. Both are
+    # JSONC, so commented-out lines and /* */ blocks are skipped.
+    #
+    # Left out on purpose (VS Code 1.143.1): chat.tools.edits.autoApprove is APPLICATION
+    # scoped, so VS Code ignores it in workspace settings and a committed file can't turn it
+    # on. chat.tools.urls.autoApprove is read from workspace settings, but a pattern that
+    # covers any host is agent-allowlist-webfetch-any-domain-vscode's finding, and a scoped
+    # one approves only that site's fetches, not tools or commands.
+    languages: [regex]
+    severity: ERROR
+    message: >-
+      This VS Code setting lets the chat agent run tools and terminal commands without asking.
+      "chat.permissions.default": "autoApprove" or "autopilot" starts every new chat session
+      in Bypass Approvals mode, "approvals": "allowAll" does the same for agent sessions such
+      as Copilot CLI, and a terminal auto-approve rule like "/.*/": true approves every
+      command. A rule for a shell or command runner ("bash": true, "pwsh": true, "env": true)
+      does too: rules match the start of each sub-command, and the script in
+      `bash -c '...'` is a string argument, not a sub-command, so it is never checked.
+      "chat.tools.terminal.ignoreDefaultAutoApproveRules": true drops VS Code's built-in deny
+      rules (rm, curl, wget, chmod, eval, xargs, ...), so any allow rule, this file's or one
+      in the developer's own user settings, also approves those commands. VS Code 1.143 reads
+      all of these from workspace settings in a trusted workspace.
+      "chat.tools.autoApprove" and "chat.tools.global.autoApprove" are ignored in workspace
+      settings since the CVE-2025-53773 fix, but older VS Code builds and forks still read
+      them. A setting name, value, or terminal rule written with \u escapes is reported
+      whatever it decodes to: VS Code decodes them, and nobody needs them except to hide the
+      setting from a reviewer or a scanner. A prompt injection in a file, issue, web page, or
+      tool result the agent reads can then run arbitrary commands with the developer's
+      credentials, for everyone who opens the project. Remove the setting and approve
+      specific commands, such as "npm test": true, in chat.tools.terminal.autoApprove.
+    paths:
+      include:
+        - ".vscode/settings.json"
+        - "*.code-workspace"
+    pattern-regex: |-
+      (?xm)
+      (?(DEFINE)
+        # A JSON string, so comment markers inside one (URLs, globs) are skipped.
+        (?<str> " [^"\\\n]*+ (?: \\. [^"\\\n]*+ )*+ " )
+        # One piece of an object body before the flagged member: a string, a whole // or /* */
+        # comment, a one-level nested object such as {"approve": false}, or any other character.
+        (?<piece> (?> (?&str) | //[^\n]*+ | /\* (?: [^*] | \*(?!/) )*+ \*/
+                    | \{ (?: (?&str) | [^"{}] )*+ \} | [^"{}/] | /(?![/*]) ) )
+        # Up to 250 tokens of what can follow a match, for the block-comment check below.
+        (?<run> (?> (?&str) | (?<=\n)[\x20\t]*+//[^\n]*+ | [^"/*\n]++ | \n | (?!/\*|\*/)[/*] ){0,250}+ )
+        # VS Code decodes JSON \uXXXX escapes before it reads a name or value, so
+        # "chat.permissions.d\u0065fault" is chat.permissions.default. As in
+        # vscode-task-runs-automatically, a string with an escape (?&esc) counts as a setting
+        # name when its dot-separated parts decode to the same lengths, and as a value when it
+        # decodes to the same length. (?&l) is one decoded letter (a letter or an escape of a
+        # printable ASCII character), (?&d) a dot or its escape.
+        (?<esc> (?= [^"\n]*? \\u00[2-7][0-9A-Fa-f] ) )
+        (?<l> [A-Za-z] | \\u00[2-7][0-9A-Fa-f] )
+        (?<d> \. | \\u002[eE] )
+        # chat.tools.autoApprove, chat.tools.global.autoApprove
+        (?<n_yolo> (?&esc) (?&l){4} (?&d) (?&l){5} (?&d) (?: (?&l){6} (?&d) )? (?&l){11} )
+        # chat.tools.terminal.ignoreDefaultAutoApproveRules
+        (?<n_nodef> (?&esc) (?&l){4} (?&d) (?&l){5} (?&d) (?&l){8} (?&d) (?&l){29} )
+        # chat.permissions.default
+        (?<n_perm> (?&esc) (?&l){4} (?&d) (?&l){11} (?&d) (?&l){7} )
+        # chat.defaultConfiguration, chat.agentSessions.defaultConfiguration
+        (?<n_conf> (?&esc) (?&l){4} (?&d) (?: (?&l){13} (?&d) )? (?&l){20} )
+        # chat.tools.terminal.autoApprove, chat.agent.terminal.autoApprove / .allowList,
+        # github.copilot.chat.agent.terminal.allowList
+        (?<n_term> (?&esc) (?: (?&l){6} (?&d) (?&l){7} (?&d) )? (?&l){4} (?&d) (?&l){5} (?&d) (?&l){8} (?&d)
+                   (?: (?&l){11} | (?&l){9} ) )
+        # A terminal rule key with an escape of a printable ASCII character, which no encoder
+        # writes for one except & ' < = > (Go and Gson escape those) and " \ (which have short
+        # escapes). An escaped backslash before a u (\\u00e9 in a regex rule) is not one.
+        (?<obf> \\u00 (?! 2[267] | 3[c-eC-E] | 5[cC] ) [2-7][0-9A-Fa-f] )
+        (?<hidden> " (?: [^"\\\n] | \\[^u\n] | (?! (?&obf) ) \\u )*+ (?&obf) (?: [^"\\\n] | \\. )*+ " )
+        # A terminal rule key that matches every command: /.*/, /.+/, /^.*$/, /^/, with flags.
+        # A slash may be written \/ (JSON's escaped slash).
+        (?<sl> \\?+ / )
+        (?<all> " (?&sl) (?: \^? \. [*+] \$? | \^ ) (?&sl) [a-z]* " )
+        # A shell or command runner, whose argument is a whole command line VS Code never
+        # parses: VS Code matches a string rule as ^name\b against each tree-sitter `command`
+        # node, and `bash -c '...'` is one node whose script is a string. The name may carry
+        # flags but no command ("bash -lc", "cmd.exe /c", "pwsh -Command"), or be the bare
+        # regex form ("/^bash\\b/").
+        (?<runner> (?i: bash | sh | zsh | dash | ksh | fish | pwsh | powershell | cmd
+                      | env | sudo | doas | eval | exec | xargs ) (?i:\.exe)? )
+        (?<shell> " (?: (?&runner) (?: [\x20\t]++ (?:--?|/) [A-Za-z]++ )*+
+                      | (?&sl) \^ (?&runner) (?: \\\\[bs] | \x20 )? (?&sl) [a-z]* ) " )
+      )
+      # The setting key is not on a // line. Possessive, so the indent can't backtrack past the
+      # check, while a // inside an earlier string on the line still matches.
+      ^[\x20\t]*+ (?!//) [^\n]*?
+      (?:
+          # Global auto-approve ("YOLO mode"), legacy and current names.
+          " (?: chat\.tools\.(?:global\.)?autoApprove | (?&n_yolo) ) "
+          \s*:\s* true \b
+          # Dropping VS Code's default terminal deny rules (rm, curl, chmod, eval, ...).
+        | " (?: chat\.tools\.terminal\.ignoreDefaultAutoApproveRules | (?&n_nodef) ) "
+          \s*:\s* true \b
+          # Default permission level for new local chat sessions.
+        | " (?: chat\.permissions\.default | (?&n_perm) ) " \s*:\s*
+          " (?: autoApprove | autopilot | (?&esc) (?: (?&l){9} | (?&l){11} ) ) "
+          # Default approvals for agent-host sessions, current and pre-migration names and
+          # values. The finding lands on the "approvals" member.
+        | " (?: chat\.(?:agentSessions\.)?defaultConfiguration | (?&n_conf) ) "
+          \s*:\s* \{ (?&piece)*? \K
+          " (?: approvals | (?&esc) (?&l){9} ) " \s*:\s*
+          " (?: allowAll | autoApprove | (?&esc) (?: (?&l){8} | (?&l){11} ) ) "
+          # Terminal auto-approve rules, current and deprecated names, with a match-all, shell,
+          # or escaped key set to true or {"approve": true}. The finding lands on the rule.
+        | " (?: chat\.tools\.terminal\.autoApprove | chat\.agent\.terminal\.(?:autoApprove|allowList)
+              | github\.copilot\.chat\.agent\.terminal\.allowList
+              | (?&n_term) ) " \s*:\s* \{ (?&piece)*? \K
+          (?: (?&all) | (?&shell) | (?&hidden) ) \s*:\s*
+          (?: true \b | \{ (?: (?&str) | [^"{}] )*? " (?: approve | (?&esc) (?&l){7} ) " \s*:\s* true \b )
+      )
+      # Not inside a /* */ comment: the next comment delimiter after the match must not be */.
+      # Capped at 16 x 250 tokens, as in vscode-task-runs-automatically, so a huge file can't
+      # push the scan past PCRE's match limit and silently drop the finding.
+      (?! (?&run){16}+ \*/ )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0112.000 - Machine Compromise: Local AI Agent"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [vscode, github-copilot]
+      references:
+        - https://code.visualstudio.com/docs/copilot/chat/chat-tools
+        - https://github.com/microsoft/vscode/blob/1.143.1/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
+        - https://github.com/microsoft/vscode/blob/1.143.1/src/vs/workbench/contrib/chat/common/constants.ts
+        - https://github.com/microsoft/vscode/blob/1.143.1/src/vs/workbench/contrib/terminalContrib/chatAgentTools/common/terminalChatAgentToolsConfiguration.ts
+        - https://github.com/microsoft/vscode/blob/1.143.1/src/vs/workbench/contrib/terminalContrib/chatAgentTools/browser/tools/commandLineAnalyzer/autoApprove/commandLineAutoApprover.ts
+        - https://msrc.microsoft.com/update-guide/vulnerability/CVE-2025-53773
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

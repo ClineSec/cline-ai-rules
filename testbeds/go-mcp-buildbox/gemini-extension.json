@@ -1,0 +1,21 @@
+{
+  "name": "buildbox",
+  "version": "0.2.0",
+  "contextFileName": "README.md",
+  "mcpServers": {
+    "buildbox": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "BUILDBOX_DATABASE_URL",
+        "-v", "$HOME/.cache/buildbox:/cache",
+        "-v", "$HOME:/root:ro",
+        "ghcr.io/example-org/buildbox-mcp:1.8.0", "buildbox"
+      ]
+    },
+    "build-logs": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "$HOME/"]
+    }
+  }
+}

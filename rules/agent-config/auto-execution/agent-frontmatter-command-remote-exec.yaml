@@ -1,0 +1,201 @@
+rules:
+  - id: agent-frontmatter-command-remote-exec
+    languages: [regex]
+    severity: ERROR
+    message: >-
+      This skill, slash command, or subagent declares a hook (or an inline MCP server's
+      headersHelper) in its frontmatter that downloads code from the network and runs it, with
+      no integrity check. Claude Code registers a skill's hooks as soon as the skill is invoked,
+      by a person or by Claude itself, and keeps running them for the rest of the session, also
+      in `claude -p` and Agent SDK runs in folders nobody trusted; a subagent's hooks and inline
+      servers run whenever the subagent does once the folder is trusted. Whoever controls that
+      URL, its DNS, or the git repository it names, and any worm that writes this line into the
+      repo, runs code with the developer's credentials on every machine that uses the project.
+      Install the tool outside the hook at a pinned version with a verified checksum, or vendor
+      the script into the repo and review it like other code that runs on checkout.
+    # Frontmatter hooks and inline mcpServers checked against the Claude Code docs (hooks,
+    # skills, sub-agents, permissions) for v2.1.309, 2026-10-22. Skills, including plugin
+    # skills, and .claude/commands files take hooks; plugin subagents ignore hooks and
+    # mcpServers, so a plugin's agents/ folder is left out.
+    paths:
+      include:
+        - "SKILL.md"
+        - ".claude/agents/**"
+        - ".claude/commands/**"
+        - "commands/**/*.md"
+      # opencode and Kilo Code folders: Claude Code never reads them, and the plural commands/
+      # dirs under them would otherwise match commands/**/*.md. agent-skill-load-time-shell-opencode
+      # covers their ``!`cmd` `` injection.
+      exclude:
+        - ".opencode/**"
+        - ".kilo/**"
+        - ".kilocode/**"
+    patterns:
+      # The frontmatter: from a leading --- line to the next --- line.
+      - pattern-regex: \A(?:\x{FEFF})?---[ \t]*\r?\n(?s:.*?)\r?\n---[ \t]*(?:\r?\n|\z)
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  # Shell form: a hook's command, inside the top-level hooks: block.
+                  - patterns:
+                      - pattern-regex: (?m)^hooks[ \t]*:[^\r\n]*\r?\n(?:(?:[ \t]+[^\r\n]*|\#[^\r\n]*|[ \t]*)\r?\n)*
+                      - pattern-regex: |-
+                          (?m)(?:^[ \t]*(?:-[ \t]+)?|(?<flow>[{,])[ \t]*)command[ \t]*:[ \t]+(?<CMD>"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\r\n]|'')*'|(?(flow)[^,}\r\n]*[^,}\s]|[^\r\n]*?\S(?=[ \t]+#|[ \t]*\r?$)))
+                  # A subagent's inline MCP server headersHelper, inside the mcpServers: block.
+                  - patterns:
+                      - pattern-regex: (?m)^mcpServers[ \t]*:[^\r\n]*\r?\n(?:(?:[ \t]+[^\r\n]*|-[ \t][^\r\n]*|\#[^\r\n]*|[ \t]*)\r?\n)*
+                      - pattern-regex: |-
+                          (?m)(?:^[ \t]*(?:-[ \t]+)?|(?<flow>[{,])[ \t]*)headersHelper[ \t]*:[ \t]+(?<CMD>"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\r\n]|'')*'|(?(flow)[^,}\r\n]*[^,}\s]|[^\r\n]*?\S(?=[ \t]+#|[ \t]*\r?$)))
+                  # Exec form: a shell given the command as an argument
+                  # (command: bash, args: ["-c", "curl ... | sh"]).
+                  - patterns:
+                      - pattern-regex: (?m)^hooks[ \t]*:[^\r\n]*\r?\n(?:(?:[ \t]+[^\r\n]*|\#[^\r\n]*|[ \t]*)\r?\n)*
+                      - pattern-regex: |-
+                          (?xm)
+                          (?(DEFINE)
+                          (?<prog>
+                          # --- exec-form shells (begin): build.py keeps this block identical in
+                          # agent-hook-remote-exec; edit both together. ---
+                          (?:ba|z|da|k)?sh | pwsh | powershell
+                          # --- exec-form shells (end) ---
+                          )
+                            # A key line of the same handler, or a comment line; never a list item, so
+                            # the scan stops at the next handler.
+                            (?<key> [ \t]+ (?: [\w-]+ [ \t]* : | \# ) [^\r\n]* \r?\n )
+                            # command: <program> as the whole value, plain or quoted.
+                            (?<exe> [ \t]* (?:-[ \t]+)? command [ \t]* : [ \t]* ["']? (?&prog) (?:\.exe)? ["']? [ \t]* (?:\r?\n|\z) )
+                            # args: a one-line flow list, or a block list indented at least as far.
+                            (?<args> (?<ai>[ \t]*) (?:-[ \t]+)? args [ \t]* : [ \t]*
+                              (?: \[ [^\]\r\n]* \] [ \t]* (?:\r?\n|\z)
+                                | \r?\n (?: \k<ai> [ \t]* [-\#] [^\r\n]* (?:\r?\n|\z) )+ ) )
+                          )
+                          ^ (?: (?&exe) (?&key)*? (?&args) | (?&args) (?&key)*? (?&exe) )
+                      - pattern-regex: (?m)(?:[\[,]|^[ \t]*-)[ \t]*["']?\K(?<CMD>[^"',\]\r\n]*[^"',\]\s])
+              - metavariable-regex:
+                  metavariable: $CMD
+                  # Verbose mode: whitespace is ignored and # starts a comment, so literal spaces
+                  # are \s and a literal # is \#. Matched text keeps escapes (\" for a quote).
+                  regex: |-
+                    (?ix)
+                    # --- remote download-and-run test (begin): build.py keeps this block identical in
+                    # agent-hook-remote-exec; edit both together. ---
+                    # (?&at): a command position, so text inside an echo string doesn't count: the
+                    # start, after ; & | ( or a backtick, a quoted -c / -Command argument, or a prefix
+                    # such as sudo or env VAR=1.
+                    (?(DEFINE) (?<at> ^\s*\\?["']? | [;&|(`]\s* | \s-\w*c\s+\\?["'] | \s-command\s+\\?["']
+                      | \bsudo(?:\s+-\S+)*\s+ | \b(?:env|exec|nohup|time)\s+(?:\w+=\S*\s+)* )
+                      # (?&w): one piece of a command, so ; & | inside quotes or after a backslash don't
+                      # end it (curl "https://example.com/i.sh?a=1&b=2" | sh). A quoted string may keep
+                      # its JSON escapes (\"...\"). An unquoted & still ends the command: the shell runs
+                      # the download in the background and pipes nothing into the shell after it.
+                      (?<w> (?> \\" (?:[^"\\]|\\[^"])*+ \\" | " (?:[^"\\]|\\.)*+ " | '[^']*+' | \\{1,2}[;&|]
+                        | [^;&|"'\\\s]++ | [^;&|] ) ) )
+                    # Download piped into a shell or interpreter that reads its program from stdin,
+                    # possibly through filters (curl ... | base64 -d | sh). An interpreter given
+                    # -c, -e, -m, or a script reads stdin as data (curl ... | python3 -m json.tool).
+                      .*? (?&at) (?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)(?:\.exe)? \b (?&w)*+
+                      (?: \|(?!\|) (?&w)*+ )*?
+                      (?<!\|) \|(?!\|) \s* (?:sudo (?:\s+-\S+)* \s+)? (?:env (?:\s+-\S+)* (?:\s+\w+=\S*)* \s+)?
+                      (?: (?:ba|z|da|k)?sh (?:\s+-[abd-z]+)* (?:\s+(?:-s|--?)(?:\s.*)?)?
+                        | (?:python[0-9.]*|node|perl|ruby|php) (?:\s+-u)? (?:\s+-)?
+                        | iex | invoke-expression )
+                      \s* (?:$|[;&|)`<>]|\\?["']|\d>)
+                    # Download substituted into a shell's or interpreter's program:
+                    # bash -c "$(curl ...)", bash <(curl ...), eval "$(wget -qO- ...)", source <(...).
+                    | .*? (?&at)
+                      (?: (?:ba|z|da|k)?sh (?:\s+-\S+)* | python[0-9.]* \s+ -\w*c | (?:node|perl|ruby) \s+ -\w*e
+                        | eval | source | \. )
+                      \s+ \\?["']? (?:\$\(|<\(|`) \s* (?:curl|wget)(?:\.exe)? \b
+                    # PowerShell: iex (irm ...), iex ((New-Object Net.WebClient).DownloadString(...)).
+                    | .*? (?&at) (?:iex|invoke-expression) \b .*?
+                      (?:\b(?:iwr|irm|invoke-webrequest|invoke-restmethod|curl|wget)\b|\.downloadstring\b)
+                    | .*? \.downloadstring \s* \( .*? \| \s* (?:iex|invoke-expression) \b
+                    # A package runner given a URL, a git URL, or a GitHub repo (npm reads a bare
+                    # user/repo with one slash as GitHub). A spec pinned to a commit SHA is left out.
+                    | .*? (?&at) (?:npx|bunx|pnpm\s+dlx|yarn\s+dlx|npm\s+exec)
+                      (?:\s+-(?!-package=)\S+)* \s+ (?:--package=)? \\?["']?
+                      (?! \S*? [\#@] [0-9a-f]{7,40} (?![\w.-]) )
+                      (?: (?:https?|git(?:\+\w+)?)://\S+ | git@\S+ | (?:github|gitlab|bitbucket): \S+
+                        | [a-z0-9][\w.-]*/[\w.-]+ (?:\#\S*)? (?=\s|$|\\?["']) )
+                    # uvx and pipx run take the source from --from / --spec or as the first argument;
+                    # later URLs are arguments to the tool (uvx ruff check --config https://...).
+                    | .*? (?&at) (?:uvx|uv\s+tool\s+run|pipx\s+run)
+                      (?: (?&w)*? \s--(?:from|spec)[\s=] | (?:\s+-\S+)* \s ) \s* \\?["']?
+                      (?! \S*? @ [0-9a-f]{7,40} (?![\w.-]) )
+                      (?:git\+\w+://|https?://)
+                    # Download to a file, then run or chmod that same file, with no checksum or
+                    # signature check anywhere in the command.
+                    | (?! .* (?:sha(?:1|256|512)?sum|shasum|get-filehash|gpg\s+--verify|cosign\s+verify|minisign) )
+                      .*? (?&at) (?:curl|wget|iwr|invoke-webrequest)(?:\.exe)? \b (?&w)*? \s
+                      (?:-\w*o|--output(?:-document)?|-outfile) [\s=] \s* \\?["']? (?<file>[^\s"'\\;&|]+)
+                      .*? (?:&&|;) \s*
+                      (?: chmod \s+ \S+ \s+
+                        | (?:sudo\s+)? (?:(?:ba|z|da|k)?sh|python[0-9.]*|node|perl|ruby|pwsh|powershell) (?:\s+-\S+)* \s+
+                        | (?:sudo\s+|&\s*)? )
+                      \\?["']? (?:\.[\\/])? \k<file> (?=\s|$|[;&|)]|\\?["'])
+                    # --- remote download-and-run test (end) ---
+          # Exec form: a package runner given a remote spec as an argument.
+          - patterns:
+              - pattern-regex: (?m)^hooks[ \t]*:[^\r\n]*\r?\n(?:(?:[ \t]+[^\r\n]*|\#[^\r\n]*|[ \t]*)\r?\n)*
+              - pattern-regex: |-
+                  (?xm)
+                  (?(DEFINE)
+                  (?<prog>
+                  # --- exec-form package runners (begin): build.py keeps this block identical in
+                  # agent-hook-remote-exec; edit both together. ---
+                  npx | bunx | uvx | pipx
+                  # --- exec-form package runners (end) ---
+                  )
+                    # A key line of the same handler, or a comment line; never a list item, so
+                    # the scan stops at the next handler.
+                    (?<key> [ \t]+ (?: [\w-]+ [ \t]* : | \# ) [^\r\n]* \r?\n )
+                    # command: <program> as the whole value, plain or quoted.
+                    (?<exe> [ \t]* (?:-[ \t]+)? command [ \t]* : [ \t]* ["']? (?&prog) (?:\.exe)? ["']? [ \t]* (?:\r?\n|\z) )
+                    # args: a one-line flow list, or a block list indented at least as far.
+                    (?<args> (?<ai>[ \t]*) (?:-[ \t]+)? args [ \t]* : [ \t]*
+                      (?: \[ [^\]\r\n]* \] [ \t]* (?:\r?\n|\z)
+                        | \r?\n (?: \k<ai> [ \t]* [-\#] [^\r\n]* (?:\r?\n|\z) )+ ) )
+                  )
+                  ^ (?: (?&exe) (?&key)*? (?&args) | (?&args) (?&key)*? (?&exe) )
+              - pattern-regex: (?m)(?:[\[,]|^[ \t]*-)[ \t]*["']?\K(?<ARG>[^"',\]\r\n]*[^"',\]\s])
+              - metavariable-regex:
+                  metavariable: $ARG
+                  regex: |-
+                    (?x)
+                    # --- exec-form remote package spec (begin): build.py keeps this block identical in
+                    # agent-hook-remote-exec; edit both together. ---
+                    # Only package-shaped arguments: a git URL, a hosted-git spec, a tarball or script
+                    # URL, or a repository on a git host. Other URLs are file arguments to the tool. A
+                    # spec pinned to a commit SHA is left out. (# inside [...] is literal.)
+                    ^(?!.*[#@][0-9a-f]{7,40}$)
+                    (?: git(?:\+\w+)?:// | git@ | (?:github|gitlab|bitbucket):
+                      | https?://\S+\.(?:tgz|tar\.gz|tar|git|py)(?:\#\S*)?$
+                      | https?://(?:www\.)?(?:github\.com|gitlab\.com|bitbucket\.org)/[\w.-]+/[\w.-]+/?(?:\#\S*)?$ )
+                    # --- exec-form remote package spec (end) ---
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+        - "ASI04 - Agentic Supply Chain Vulnerabilities"
+      mitre-atlas:
+        - "AML.T0081 - Modify AI Agent Configuration"
+        - "AML.T0050 - Command and Scripting Interpreter"
+      cwe:
+        - "CWE-494: Download of Code Without Integrity Check"
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code]
+      references:
+        - https://code.claude.com/docs/en/hooks#hooks-in-skills-and-agents
+        - https://code.claude.com/docs/en/skills#frontmatter-reference
+        - https://code.claude.com/docs/en/sub-agents#hooks-in-subagent-frontmatter
+        - https://code.claude.com/docs/en/permissions#what-runs-before-you-trust-a-folder
+        - https://www.sonarsource.com/blog/mini-shai-hulud-targets-ai-coding-agents/
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md

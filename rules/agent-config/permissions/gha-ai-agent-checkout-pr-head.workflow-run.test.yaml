@@ -1,0 +1,26 @@
+# Fixture for gha-ai-agent-checkout-pr-head: workflow_run, and a workflow-level trust switch.
+name: after-ci
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+jobs:
+  explain:
+    runs-on: ubuntu-latest
+    steps:
+      # ruleid: gha-ai-agent-checkout-pr-head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - run: |
+          npx -y @anthropic-ai/claude-code@2.1.308 -p "Explain why CI failed" \
+            --allowedTools "Read"
+  internal:
+    if: github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      # ok: gha-ai-agent-checkout-pr-head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - run: codex exec --full-auto "Fix the failing tests"

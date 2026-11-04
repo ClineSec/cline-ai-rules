@@ -1,0 +1,368 @@
+rules:
+  - id: mcp-tool-arg-to-sql-go
+    # Sources: the MCP tool handlers of mcp-tool-arg-to-shell-go (build.py SHARED_BLOCKS
+    # "MCP tool sources (Go)"), with its value sanitizers ("tool-argument value sanitizers
+    # (Go)"). Edit each block with its group. SQL API shapes checked 2026-10-24 against
+    # database/sql, sqlx v1.4.0, pgx v5.11.0, gorm v1.31.2, and lib/pq v1.12.3.
+    # Resource templates and prompts (since 2026-10-25): mcp-go v1.3.0
+    # ResourceTemplateHandlerFunc / PromptHandlerFunc (mcp.ReadResourceRequest,
+    # mcp.GetPromptRequest) and go-sdk v1.8.0 ResourceHandler / PromptHandler
+    # (*mcp.ReadResourceRequest, *mcp.GetPromptRequest).
+    languages: [go]
+    severity: ERROR
+    message: >-
+      An MCP tool argument, resource-template parameter, or prompt argument reaches a SQL
+      statement. The client fills every one of them, and clients let the model choose them
+      (tool arguments always, resource URIs and prompt arguments in many clients); the server
+      can't tell who did. A prompt injection in anything the model has read (a web page, an
+      issue, a file, another tool's result) can choose them for it, so a value like `x' OR
+      '1'='1` or a whole statement reads or changes rows the tool was never meant to touch,
+      with this server's database privileges. Keep the statement fixed and pass the argument
+      as a bound parameter (`db.QueryContext(ctx, "... WHERE queue = $1", queue)`, gorm
+      `Where("queue = ?", queue)`), pick table and column names from a fixed map
+      (`sortColumns[choice]`) or quote them with `pgx.Identifier{name}.Sanitize()`, or parse
+      numbers with `strconv`. If the tool exists to run model-written SQL, give it a read-only
+      role limited to the views it may read, with row-level security, a statement timeout, and
+      a row limit.
+    mode: taint
+    options:
+      # Values of a numeric or boolean Go type (a typed handler's `Limit int` field) can't
+      # carry SQL text.
+      taint_assume_safe_numbers: true
+      taint_assume_safe_booleans: true
+    pattern-sources:
+      # A tool, resource, or prompt handler's request parameter, in any function, method, or
+      # function literal with one: mcp-go's mcp.CallToolRequest, mcp.ReadResourceRequest, and
+      # mcp.GetPromptRequest (values) and the go-sdk's *mcp.CallToolRequest,
+      # *mcp.ReadResourceRequest, and *mcp.GetPromptRequest. That covers handlers registered
+      # inline, as named functions or methods, through AddTools / ServerTool,
+      # AddResourceTemplate(s) / AddPrompt(s), and middleware. Everything read from it is the
+      # client's: GetString, RequireString, GetArguments, Params.Arguments, and a resource
+      # read's Params.URI (mcp-go also fills Params.Arguments with the template's variables).
+      # Resource and prompt parameters count since 2026-10-25: clients let the model fill
+      # them. A handler for a resource at a fixed URI gets only that URI.
+      - patterns:
+          - pattern-either:
+              - pattern: func $F(..., $REQ $T, ...) $RET {...}
+              - pattern: func(..., $REQ $T, ...) $RET {...}
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^\*?(?:\w+\.)?(?:CallToolRequest|ReadResourceRequest|GetPromptRequest)$
+          - focus-metavariable: $REQ
+      # The decoded arguments of a typed handler, the parameter after the request:
+      # mcp-go's mcp.NewTypedToolHandler / NewStructuredToolHandler func(ctx, req, args T)
+      # and the go-sdk's mcp.AddTool func(ctx, req, in In) (*CallToolResult, Out, error).
+      - patterns:
+          - pattern-either:
+              - pattern: func $F(..., $REQ $T, $ARGS $AT) $RET {...}
+              - pattern: func(..., $REQ $T, $ARGS $AT) $RET {...}
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^\*?(?:\w+\.)?CallToolRequest$
+          - focus-metavariable: $ARGS
+    pattern-propagators:
+      # Decoding the arguments into a struct: mcp-go's req.BindArguments(&args), and
+      # json.Unmarshal / a json.Decoder / mapstructure over req.Params.Arguments or
+      # req.GetArguments().
+      - pattern: $REQ.BindArguments(&$TO)
+        from: $REQ
+        to: $TO
+      - pattern: json.Unmarshal($FROM, &$TO)
+        from: $FROM
+        to: $TO
+      - pattern: $FROM.Decode(&$TO)
+        from: $FROM
+        to: $TO
+      - pattern: mapstructure.Decode($FROM, &$TO)
+        from: $FROM
+        to: $TO
+      - pattern: mapstructure.WeakDecode($FROM, &$TO)
+        from: $FROM
+        to: $TO
+      # Text written into a strings.Builder or bytes.Buffer.
+      - pattern: $TO.WriteString($FROM)
+        from: $FROM
+        to: $TO
+      - pattern: $TO.Write($FROM)
+        from: $FROM
+        to: $TO
+      - pattern: fmt.Fprintf(&$TO, $FMT, ..., $FROM, ...)
+        from: $FROM
+        to: $TO
+      - pattern: fmt.Fprint(&$TO, ..., $FROM, ...)
+        from: $FROM
+        to: $TO
+    pattern-sanitizers:
+      # Typed reads of the request are numbers or booleans, and the session, the HTTP
+      # headers, and the tool name are not arguments the model writes.
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $REQ.GetInt(...)
+              - pattern: $REQ.RequireInt(...)
+              - pattern: $REQ.GetFloat(...)
+              - pattern: $REQ.RequireFloat(...)
+              - pattern: $REQ.GetBool(...)
+              - pattern: $REQ.RequireBool(...)
+              - pattern: $REQ.GetIntSlice(...)
+              - pattern: $REQ.RequireIntSlice(...)
+              - pattern: $REQ.GetFloatSlice(...)
+              - pattern: $REQ.RequireFloatSlice(...)
+              - pattern: $REQ.GetBoolSlice(...)
+              - pattern: $REQ.RequireBoolSlice(...)
+              - pattern: $REQ.Session
+              - pattern: $REQ.Extra
+              - pattern: $REQ.Header
+              - pattern: $REQ.Params.Name
+      # A value used inside a `switch` arm whose labels are all literals, Go's usual
+      # membership check: `switch branch { case "main", "develop": ... }`, also with an init
+      # (`switch v := req.GetString("v", ""); v {`) or on the expression itself
+      # (`switch req.GetString("mode", "") { case "fast": ... }`). The `default:` arm, an arm
+      # with a variable label, and a tagless `switch { case cond: }` stay tainted. OpenGrep
+      # doesn't scope a `switch $X { case $L: ... }` pattern to one arm, so the arm is found
+      # by its text (gofmt indentation: the arm runs until the next line at the `case`
+      # indent) and the subject is compared with str().
+      - patterns:
+          - pattern-regex: >-
+              (?m)^(?<SWI>[ \t]*)switch[ \t]+(?|(?<SUBJ>\w+)[ \t]*:=[^;\n]*;[ \t]*\k<SUBJ>|(?<SUBJ>[^\n{;]+?))[ \t]*\{[ \t]*\n(?:(?!\k<SWI>\})[^\n]*\n)*?\k<SWI>case[ \t]+(?:"[^"\n]*"|`[^`\n]*`|'[^'\n]+'|-?\d[\w.]*)(?:[ \t]*,[ \t]*(?:"[^"\n]*"|`[^`\n]*`|'[^'\n]+'|-?\d[\w.]*))*[ \t]*:[^\n]*\n\K(?:\k<SWI>[ \t]+[^\n]*\n|[ \t]*\n)*
+          - pattern: $E
+          - metavariable-comparison:
+              comparison: str($E) == str($SUBJ)
+      # Shared with mcp-tool-arg-to-shell-go (build.py SHARED_BLOCKS "tool-argument value
+      # sanitizers (Go)"): edit them together.
+      # An allowlist check before use with a pattern anchored at both ends (Go's MatchString
+      # finds a match anywhere, so `[a-z]+` lets "x; DROP TABLE t" through): inline, or a
+      # regexp compiled into a variable in this file. A regexp declared in a `var (...)`
+      # group or another file can't be read, so its check counts.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: regexp.MustCompile($PAT).MatchString($X)
+                      - pattern: regexp.MatchString($PAT, $X)
+                  - metavariable-regex:
+                      metavariable: $PAT
+                      regex: ^["`](?:\^|\\{1,2}A).*(?:\$|\\{1,2}z)["`]$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          var $RE = regexp.MustCompile($PAT)
+                          ...
+                      - pattern-inside: |
+                          $RE := regexp.MustCompile($PAT)
+                          ...
+                  - pattern: $RE.MatchString($X)
+                  - metavariable-regex:
+                      metavariable: $PAT
+                      regex: ^["`](?:\^|\\{1,2}A).*(?:\$|\\{1,2}z)["`]$
+              - patterns:
+                  - pattern: $RE.MatchString($X)
+                  - pattern-not-inside: |
+                      var $RE = regexp.MustCompile($PAT)
+                      ...
+                  - pattern-not-inside: |
+                      $RE := regexp.MustCompile($PAT)
+                      ...
+          - focus-metavariable: $X
+      # An allowlist membership check before use: slices.Contains(allowed, v),
+      # `if _, ok := allowed[v]; !ok`, or a lookup in a map[string]bool.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: slices.Contains($LIST, $X)
+              - pattern: '_, $OK := ($M : map[$K]$V)[$X]'
+              - pattern: '($M : map[$K]bool)[$X]'
+          - focus-metavariable: $X
+      # A value looked up in a typed table by a model-chosen key (`formatFlags[format]`).
+      # Maps of `any` (the arguments themselves) and literal keys (`args["cmd"]`) stay
+      # tainted.
+      - exact: true
+        patterns:
+          - pattern: '($M : map[$K]$V)[$X]'
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^(?!any$|interface\s*\{\s*\}$)
+          - metavariable-regex:
+              metavariable: $X
+              regex: ^(?!["`])
+      - exact: true
+        pattern-either:
+          - pattern: strconv.Atoi(...)
+          - pattern: strconv.ParseInt(...)
+          - pattern: strconv.ParseUint(...)
+          - pattern: strconv.ParseFloat(...)
+          - pattern: strconv.ParseBool(...)
+          - pattern: strconv.Itoa(...)
+          - pattern: strconv.FormatInt(...)
+          - pattern: strconv.FormatUint(...)
+      # Quoting for SQL text: lib/pq's QuoteIdentifier / QuoteLiteral and pgx's
+      # Identifier{...}.Sanitize(). (strconv.Quote and %q are Go quoting, not SQL.)
+      - exact: true
+        pattern-either:
+          - pattern: pq.QuoteIdentifier(...)
+          - pattern: pq.QuoteLiteral(...)
+          - pattern: pgx.Identifier{...}.Sanitize()
+    pattern-sinks:
+      # One sink, so a call that two branches cover is reported once. Only the statement
+      # counts, never the bound arguments after it. A condition passed as a struct, map, or
+      # gorm clause (`Where(&User{Name: n})`, `Order(clause.OrderByColumn{...})`) is bound or
+      # quoted by the library, so composite literals are skipped.
+      - patterns:
+          - pattern-either:
+              # database/sql (DB, Conn, Tx, Stmt), sqlx (Queryx, MustExec, NamedExec, ...), and
+              # the *Context variants. Query, Exec, and Prepare are common method names, so the
+              # receiver must be named like a database handle or the file must import a SQL
+              # package; "imports a SQL package" is a whole-file regex used as
+              # pattern-not-regex (it matches the whole file only when no line imports one).
+              - patterns:
+                  - pattern-either:
+                      - pattern: $DB.Query($Q, ...)
+                      - pattern: $DB.QueryRow($Q, ...)
+                      - pattern: $DB.Exec($Q, ...)
+                      - pattern: $DB.Prepare($Q)
+                      - pattern: $DB.Queryx($Q, ...)
+                      - pattern: $DB.QueryRowx($Q, ...)
+                      - pattern: $DB.MustExec($Q, ...)
+                      - pattern: $DB.NamedExec($Q, ...)
+                      - pattern: $DB.NamedQuery($Q, ...)
+                      - pattern: $DB.Preparex($Q)
+                      - pattern: $DB.PrepareNamed($Q)
+                      - pattern: $DB.QueryContext($CTX, $Q, ...)
+                      - pattern: $DB.QueryRowContext($CTX, $Q, ...)
+                      - pattern: $DB.ExecContext($CTX, $Q, ...)
+                      - pattern: $DB.PrepareContext($CTX, $Q)
+                      - pattern: $DB.QueryxContext($CTX, $Q, ...)
+                      - pattern: $DB.QueryRowxContext($CTX, $Q, ...)
+                      - pattern: $DB.MustExecContext($CTX, $Q, ...)
+                      - pattern: $DB.NamedExecContext($CTX, $Q, ...)
+                      - pattern: $DB.NamedQueryContext($CTX, $Q, ...)
+                      - pattern: $DB.PreparexContext($CTX, $Q)
+                      - pattern: $DB.PrepareNamedContext($CTX, $Q)
+                      # pgx (Conn, pgxpool.Pool, Tx): the context comes first, so it must
+                      # look like one, or database/sql's db.Query(stmt, arg) would read its
+                      # bound argument as the statement.
+                      - patterns:
+                          - pattern-either:
+                              - pattern: $DB.Query($CTX, $Q, ...)
+                              - pattern: $DB.QueryRow($CTX, $Q, ...)
+                              - pattern: $DB.Exec($CTX, $Q, ...)
+                          - metavariable-regex:
+                              metavariable: $CTX
+                              regex: ^(?:\w*(?:ctx|Ctx|CTX)\w*|c|context\.(?:Background|TODO)\(\)|[\w.]+\.Context\(\))$
+                  - pattern-either:
+                      - patterns:
+                          - pattern: $DB.$M(...)
+                          - metavariable-regex:
+                              metavariable: $DB
+                              regex: (?i)^(?:\w+\.)*\w*(?:db|conn|connection|pool|tx|txn|database|sqlite|duckdb|pg|pgx|mysql|postgres|stmt)\d*$
+                      - patterns:
+                          - pattern: $DB.$M(...)
+                          - pattern-not-regex: '\A(?:(?![^\n]*?"(?:database/sql|github\.com/jackc/pgx|github\.com/jmoiron/sqlx|gorm\.io/gorm|github\.com/jinzhu/gorm|github\.com/mattn/go-sqlite3|modernc\.org/sqlite|github\.com/go-sql-driver/mysql|github\.com/lib/pq|github\.com/marcboeker/go-duckdb|github\.com/ClickHouse/clickhouse-go|github\.com/microsoft/go-mssqldb|github\.com/denisenkom/go-mssqldb|github\.com/snowflakedb/gosnowflake)[/"])[^\n]*+\n)*+(?![^\n]*?"(?:database/sql|github\.com/jackc/pgx|github\.com/jmoiron/sqlx|gorm\.io/gorm|github\.com/jinzhu/gorm|github\.com/mattn/go-sqlite3|modernc\.org/sqlite|github\.com/go-sql-driver/mysql|github\.com/lib/pq|github\.com/marcboeker/go-duckdb|github\.com/ClickHouse/clickhouse-go|github\.com/microsoft/go-mssqldb|github\.com/denisenkom/go-mssqldb|github\.com/snowflakedb/gosnowflake)[/"])[^\n]*+\z'
+              # sqlx's destination-first helpers (methods and package functions), and pgx's
+              # Prepare(ctx, name, sql) and Batch.Queue(sql, ...), in a file that imports them.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $DB.Select($DEST, $Q, ...)
+                      - pattern: $DB.Get($DEST, $Q, ...)
+                      - pattern: $DB.SelectContext($CTX, $DEST, $Q, ...)
+                      - pattern: $DB.GetContext($CTX, $DEST, $Q, ...)
+                      - pattern: sqlx.Select($DB, $DEST, $Q, ...)
+                      - pattern: sqlx.Get($DB, $DEST, $Q, ...)
+                      - pattern: sqlx.SelectContext($CTX, $DB, $DEST, $Q, ...)
+                      - pattern: sqlx.GetContext($CTX, $DB, $DEST, $Q, ...)
+                      - pattern: sqlx.NamedExec($DB, $Q, ...)
+                      - pattern: sqlx.NamedQuery($DB, $Q, ...)
+                      - pattern: sqlx.NamedExecContext($CTX, $DB, $Q, ...)
+                      - pattern: sqlx.NamedQueryContext($CTX, $DB, $Q, ...)
+                      - pattern: sqlx.MustExec($DB, $Q, ...)
+                      - pattern: sqlx.MustExecContext($CTX, $DB, $Q, ...)
+                  - pattern-not-regex: '\A(?:(?![^\n]*?"github\.com/jmoiron/sqlx")[^\n]*+\n)*+(?![^\n]*?"github\.com/jmoiron/sqlx")[^\n]*+\z'
+              - patterns:
+                  - pattern-either:
+                      - pattern: $DB.Prepare($CTX, $NAME, $Q)
+                      - pattern: $BATCH.Queue($Q, ...)
+                  - pattern-not-regex: '\A(?:(?![^\n]*?"github\.com/jackc/pgx)[^\n]*+\n)*+(?![^\n]*?"github\.com/jackc/pgx)[^\n]*+\z'
+              # gorm v2 (and v1, jinzhu/gorm): Raw and Exec take SQL; Where, Not, Or, Having,
+              # Select, Joins, Table, Distinct, Order, and Group treat a string as SQL text;
+              # First, Take, Last, Find, Delete, FirstOrInit, and FirstOrCreate treat a string
+              # condition after the destination as SQL (gorm's BuildCondition), in a file that
+              # imports gorm.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $DB.Raw($Q, ...)
+                      - pattern: $DB.Where($Q, ...)
+                      - pattern: $DB.Not($Q, ...)
+                      - pattern: $DB.Or($Q, ...)
+                      - pattern: $DB.Having($Q, ...)
+                      - pattern: $DB.Select($Q, ...)
+                      - pattern: $DB.Joins($Q, ...)
+                      - pattern: $DB.InnerJoins($Q, ...)
+                      - pattern: $DB.Table($Q, ...)
+                      - pattern: $DB.Distinct($Q, ...)
+                      - pattern: $DB.Order($Q)
+                      - pattern: $DB.Group($Q)
+                      - pattern: $DB.First($DEST, $Q, ...)
+                      - pattern: $DB.Take($DEST, $Q, ...)
+                      - pattern: $DB.Last($DEST, $Q, ...)
+                      - pattern: $DB.Find($DEST, $Q, ...)
+                      - pattern: $DB.Delete($DEST, $Q, ...)
+                      - pattern: $DB.FirstOrInit($DEST, $Q, ...)
+                      - pattern: $DB.FirstOrCreate($DEST, $Q, ...)
+                  - pattern-not-regex: '\A(?:(?![^\n]*?"(?:gorm\.io/gorm|github\.com/jinzhu/gorm)")[^\n]*+\n)*+(?![^\n]*?"(?:gorm\.io/gorm|github\.com/jinzhu/gorm)")[^\n]*+\z'
+          - metavariable-regex:
+              metavariable: $Q
+              regex: ^(?!&?(?:[\w.]+|map\[[^\]]*\][\w.*]+|\[\][\w.*]+)\{)
+          - focus-metavariable: $Q
+      # SQL text built from a tool argument (fmt.Sprintf or + whose text starts like an
+      # uppercase SQL statement) and handed to any call, such as the package's own run-query
+      # helper, so it is reported where the text is built, in the default scan too. Logging,
+      # printing, error, and builder-write calls are skipped. A statement built into a
+      # variable first is left to the sinks above, so it is reported once.
+      - patterns:
+          - pattern-inside: $F(..., $Q, ...)
+          - pattern: $Q
+          - metavariable-regex:
+              metavariable: $Q
+              regex: ^(?:fmt\.Sprintf\(\s*)?["`]\s*(?:SELECT\b[\s\S]*?\bFROM\b|WITH\s+\w+\s+AS\s*\(|INSERT\s+INTO\b|UPDATE\s+\w+\s+SET\b|DELETE\s+FROM\b)
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(?!(?:fmt\.(?:Print\w*|Fprint\w*|Sprint\w*|Errorf)|errors\.New|log\.\w+|slog\.\w+|(?:\w+\.)*(?:Debug|Info|Warn|Warning|Error|Fatal|Panic|Trace|Print|Log|Write|WriteString)\w*)$)
+          - focus-metavariable: $Q
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-mcp:
+        - "MCP05:2025 - Command Injection & Execution"
+      owasp-aisvs:
+        - "v1.01-C10.4.4 - Schema, Message, and Input Validation"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0036 - Data from Information Repositories"
+      cwe:
+        - "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, mcp-go, go-sdk, database-sql, sqlx, pgx, gorm]
+      references:
+        - https://github.com/mark3labs/mcp-go/blob/v1.3.0/mcp/prompts.go
+        - https://github.com/mark3labs/mcp-go/blob/v1.3.0/mcp/types.go
+        - https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/resource.go
+        - https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/prompt.go
+        - https://github.com/mark3labs/mcp-go/blob/v1.3.0/mcp/tools.go
+        - https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/tool.go
+        - https://pkg.go.dev/database/sql
+        - https://github.com/jmoiron/sqlx/blob/v1.4.0/sqlx.go
+        - https://github.com/jackc/pgx/blob/v5.11.0/conn.go
+        - https://github.com/go-gorm/gorm/blob/v1.31.2/statement.go
+        - https://gorm.io/docs/security.html
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP05-2025%E2%80%93Command-Injection%26Execution.md
+        - https://cwe.mitre.org/data/definitions/89.html
+        - https://cheatsheetseries.owasp.org/cheatsheets/Query_Parameterization_Cheat_Sheet.html

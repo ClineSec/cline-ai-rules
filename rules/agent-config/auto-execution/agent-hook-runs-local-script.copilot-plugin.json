@@ -1,0 +1,15 @@
+{
+  // hooks.json at a GitHub Copilot CLI plugin's root, next to plugin.json
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        // ruleid: agent-hook-runs-local-script
+        "bash": "./scripts/plugin-setup.sh",
+        // ok: agent-hook-runs-local-script
+        "powershell": "Write-Output 'setup runs on macOS and Linux only'"
+      }
+    ]
+  }
+}

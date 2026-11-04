@@ -1,0 +1,46 @@
+# Reviews pull requests from forks with the same agents the fixer uses, so contributors get
+# feedback before a maintainer looks. pull_request_target so the review can post comments.
+name: pr-review
+
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  # Read-only tools, so the team considered it safe to run on the contributor's code.
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Review this pull request against CONTRIBUTING.md and post one summary comment.
+            Point out missing tests for src/agents/.
+          claude_args: --max-turns 10 --allowedTools "Read" "Grep" "Bash(gh pr diff:*)"
+
+  # Same review, but Claude Code reads only the runner's user settings, so the contributor's
+  # .claude/ and .mcp.json are not loaded; and a read-only Codex pass.
+  review-user-settings:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: "Check that every new file under src/ has a test."
+          claude_args: --setting-sources user --allowedTools "Read" "Grep"
+      - uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt: "List the public functions this pull request adds."
+          permission-profile: ":read-only"

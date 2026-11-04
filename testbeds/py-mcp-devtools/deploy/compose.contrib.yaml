@@ -1,0 +1,64 @@
+# The contrib servers on the shared build VM.
+#   docker compose -f deploy/compose.contrib.yaml up -d
+name: devtools-contrib
+
+x-contrib-image: &contrib-image
+  build:
+    context: ..
+    dockerfile: deploy/contrib.Dockerfile
+  image: devtools-contrib:dev
+  restart: unless-stopped
+
+services:
+  notes:
+    <<: *contrib-image
+    environment:
+      FASTMCP_HOST: 0.0.0.0
+      FASTMCP_PORT: "8812"
+      NOTES_DIR: /data/notes
+    volumes:
+      - notes-data:/data/notes
+    # Opened up so laptops on the office network can connect until sso-proxy is done.
+    ports:
+      - "8812:8812"
+
+  # Mounts the Docker socket, so it stays on the VM's loopback.
+  containers:
+    <<: *contrib-image
+    command:
+      - fastmcp
+      - run
+      - contrib/docker_server.py:docker
+      - --transport
+      - http
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8811"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "127.0.0.1:8811:8811"
+
+  # The SSO-fronted copy: no published port, reached only through sso-proxy.
+  notes-sso:
+    <<: *contrib-image
+    environment:
+      - FASTMCP_HOST=0.0.0.0
+      - FASTMCP_PORT=8813
+      - NOTES_DIR=/data/notes
+    volumes:
+      - notes-data:/data/notes:ro
+    expose:
+      - "8813"
+
+  sso-proxy:
+    image: example-org/oidc-proxy:3.1.0
+    environment:
+      UPSTREAM_URL: http://notes-sso:8813
+      OIDC_ISSUER: https://sso.example.com
+    ports:
+      - "443:8443"
+
+volumes:
+  notes-data:

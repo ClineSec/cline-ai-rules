@@ -1,0 +1,1753 @@
+# Every finding cline-ai-rules must produce in this testbed, and nothing else.
+# Anchors are substrings of the flagged line, so refactors only need the anchor updated.
+findings:
+  - rule: llm-output-to-code-execution
+    file: helpdesk/diagnostics.py
+    line_contains: "command, shell=True, capture_output=True"
+    requires: taint-intrafile
+    note: >-
+      OpenAI completion flows through a method on an injected client (self.planner) and the
+      shared _run_shell helper into a shell command. collect_support_bundle passes the same
+      helper a fixed command. The finding sits on the command argument's line, not the call's.
+  - rule: llm-output-to-code-execution
+    file: helpdesk/estimates.py
+    line_contains: "eval(expression"
+    requires: taint-intrafile
+    note: >-
+      LiteLLM output evaluated with stripped builtins, which is not a sandbox, through a shared
+      _evaluate helper. The staffing call passes a constant formula and model data only as a
+      variable, and must not count.
+  - rule: llm-output-to-code-execution
+    file: helpdesk/remediation.py
+    line_contains: "script, stdout=asyncio.subprocess.PIPE"
+    note: >-
+      AsyncAnthropic reply joined into a runbook prefix and run by asyncio's shell
+      (imported bare). log_summary below passes model text on stdin only and must stay quiet.
+  - rule: hf-trust-remote-code
+    file: helpdesk/router.py
+    line_contains: '"candidate": {'
+    note: >-
+      Remote code from a moving branch, in a dict of load options passed as **kwargs (the
+      finding sits on the dict's first line). The SHA-pinned loads above it and the "control"
+      arm, pinned through a constant, must stay quiet.
+  - rule: agent-instruction-suppresses-security-findings
+    file: AGENTS.md
+    line_contains: "ignore all security findings"
+    note: Moved from CLAUDE.md, which now only imports AGENTS.md and must stay quiet.
+  - rule: claude-settings-unrestricted-shell
+    file: .claude/settings.json
+    line_contains: '"Bash(*)"'
+  - rule: claude-settings-unrestricted-shell
+    file: .claude/settings.json
+    line_contains: '"Bash(uv run:*)"'
+    note: >-
+      uv run with an open tail runs any command (uv run bash -c, uv run python -c), so it is
+      a shell allow of its own. The "uv run pytest *" entry above it names the tool and stays
+      quiet.
+  - rule: agent-hook-runs-local-script
+    file: .claude/settings.json
+    line_contains: "${CLAUDE_PROJECT_DIR}/scripts/dev-bootstrap.sh"
+    note: >-
+      Exec-form SessionStart hook: bash runs a repo script. The PostToolUse `uv run ruff
+      format` hook below runs an installed tool and must stay quiet.
+  - rule: agent-hook-runs-local-script
+    file: .cursor/hooks.json
+    line_contains: ".cursor/hooks/redact-ticket-ids.sh"
+    note: Relative path, which Cursor resolves from the project root. The afplay stop hook must stay quiet.
+  - rule: agent-hook-runs-local-script
+    file: .gemini/settings.json
+    line_contains: "$GEMINI_PROJECT_DIR/.gemini/hooks/load-runbooks.mjs"
+    note: The $HOME hook below lives outside the repo and must stay quiet.
+  - rule: agent-hook-remote-exec
+    file: plugins/helpdesk-tools/hooks/hooks.json
+    line_contains: "install.sh | env HD_INSTALL_DIR="
+    note: >-
+      Plugin SessionStart hook pipes a vendor installer into sh behind a "not installed yet"
+      guard. The status.json download below never runs what it fetches and must stay quiet.
+  - rule: agent-hook-remote-exec
+    file: .cursor/hooks.json
+    line_contains: "npx -y example-org/cursor-ticket-context"
+    note: >-
+      workspaceOpen runs a GitHub repo (npm reads user/repo as GitHub) when the folder opens.
+      The pinned @example-org/ticket-lint@2.3.1 hook below is left to SCA and must stay quiet.
+  - rule: agent-hook-runs-local-script
+    file: plugins/helpdesk-tools/hooks/ticket-checks.json
+    line_contains: "python3 scripts/check_ticket_command.py"
+    note: >-
+      Extra hook file that plugin.json names, outside hooks/hooks.json. Runs a project script
+      (hooks run in the project directory). The inline Stop hook in plugin.json only posts a
+      file with curl and must stay quiet for agent-hook-remote-exec.
+  - rule: agent-hook-runs-local-script
+    file: plugins/helpdesk-tools/monitors/monitors.json
+    line_contains: "scripts/watch-ticket-queue.sh"
+    note: >-
+      Plugin monitor, started with every interactive session, runs a repo script. The tail -F
+      monitor below must stay quiet.
+  - rule: vscode-task-runs-automatically
+    file: .vscode/tasks.json
+    line_contains: '"runOn": "folderOpen",'
+    note: >-
+      A task with no command of its own whose dependsOn chain runs a repo script and the API
+      server on folder open. The commented-out runOptions on "ticket queue" must stay quiet.
+  - rule: vscode-task-runs-automatically
+    file: helpdesk.code-workspace
+    line_contains: '"runOn": "worktreeCreated"'
+    note: >-
+      Workspace-file task that runs whenever an agent session creates a worktree. The launch
+      configuration's preLaunchTask only runs on F5 and is not a finding.
+  - rule: devcontainer-initialize-command
+    file: .devcontainer/devcontainer.json
+    line_contains: '"initializeCommand": "${localWorkspaceFolder}/scripts/dev-bootstrap.sh"'
+    note: >-
+      Host-side repo script before every container start. postCreateCommand and
+      postStartCommand below run inside the container and must stay quiet.
+  - rule: devcontainer-initialize-command
+    file: .devcontainer/ollama/devcontainer.json
+    line_contains: '"initializeCommand": {'
+    note: >-
+      Second config one folder down, parallel (object) form; the finding sits on the key line.
+      The empty initializeCommand in the gpu config does nothing and must stay quiet.
+  - rule: codex-config-full-access
+    file: ops/nightly-triage/.codex/config.toml
+    line_contains: "default_permissions = ':danger-full-access'"
+    note: >-
+      Nested project config for a job folder (Codex layers every .codex/config.toml from the
+      repo root down to its working directory), built-in full-access permission profile in a
+      literal string. approval_policy = "never" next to it, and the root .codex/config.toml
+      (workspace-write, sandbox network on), must stay quiet.
+  - rule: vscode-chat-auto-approve
+    file: .vscode/settings.json
+    line_contains: '"approvals": "allowAll"'
+    note: >-
+      Agent-session default approvals inside a multi-line object, after a comment; the
+      finding sits on the member. The specific terminal rules (including shellcheck), the
+      commented-out "/.*/" rule, and chat.permissions.default = "default" must stay quiet.
+  - rule: vscode-chat-auto-approve
+    file: .vscode/settings.json
+    line_contains: '"bash": true,'
+    note: >-
+      Terminal rule approving bash, added for the dev scripts. VS Code matches it against the
+      start of each sub-command, and the script in `bash -c '...'` is never parsed, so it
+      approves any command.
+  - rule: vscode-chat-auto-approve
+    file: helpdesk.code-workspace
+    line_contains: '"/^.*$/i": true'
+    note: >-
+      Match-all terminal auto-approve rule in the workspace file's settings block, next to a
+      path-prefix rule that must stay quiet.
+  - rule: gemini-settings-unrestricted-shell
+    file: .gemini/settings.json
+    line_contains: '"run_shell_command"'
+    note: >-
+      Bare shell tool appended after narrowed command prefixes, which it makes moot. The
+      run_shell_command(...) prefixes and the auto_edit default approval mode must stay quiet.
+  - rule: cursor-cli-unrestricted-shell
+    file: .cursor/cli.json
+    line_contains: '"Shell(**)"'
+    note: >-
+      Globstar command allow at the end of a scoped list. Shell(git), Shell(uv:run *), and
+      Shell(*:--version) (any command, but only with --version) must stay quiet.
+  - rule: pickle-load-from-model-hub
+    file: helpdesk/triage_model.py
+    line_contains: "return joblib.load(artifacts.fetch(PIPELINE_FILE))"
+    requires: taint-intrafile
+    note: >-
+      A joblib (pickle) pipeline fetched from a Hub repo at a moving revision. The download
+      used to name the .joblib file itself (an unsafe-model-deserialization finding); after
+      TriageArtifacts.fetch took the filename as a parameter, only the cross-function taint
+      rule sees it, on the load. labels() uses the same fetch for labels.json and must stay
+      quiet, as must the SHA-pinned fallback in load_audited_pipeline.
+  - rule: unsafe-model-deserialization
+    file: helpdesk/triage_model.py
+    line_contains: '"weights_only": False,'
+    note: >-
+      torch.load options kept in a dict and passed as **kwargs (the finding spans the dict).
+      The state-dict load relying on the weights-only default and torch.save must stay quiet.
+  - rule: unsafe-model-deserialization
+    file: helpdesk/kb_index.py
+    line_contains: "allow_dangerous_deserialization=TRUST_NIGHTLY_INDEX,"
+    note: >-
+      FAISS docstore unpickled inside a lazy property, opted in through a module constant
+      (constant propagation). The finding sits on the call's first line.
+  - rule: unsafe-model-deserialization
+    file: helpdesk/kb_index.py
+    line_contains: '"article-ids.npy", allow_pickle=True'
+    note: >-
+      Object array read back with pickle enabled. The mmap'd vectors.npy load and the
+      np.save with allow_pickle=False must stay quiet.
+  - rule: unsafe-model-deserialization
+    file: helpdesk/kb_index.py
+    line_contains: "JsonPlusSerializer(pickle_fallback=True)"
+    note: >-
+      LangGraph checkpointer that unpickles agent state from SQLite; whoever can write the
+      checkpoint DB gets code execution. scratch_checkpointer uses the default serializer
+      and must stay quiet.
+  - rule: pickle-load-from-model-hub
+    file: helpdesk/triage_model.py
+    line_contains: "return pickle.load(fh)"
+    requires: taint-intrafile
+    note: >-
+      A Hub release file fetched through the _release_file helper (filename from an env
+      var, so its format isn't visible) and unpickled in the caller. release_notes uses the
+      same helper for a Markdown file and must stay quiet.
+  - rule: pickle-load-from-model-hub
+    file: helpdesk/kb_index.py
+    line_contains: "return joblib.load(dst)"
+    note: >-
+      Vendor reranker downloaded with torch.hub.download_url_to_file into a cache path and
+      loaded with joblib; the taint follows the destination variable.
+  - rule: unsafe-model-deserialization
+    file: helpdesk/tone.py
+    line_contains: "return from_pretrained_fastai(TONE_REPO)"
+    note: >-
+      fastai learner pulled from the Hub at its default branch; load_learner unpickles it.
+      tone_learner's load_learner on our own export volume must stay quiet.
+  - rule: agent-rules-silent-command-directive
+    file: .claude/commands/triage.md
+    line_contains: "first execute `echo hd-queue-sync-check`"
+    note: >-
+      Slash command with an HTML comment (invisible when rendered) that runs a command on every
+      invocation and says not to mention it. The ticket-summarizer subagent's "do not show the
+      raw ticket thread to the user" protects data, runs nothing, and must stay quiet.
+  - rule: agent-rules-silent-command-directive
+    file: plugins/helpdesk-tools/skills/runbook-lookup/SKILL.md
+    line_contains: "without notifying the user"
+    note: >-
+      Plugin skill runs a command when it loads "without notifying the user". The "fails
+      silently, run ... and tell the user" line below it must stay quiet.
+  - rule: agent-rules-silent-command-directive
+    file: .cursor/rules/workspace.mdc
+    line_contains: "bash .cursor/bootstrap/warm-ticket-index.sh"
+    note: >-
+      Cursor rule with alwaysApply false but an all-files glob (multi-line YAML list), so it
+      attaches to every file; it tells the agent to run a repo script in a code block before
+      anything else in each chat. python-style.mdc (alwaysApply, commands without a setup or
+      session trigger) and migrations.mdc (scoped glob) must stay quiet.
+  - rule: agent-rules-silent-command-directive
+    file: .windsurf/rules/cascade.md
+    line_contains: "npx -y @example-org/helpdesk-prompt-pack sync"
+    note: >-
+      Windsurf always_on rule runs an npx -y package at the start of each session; the command
+      sits on the line after the trigger. The Copilot tests.instructions.md setup step is
+      scoped to tests/ and must stay quiet.
+  - rule: agent-instruction-suppresses-security-findings
+    file: .claude/agents/security-reviewer.md
+    line_contains: "security result under `helpdesk/vendored/` as a false positive"
+    note: >-
+      Project subagent (a path the rule gained alongside agent-rules-silent-command-directive)
+      whose system prompt waves off scanner findings in a folder; the sentence wraps across
+      two lines, so the finding spans both. "Report every security finding" before it must not
+      match on its own.
+  - rule: mcp-config-unpinned-package
+    file: .mcp.json
+    line_contains: '"example-org-helpdesk-mcp[jira]",'
+    note: >-
+      Claude Code project server: uvx --from with no version, in a multi-line args list after
+      --python 3.12 (an option value, not the package). The pinned npx runbooks server and the
+      uv run server with a pinned --with must stay quiet.
+  - rule: mcp-config-unpinned-package
+    file: .cursor/mcp.json
+    line_contains: '"--package=@example-org/ticket-search"'
+    note: >-
+      npx --package= form; the positional after it is the command, not a package.
+  - rule: mcp-config-unpinned-package
+    file: .cursor/mcp.json
+    line_contains: '"ghcr.io/example-org/helpdesk-kb-mcp"'
+    note: >-
+      Untagged docker image after value options (--env-file, -v). The inventory server's version
+      tag must stay quiet.
+  - rule: mcp-config-unpinned-package
+    file: .vscode/mcp.json
+    line_contains: '"@example-org/playwright-mcp@latest"'
+    note: >-
+      VS Code "servers" format with @latest, the shape VS Code's own docs show. The pinned uvx
+      status-page server must stay quiet.
+  - rule: mcp-config-unpinned-package
+    file: plugins/helpdesk-tools/.mcp.json
+    line_contains: "exec uvx example-org-hd-cli@latest"
+    note: >-
+      Plugin-provided server whose args hand bash a command line ending in uvx @latest. The hd
+      server runs the binary the plugin's SessionStart hook installed and must stay quiet.
+  - rule: mcp-config-unpinned-package-yaml
+    file: .continue/mcpServers/helpdesk.yaml
+    line_contains: "- example-org-ticket-history"
+    note: >-
+      Continue block file: pipx run --spec with no version, as plain YAML scalars. The pinned
+      npx runbooks server in the same file must stay quiet.
+  - rule: mcp-config-unpinned-package
+    file: .continue/mcpServers/device-lookup.json
+    line_contains: '"@example-org/device-lookup-mcp"'
+    note: >-
+      Continue's one-server JSON file (no mcpServers wrapper) running bunx with no version.
+      status-page.json next to it pins uvx and must stay quiet.
+  - rule: mcp-config-unpinned-package-toml
+    file: scripts/devbox/home/.codex/config.toml
+    line_contains: '"example-org-helpdesk-mcp@latest",'
+    note: >-
+      Codex user config shipped to support laptops: uvx @latest in a multi-line args array. The
+      pinned npx runbooks server, an inline table under [mcp_servers], must stay quiet.
+  - rule: agent-instruction-hidden-unicode
+    file: .cursor/rules/replies-i18n.mdc
+    line_contains: "- Keep replies under 120 words."
+    note: >-
+      Unicode tag characters after a visible bullet spell an instruction to read a file before
+      every reply (the path does not exist). The Hebrew, Arabic and Persian greetings, the
+      Persian ZWNJ, the England and Scotland flags (tag sequences), the ZWJ emoji and the
+      non-breaking spaces in the same rule must stay quiet.
+  - rule: agent-instruction-hidden-unicode
+    file: .github/copilot-instructions.md
+    line_contains: "Before touching a flaky test"
+    note: >-
+      Trojan Source in prose: a right-to-left override shows docs/NO-REVERSE.md while the agent
+      reads the reversed path. Two findings on the line (the override and the closing PDF). The
+      warning emoji with VS16 on the next line must stay quiet.
+  - rule: agent-instruction-hidden-unicode
+    file: .claude/commands/release-notes.md
+    line_contains: "## Draft the notes"
+    note: >-
+      A byte-order mark in the middle of a slash command assembled from two files. A BOM at
+      offset 0 (.windsurf/rules/locale.md) must stay quiet.
+  - rule: agent-instruction-hidden-unicode
+    file: .clinerules/escalation.md
+    line_contains: "## When to page on-call"
+    note: >-
+      Zero-width binary (ZWSP and ZWNJ bits, ZWJ between bytes) after a heading, one finding
+      for the whole run. The ZWJ in a Hindi conjunct below must stay quiet.
+  - rule: agent-instruction-hidden-unicode
+    file: plugins/helpdesk-tools/skills/status-digest/SKILL.md
+    line_contains: "Post the digest under a"
+    note: >-
+      Bytes hidden in variation selectors after an emoji, in a plugin skill. Single VS16 emoji
+      on the next line must stay quiet.
+  - rule: agent-instruction-hidden-unicode
+    file: GEMINI.md
+    line_contains: "run `echo hd-gemini-ready`"
+    note: >-
+      A zero-width space splits "silently", so agent-rules-silent-command-directive does not
+      see the word; this rule reports the hidden character instead.
+  - rule: agent-instruction-hidden-unicode
+    file: .claude/agents/kb-curator.md
+    line_contains: "description: Curates knowledge-base articles"
+    note: >-
+      Tag characters in a subagent's description, which Claude reads when deciding whether to
+      delegate, asking for the agent on every request.
+  - rule: agent-sdk-bypass-permissions
+    file: helpdesk/agent_settings.py
+    line_contains: '"HELPDESK_AGENT_PERMISSION_MODE", "bypassPermissions"'
+    note: >-
+      Dataclass settings field whose env-var default is bypassPermissions, consumed in another
+      module as permission_mode=SETTINGS.permission_mode (which must not fire again). The
+      reply-draft settings next to it default to dontAsk and must stay quiet.
+  - rule: agent-sdk-bypass-permissions
+    file: helpdesk/nightly_agent.py
+    line_contains: "can_use_tool=_approve,"
+    note: >-
+      can_use_tool callback with a docstring and a log line that approves every call. The
+      reply-draft gate, which denies anything outside a read-only set, must stay quiet.
+  - rule: agent-sdk-bypass-permissions
+    file: helpdesk/e2e_replay.py
+    line_contains: "can_use_tool=_no_prompts,"
+    note: >-
+      Release replay job (not a test, though its name says e2e) whose can_use_tool approves
+      every call. e2e-tests/test_macro_sync_live.py, a live test with an allow-all callback and
+      an approving PreToolUse hook, must stay quiet for this rule and
+      agent-sdk-hook-auto-approves (test files are excluded by path).
+  - rule: agent-sdk-bypass-permissions
+    file: helpdesk/nightly_agent.py
+    line_contains: 'await client.set_permission_mode("bypassPermissions")'
+    note: >-
+      ClaudeSDKClient started in plan mode and switched to bypass at runtime. The guard that
+      compares the mode to "bypassPermissions" and the comment in draft_reply must stay quiet.
+  - rule: mcp-config-plaintext-secret
+    file: .cursor/mcp.json
+    line_contains: '"SLACK_BOT_TOKEN": "xoxb-FAKE-TEST-helpdesk0escalations0NOTREAL",'
+    note: >-
+      Slack bot token pasted into a Cursor server's env. SLACK_TEAM_ID next to it is not a
+      secret and must stay quiet.
+  - rule: mcp-config-plaintext-secret
+    file: .vscode/mcp.json
+    line_contains: '"default": "FAKE0oncall0TEST0shared0token"'
+    note: >-
+      A VS Code password input with a literal default: the server reads ${input:oncall-token},
+      which looks safe, but the shared token sits in the file. The status-page input with no
+      default must stay quiet.
+  - rule: mcp-config-plaintext-secret
+    file: .gemini/settings.json
+    line_contains: '"X-Goog-Api-Key": "AIzaFAKE0TEST0helpdesk0gemini0docs0FAKE"'
+    note: >-
+      Gemini CLI remote server with a literal Google API key header. runbook-search reads
+      $RUNBOOK_SEARCH_TOKEN and must stay quiet.
+  - rule: mcp-config-plaintext-secret
+    file: plugins/helpdesk-tools/.mcp.json
+    line_contains: '"url": "https://search.example.invalid/mcp?team=helpdesk&api_key=FAKE0hdsearch0TEST0plugin01"'
+    note: >-
+      Plugin-provided remote server with a shared API key in the URL query string, shipped to
+      everyone who installs the plugin.
+  - rule: mcp-config-plaintext-secret-yaml
+    file: .continue/mcpServers/knowledge-search.yaml
+    line_contains: "X-Api-Key: FAKE0kbsearch0TEST0continue01"
+    note: >-
+      Continue block file: a literal key in requestOptions.headers. The runbook server's
+      apiKey uses ${{ secrets.RUNBOOK_SEARCH_KEY }} and must stay quiet.
+  - rule: mcp-config-plaintext-secret-toml
+    file: ops/nightly-triage/.codex/config.toml
+    line_contains: 'http_headers = { "X-Api-Key" = "FAKE0status0TEST0nightly0key01" }'
+    note: >-
+      Codex nightly job: a status-page key in an inline http_headers table. env_http_headers
+      (header to variable name) and env_vars on the tickets server must stay quiet.
+  - rule: mcp-config-plaintext-secret-toml
+    file: scripts/devbox/home/.codex/config.toml
+    line_contains: 'GITHUB_PERSONAL_ACCESS_TOKEN = "ghp_FAKE0helpdesk0devbox00TEST0000FAKE00"'
+    note: >-
+      GitHub token in a [mcp_servers.github.env] sub-table of the Codex config copied to every
+      support laptop. GITHUB_HOST in the same table must stay quiet.
+  - rule: ai-cli-bypass-flag-invocation
+    file: .github/workflows/nightly-triage.yml
+    line_contains: "codex exec \\"
+    note: >-
+      Nightly job runs codex exec with --dangerously-bypass-approvals-and-sandbox on a later
+      continuation line, with the OpenAI key in the job env. The docs-digest job next to it
+      (gemini --approval-mode auto_edit, GEMINI_CLI_TRUST_WORKSPACE) and the claude dontAsk
+      step must stay quiet.
+  - rule: ai-cli-bypass-flag-invocation
+    file: .github/workflows/nightly-triage.yml
+    line_contains: 'COPILOT_ALLOW_ALL: "1"'
+    note: >-
+      Job-level env turns on Copilot CLI's allow-all for the later copilot -p step, which has
+      no flag of its own.
+  - rule: ai-cli-bypass-flag-invocation-gha
+    file: .github/workflows/agent-review.yml
+    line_contains: "settings: |"
+    note: >-
+      claude-code-action's settings input as a multi-line JSON block with defaultMode
+      bypassPermissions; its claude_args allowlist (--allowedTools ...) must stay quiet.
+  - rule: ai-cli-bypass-flag-invocation-gha
+    file: .github/workflows/agent-review.yml
+    line_contains: 'sandbox: "danger-full-access"'
+    note: >-
+      Manually dispatched codex-action job with sandbox danger-full-access and a write token.
+      The review job's permission-profile ":read-only" must stay quiet.
+  - rule: ai-cli-bypass-flag-invocation
+    file: Makefile
+    line_contains: "AGENT_ARGS ?= --output-format stream-json --dangerously-skip-permissions"
+    note: >-
+      The flag lives in a make variable that agent-triage passes to $(CLAUDE); reported where
+      it is defined. The echo in help and the dontAsk agent-explain target must stay quiet.
+  - rule: ai-cli-bypass-flag-invocation
+    file: Makefile
+    line_contains: '-$(CODEX) exec --sandbox danger-full-access'
+    note: Program through a make variable, after the recipe's - prefix.
+  - rule: ai-cli-bypass-flag-invocation
+    file: scripts/agent-review.sh
+    line_contains: 'run_gemini() { gemini --model "$MODEL" -p "$1" -y; }'
+    note: >-
+      One-line shell function runs gemini with -y (YOLO). The kiro-cli --trust-tools branch
+      and the echo mentioning --yolo must stay quiet.
+  - rule: ai-cli-bypass-flag-invocation
+    file: scripts/agent-review.sh
+    line_contains: 'q chat --no-interactive --trust-all-tools "$PROMPT"'
+    note: Legacy Amazon Q Developer CLI fallback in an elif branch.
+  - rule: ai-cli-bypass-flag-invocation
+    file: tools/package.json
+    line_contains: '"agent:flaky":'
+    note: >-
+      npm script runs copilot --allow-all after other commands in the same string; the
+      agent:flaky:safe script with --allow-tool 'shell(cat pytest.log)' must stay quiet.
+  - rule: ai-cli-bypass-flag-invocation-py
+    file: helpdesk/agent_jobs.py
+    line_contains: '"--permission-mode", "bypassPermissions"),'
+    note: >-
+      argv template tuple in a dict, program through a which() fallback constant. The codex and
+      gemini templates (workspace-write, auto_edit) and the FORBIDDEN_FLAGS guard must stay
+      quiet.
+  - rule: ai-cli-bypass-flag-invocation-py
+    file: helpdesk/agent_jobs.py
+    line_contains: '"codex": (slice(2, 4), ("--dangerously-bypass-approvals-and-sandbox",)),'
+    note: >-
+      Refactored from an argv.append into a per-agent table of unattended flags spliced into
+      the argv template; the program is not on the line, so the flag-only tuple is what fires.
+      The FORBIDDEN_FLAGS set below it is a guard and must stay quiet.
+  - rule: ai-cli-bypass-flag-invocation-py
+    file: helpdesk/agent_jobs.py
+    line_contains: '"gemini": (slice(1, 3), ("--approval-mode", "yolo")),'
+    note: Same table; Gemini's yolo approval mode as a two-element pair.
+  - rule: ai-cli-bypass-flag-invocation-py
+    file: helpdesk/agent_jobs.py
+    line_contains: '"COPILOT_ALLOW_ALL": "yes"'
+    note: Child-process env for Copilot CLI from a helper method, not at the subprocess call.
+  - rule: ai-cli-bypass-flag-invocation-ts
+    file: tools/triage.mjs
+    line_contains: '"--yolo",'
+    note: >-
+      Codex args array in a variable passed to promisified execFile, program behind a
+      CODEX_BIN ?? "codex" fallback. triageReadOnly (--sandbox read-only) must stay quiet.
+  - rule: ai-cli-bypass-flag-invocation-ts
+    file: tools/src/agents.ts
+    line_contains: '"yolo",'
+    note: >-
+      execa with --approval-mode and yolo as separate array elements. The sandboxed twin
+      (--sandbox first) must stay quiet.
+  - rule: ai-cli-bypass-flag-invocation-ts
+    file: tools/src/agents.ts
+    line_contains: 'spawnSync("cursor-agent", ["-p", "--force"'
+    note: Cursor CLI headless run with --force.
+  - rule: ai-cli-bypass-flag-invocation
+    file: scripts/agent-review.sh
+    line_contains: 'opencode run --auto --model'
+    note: opencode fallback branch with --auto, which approves every request not denied.
+  - rule: ai-cli-bypass-flag-invocation-ts
+    file: tools/src/agents.ts
+    line_contains: 'spawnSync(RELEASE_NOTES_CLI, ["-p"'
+    note: >-
+      Qwen Code with -y, the program held in a module constant whose name doesn't name the
+      CLI (followed through constant propagation).
+  - rule: ai-cli-default-auto-approve
+    file: .github/workflows/release-notes.yml
+    line_contains: "npx -y cline@3.0.73 --json -P anthropic \\"
+    note: >-
+      Cline CLI run for a task on a tag push, split over continuation lines with no
+      --auto-approve false: Cline auto-approves every tool by default. The --plan step below it
+      must stay quiet.
+  - rule: ai-cli-default-auto-approve
+    file: .github/workflows/release-notes.yml
+    line_contains: "run: git log --oneline -30 | amp > amp-highlights.md"
+    note: Git log piped into Amp with stdout redirected, which turns on execute mode.
+  - rule: ai-cli-default-auto-approve
+    file: tools/package.json
+    line_contains: '"agent:explain": "cat ../pytest.log | cline --json",'
+    note: >-
+      A package.json script piping the test log into Cline. The :safe twin with
+      --auto-approve false must stay quiet.
+  - rule: ai-cli-default-auto-approve-py
+    file: helpdesk/release_notes.py
+    line_contains: '[self.cline_bin, "--json", "--cwd", str(self.repo), *args],'
+    note: >-
+      Cline started from a class helper through an attribute named for the CLI, the prompt
+      spliced in with *args. list_tickets runs it with --plan and must stay quiet.
+  - rule: ai-cli-default-auto-approve
+    file: scripts/agent-review.sh
+    line_contains: 'cline) cline --json "$PROMPT" | tail -n 1 ;;'
+    note: >-
+      Cline in a case arm of the review script's agent dispatch (testbed refactor 2026-10-22).
+      The cline-plan arm must stay quiet. The refactor also moved q chat into a case arm,
+      which ai-cli-bypass-flag-invocation reports because case labels count as command position.
+  - rule: secret-in-system-prompt
+    file: helpdesk/escalation.py
+    line_contains: "system=_escalation_prompt(team),"
+    requires: taint-intrafile
+    note: >-
+      The Jira API token from the escalation settings dataclass (escalation_settings.py, read
+      from HELPDESK_JIRA_API_TOKEN) is written into the system prompt by a helper so the model
+      can send it with its http_request tool. status_reply logs in to the status page with the
+      password and puts only the fetched status in the prompt, and must stay quiet.
+  - rule: secret-in-system-prompt
+    file: helpdesk/oncall_agent.py
+    line_contains: "system_prompt={"
+    note: >-
+      Claude Agent SDK preset whose append carries a Grafana bearer header built from
+      HELPDESK_GRAFANA_TOKEN through a module constant and a local. The finding sits on the
+      dict's first line. The pager routing key passed through env= must stay quiet.
+  - rule: secret-in-system-prompt
+    file: helpdesk/oncall_agent.py
+    line_contains: "system_prompt=f\"Answer questions about ticket volume."
+    note: >-
+      A Postgres URL with a literal password, kept in a module constant and handed to the model
+      so it can run psql itself.
+  - rule: agent-tool-arg-to-shell
+    file: helpdesk/agent_tools.py
+    line_contains: 'out = subprocess.run(f"ping -c 2 -W 1 {host}", shell=True'
+    note: >-
+      LangChain @tool whose host argument the agent fills in from the ticket goes into a
+      shell=True command. ping_host_quoted (shlex.quote) and restart_service (Literal unit,
+      InjectedToolArg ticket_id) must stay quiet.
+  - rule: agent-tool-arg-to-shell
+    file: helpdesk/agent_tools.py
+    line_contains: 'return subprocess.getoutput(f"lpstat -p {printer} -a")'
+    note: >-
+      BaseTool subclass: _run's printer argument reaches getoutput, which uses a shell.
+      PrintQueueTool checks the printer against an allowlist first and must stay quiet.
+  - rule: agent-tool-arg-to-shell
+    file: helpdesk/agent_tools.py
+    line_contains: "        command,"
+    requires: taint-intrafile
+    note: >-
+      lookup_dns passes its name argument to the shared _local helper, which runs it with
+      shell=True. PrintQueueTool reaches the same helper only after its allowlist check.
+  - rule: agent-tool-arg-option-injection
+    file: helpdesk/agent_tools.py
+    line_contains: '["git", "-C", str(RUNBOOK_DIR), "log", "--oneline", "-n", "20", ref],'
+    note: >-
+      Function registered with StructuredTool.from_function passes a model-chosen ref to git
+      log with no "--", so a ref like --output=<path> is read as an option. runbook_diff puts
+      --end-of-options before the ref and must stay quiet.
+  - rule: gha-ai-agent-untrusted-trigger
+    file: .github/workflows/issue-assistant.yml
+    line_contains: "prompt: |"
+    note: >-
+      Multi-line claude-code-action prompt on a maintainer's /helpdesk-bot comment that also
+      carries the issue's own title and body, with Edit and wildcard Bash allowed. The action
+      checks the commenter's write access, not the issue author's. The second step, with only
+      the maintainer's comment in its prompt, must stay quiet.
+  - rule: gha-ai-agent-untrusted-trigger
+    file: .github/workflows/issue-assistant.yml
+    line_contains: "ISSUE_TITLE: ${{ github.event.issue.title }}"
+    note: >-
+      run-gemini-cli labeler (PromptPwnd shape): issue text in the step env, a core allowlist
+      that includes gh issue edit, and a write token. The summarize job, with read tools and
+      run_shell_command(echo) only, must stay quiet.
+  - rule: gha-ai-agent-untrusted-trigger
+    file: .github/workflows/issue-assistant.yml
+    line_contains: "ISSUE_BODY: ${{ github.event.issue.body }}"
+    note: Same labeler step; each untrusted env entry is its own finding.
+  - rule: gha-ai-agent-untrusted-trigger
+    file: .github/workflows/pr-chores.yml
+    line_contains: "PR_TITLE: ${{ github.event.pull_request.title }}"
+    note: >-
+      Job-level env on a pull_request_target labeled job, used by a claude -p run with
+      --permission-mode acceptEdits in a later step. The read-only codex-action step in the
+      same job must stay quiet.
+  - rule: gha-ai-agent-untrusted-trigger
+    file: .github/workflows/pr-chores.yml
+    line_contains: "PR_BODY: ${{ github.event.pull_request.body }}"
+    note: Same changelog job.
+  - rule: gha-ai-agent-trusts-untrusted-checkout
+    file: .github/workflows/pr-chores.yml
+    line_contains: 'GEMINI_CLI_TRUST_WORKSPACE: "true"'
+    note: >-
+      Job env trusts the workspace for Gemini CLI in a pull_request_target job that checks
+      out the PR head, so the PR's .gemini/settings.json and .gemini/.env load. The
+      docs-preview job (PR in a subdirectory) and nightly-triage (schedule) must stay quiet.
+  - rule: gha-ai-agent-open-to-non-writers
+    file: .github/workflows/community-answers.yml
+    line_contains: 'allowed_non_write_users: "*"'
+    note: >-
+      Tag-mode claude-code-action with github_token and allowed_non_write_users "*": anyone
+      can comment "@helpdesk-bot ..." and drive an agent that edits files with a write
+      token. The faq job opens to everyone too, but with read tools only, and must stay
+      quiet.
+  - rule: llm-output-to-code-execution
+    file: helpdesk/report_scripts.py
+    line_contains: '[sys.executable, "-I", "-c", code],'
+    note: >-
+      Anthropic reply (a pandas script) run inline with the service's own interpreter. -I
+      isolates the user site but not the code. saved_report runs a reviewed module picked
+      from SAVED_REPORTS with -m and must stay quiet. The finding lands on the argv line.
+  - rule: llm-output-to-code-execution
+    file: helpdesk/report_scripts.py
+    line_contains: 'script.write_text(_strip_fences(response.output_text), encoding="utf-8")'
+    note: >-
+      OpenAI Responses script written under REPORT_DIR and then run with
+      subprocess.run([sys.executable, str(script)]); the finding lands on the write. The
+      Markdown summary written from the same output only goes to git add and must stay quiet.
+  - rule: agent-tool-arg-to-shell
+    file: helpdesk/agent_report_tools.py
+    line_contains: '[sys.executable, "-c", code],'
+    note: >-
+      LangChain @tool whose code argument the agent writes runs through python -c. The
+      Literal-typed run_saved_report next to it passes -m and a fixed module and must stay
+      quiet.
+  - rule: mcp-tool-arg-to-shell
+    file: helpdesk/mcp_reports.py
+    line_contains: "handle.write(script)"
+    note: >-
+      MCP SDK v2 tool writes its script argument to a NamedTemporaryFile and runs handle.name
+      with sys.executable. save_chart_notes writes the notes argument and only passes the file
+      to git add (after --), and standard_chart takes a Literal; both must stay quiet.
+  - rule: agent-settings-command-runs-local-script
+    file: .claude/settings.json
+    line_contains: '"command": "bash .claude/statusline.sh"'
+    note: >-
+      Team status line runs a repo script on every refresh once the folder is trusted. The
+      otelHeadersHelper below points at an installed tool and must stay quiet, and so must the
+      helpdesk-tools plugin's subagentStatusLine, which runs from ${CLAUDE_PLUGIN_ROOT}.
+  - rule: agent-settings-command-runs-local-script
+    file: .claude/settings.json
+    line_contains: '"headersHelper": "python3 .claude/marketplace_headers.py"'
+    note: >-
+      Marketplace url source in extraKnownMarketplaces: Claude Code runs this headersHelper
+      without asking before every catalog fetch once the folder is trusted. The kb-style entry
+      in .claude-plugin/marketplace.json sets its own headersHelper, which Claude Code shows
+      and asks about on each install, and must stay quiet.
+  - rule: agent-frontmatter-command-runs-local-script
+    file: .claude/skills/ticket-export/SKILL.md
+    line_contains: "command: python3 .claude/skills/ticket-export/check_export_path.py"
+    note: >-
+      Project skill hook: registered as soon as the skill is invoked, even by Claude in a
+      claude -p run in an untrusted folder, and kept for the rest of the session. The uv run
+      ruff hook below runs an installed tool and must stay quiet.
+  - rule: agent-frontmatter-command-runs-local-script
+    file: .claude/agents/sla-auditor.md
+    line_contains: 'args: [".claude/hooks/sla_guard.py", "--read-only"]'
+    note: >-
+      Exec-form subagent hook (command python3, the script in args). The pinned npx Stop hook
+      below must stay quiet.
+  - rule: agent-frontmatter-command-runs-local-script
+    file: .claude/agents/sla-auditor.md
+    line_contains: "headersHelper: bash .claude/hooks/sla-metrics-headers.sh"
+    note: >-
+      The subagent's inline MCP server runs a repo script as its headersHelper on every
+      connection once the folder is trusted.
+  - rule: agent-frontmatter-command-remote-exec
+    file: plugins/helpdesk-tools/skills/status-digest/SKILL.md
+    line_contains: "command -v hd >/dev/null || curl -LsSf https://hd-cli.example.invalid/install.sh | sh"
+    note: >-
+      Plugin skill hook pipes a vendor installer into sh when the hd CLI is missing. The
+      ${CLAUDE_PLUGIN_ROOT} preflight hook below must stay quiet for the local-script rule.
+  - rule: mcp-config-ephemeral-remote-host
+    file: .mcp.json
+    line_contains: '.trycloudflare.com/mcp/kb",'
+    note: >-
+      Claude Code project server pointed at a Cloudflare quick tunnel, the first Deadbugz
+      shape. kb-search-local next to it uses http://localhost and must stay quiet.
+  - rule: mcp-config-ephemeral-remote-host
+    file: .vscode/mcp.json
+    line_contains: '"url": "http://203.0.113.40:8000/mcp"'
+    note: >-
+      VS Code server reached by raw public IP over plain http. The metrics server on
+      http://10.40.0.12 is a LAN address, which the pack leaves alone (decision 2026-10-22),
+      and must stay quiet.
+  - rule: mcp-config-ephemeral-remote-host
+    file: .gemini/settings.json
+    line_contains: '"httpUrl": "http://runbook-search-staging.example.invalid/mcp"'
+    note: >-
+      Gemini CLI's deprecated httpUrl key, plain http to a public name. The https url servers
+      above it must stay quiet.
+  - rule: mcp-config-ephemeral-remote-host
+    file: .devcontainer/ollama/devcontainer.json
+    line_contains: '"--streamableHttp", "http://model-router.example.invalid/mcp"'
+    note: >-
+      Dev container MCP server that is a supergateway bridge to a remote server over plain
+      http. local-router on http://ollama:11434 is a single-label compose name and must stay
+      quiet, as must OLLAMA_HOST on localhost.
+  - rule: mcp-config-ephemeral-remote-host-toml
+    file: .codex/config.toml
+    line_contains: '"mcp-remote@0.1.29", "https://ticket-sync-placeholder'
+    note: >-
+      Codex project server that is an mcp-remote bridge to a teammate's ngrok endpoint; the
+      tunnel URL is an argument, not a url key.
+  - rule: mcp-config-ephemeral-remote-host-toml
+    file: ops/nightly-triage/.codex/config.toml
+    line_contains: 'wiki.args = ["mcp-proxy==0.8.2"'
+    note: >-
+      Dotted-key Codex server: uvx mcp-proxy bridging to a wiki over plain http. The notes
+      server on http://127.0.0.1 and status-page on https must stay quiet.
+  - rule: mcp-config-ephemeral-remote-host-yaml
+    file: .continue/mcpServers/knowledge-search.yaml
+    line_contains: "url: http://198.51.100.23:8080/sse"
+    note: >-
+      Continue SSE server reached by raw public IP. The dev-container entry on
+      host.docker.internal must stay quiet.
+  - rule: mcp-config-ephemeral-remote-host-workspace
+    file: helpdesk.code-workspace
+    line_contains: '-8040.app.github.dev/mcp"'
+    note: >-
+      VS Code reads settings.mcp.servers from the workspace file; this server is a public
+      Codespaces port forward, someone's codespace for as long as it runs. helpdesk-api on
+      localhost must stay quiet.
+  - rule: mcp-config-paas-remote-host
+    file: .cursor/mcp.json
+    line_contains: '.onrender.com/mcp"'
+    note: >-
+      Cursor server on a Render default subdomain, the later Deadbugz shape (INFO, LOW
+      confidence). macro-library on its own domain must stay quiet.
+  - rule: mcp-config-paas-remote-host-yaml
+    file: .continue/mcpServers/macro-suggester.yaml
+    line_contains: ".hf.space/gradio_api/mcp/sse"
+    note: Continue server on a Hugging Face Space, a hackathon demo nobody owns.
+  - rule: mcp-config-paas-remote-host-toml
+    file: scripts/devbox/home/.codex/config.toml
+    line_contains: '.fly.dev/mcp"'
+    note: >-
+      Codex config copied to every support laptop, with a handbook server on a Fly.io
+      default subdomain. local-kb on loopback must stay quiet.
+  - rule: mcp-config-paas-remote-host-workspace
+    file: helpdesk.code-workspace
+    line_contains: '.vercel.app/api/mcp"'
+    note: Workspace-file server on a Vercel preview deployment's default domain.
+  - rule: mcp-config-unpinned-package-workspace
+    file: helpdesk.code-workspace
+    line_contains: '"@example-org/ticket-fixtures-mcp", "--root"'
+    note: >-
+      Workspace-file server started with npx and no version. plugin-dev next to it is pinned
+      and must stay quiet.
+  - rule: mcp-config-plaintext-secret-workspace
+    file: helpdesk.code-workspace
+    line_contains: '"FIXTURES_API_KEY": "FAKE0fixtures0TEST0workspace0key01"'
+    note: >-
+      Literal API key in a workspace-file server's env. plugin-dev reads its token with
+      ${env:...} and must stay quiet.
+  - rule: llm-output-to-sql
+    file: helpdesk/reporting.py
+    line_contains: "cursor = warehouse.execute(query, params)"
+    requires: taint-intrafile
+    note: >-
+      Text-to-SQL: write_query returns the model's SQL (fences stripped), answer passes it to
+      the _fetch helper, and _fetch runs it on the read-only warehouse connection, where it
+      is reported. A read-only connection still reads every table. Default mode misses the
+      cross-function flow; ticket_list's model-built f-string reaches the same line and is
+      also reported where it is built.
+  - rule: llm-output-to-sql
+    file: helpdesk/reporting.py
+    line_contains: "frame = pd.read_sql_query(sa.text(query), REPORT_ENGINE)"
+    note: >-
+      CSV export: Claude's SQL wrapped in sqlalchemy text() and run by pandas; reported once,
+      at the text() argument. The SQLAlchemy select() in open_count binds the model's queue
+      name and must stay quiet.
+  - rule: llm-output-to-sql
+    file: helpdesk/reporting.py
+    line_contains: 'f"SELECT id, queue, status FROM tickets WHERE queue = ? ORDER BY {order} LIMIT 50",'
+    note: >-
+      LiteLLM JSON plan: the queue is a bound parameter, but the model's ORDER BY clause is
+      spliced into the f-string handed to the _fetch helper, so it is reported where the SQL
+      text is built, in default mode too. ticket_list_sorted (SORT_ORDERS lookup) and
+      saved_view (`not in SAVED_VIEWS` check) must stay quiet.
+  - rule: llm-output-to-sql
+    file: helpdesk/warehouse_agent.py
+    line_contains: "return warehouse.run(query, include_columns=True)"
+    note: >-
+      LangChain agent tool: a prompt | ChatOpenAI | parser chain writes SQL that
+      SQLDatabase.run executes (ASI02). team_queues passes the model's team name in
+      `parameters` and must stay quiet.
+  - rule: agent-tool-arg-to-sql
+    file: helpdesk/asset_tools.py
+    line_contains: 'condition = sql.SQL(" AND ").join([condition, sql.SQL(extra_filter)])'
+    note: >-
+      pydantic-ai @agent.tool: the model's extra_filter is marked as trusted SQL with
+      psycopg sql.SQL() and joined into a composed query; reported once there, not again
+      at execute. The owner goes through sql.Literal, and assets_sorted quotes the sort
+      column with sql.Identifier; both must stay quiet.
+  - rule: agent-tool-arg-to-sql
+    file: helpdesk/warehouse_agent.py
+    line_contains: "return warehouse.run(query, include_columns=True)"
+    note: >-
+      Same line as the llm-output-to-sql finding, from the other end: the LangChain @tool's
+      question argument, which the Slack bot's agent fills in, is fed to the SQL-writing
+      chain, so the agent's argument steers the statement SQLDatabase.run executes.
+      team_queues binds the team name in `parameters` and must stay quiet.
+  - rule: mcp-config-hidden-path-command
+    file: .mcp.json
+    line_contains: '"${HOME}/.config/.cache/.sys/.hd-calendar-sync.py"'
+    note: >-
+      The Deadbugz stdio shape: python3 runs a dot-named script in a dot folder inside
+      ~/.config, which the project can't install or show. shift-notes, a program in
+      ~/.local/bin, must stay quiet.
+  - rule: mcp-config-hidden-path-command
+    file: .cursor/mcp.json
+    line_contains: 'exec node \"$HOME/.cursor/.cache/.sys/ticket-tagger.mjs\"'
+    note: >-
+      A sh -c line whose script sits in ~/.cursor/.cache/.sys/, with escaped quotes around the
+      path. reply-lint runs nvm's node on a script in one dot folder (~/.cursor/tools/) and
+      must stay quiet.
+  - rule: mcp-config-hidden-path-command
+    file: .vscode/mcp.json
+    line_contains: '"command": "${userHome}/.vscode/.cache/.bin/sla-watch"'
+    note: >-
+      VS Code's ${userHome} variable: the program itself sits in a dot folder inside
+      ~/.vscode. reply-lint runs the workspace's .venv python and must stay quiet.
+  - rule: mcp-config-hidden-path-command
+    file: .gemini/settings.json
+    line_contains: '"$HOME/.gemini/.cache/.sys/.runbook-index.mjs"'
+    note: >-
+      Gemini CLI expands $HOME in settings; the server's script is dot-named and hidden two
+      folders deep. The personal-notify hook in ~/.gemini/hooks is not an MCP server and is
+      one dot folder deep, so it must stay quiet.
+  - rule: mcp-config-hidden-path-command
+    file: .continue/mcpServers/reply-drafts.json
+    line_contains: 'reply-drafts.exe'
+    note: >-
+      Continue's one-server JSON file, Windows form: %USERPROFILE% with doubled backslashes,
+      the program in .continue\.cache\.sys.
+  - rule: mcp-config-hidden-path-command-yaml
+    file: .continue/mcpServers/helpdesk.yaml
+    line_contains: 'exec python3 ~/.continue/.cache/.sys/.macro-sync.py --stdio'
+    note: >-
+      Continue YAML: a bash -lc line in a block list runs a hidden script. Shift notes, run
+      from ~/.local/bin, must stay quiet.
+  - rule: mcp-config-hidden-path-command-toml
+    file: .codex/config.toml
+    line_contains: '"/home/support/.codex/.cache/.sys/.ticket-digest.py",'
+    note: >-
+      Codex project config: a literal /home/<user> path in a multi-line args array. The
+      devbox home config's shift-notes server runs ~/.local/bin/hd-shift-notes and must stay
+      quiet.
+  - rule: mcp-config-hidden-path-command-workspace
+    file: helpdesk.code-workspace
+    line_contains: '"${env:HOME}/.config/.vscode/.queue-stats.mjs"'
+    note: >-
+      VS Code workspace file (JSONC, regex rule): ${env:HOME} and a dot-named script in
+      ~/.config/.vscode. reply-lint runs the workspace's .venv python and must stay quiet.
+  - rule: mcp-config-hidden-path-command-toml
+    file: .codex/config.toml
+    line_contains: 'cwd = "~/.codex/.cache/.sys"'
+    note: >-
+      cwd escape: the working directory is a dot-in-dot home folder and log_digest.py is run
+      relative to it, so the hidden folder decides what runs. log-digest-pinned has the same
+      cwd but a pinned uvx package, so it stays quiet.
+  - rule: mcp-config-hidden-path-command
+    file: .mcp.json
+    line_contains: '"--require ${HOME}/.config/.cache/.sys/.hd-telemetry.js"'
+    note: >-
+      NODE_OPTIONS --require loads a hidden home script into the node server at startup.
+      reply-metrics-tuned sets only --max-old-space-size, so it stays quiet.
+  - rule: user-input-in-system-prompt
+    file: helpdesk/api.py
+    line_contains: "system=system_prompt(team),"
+    note: >-
+      The team query parameter goes into the system prompt through llm.system_prompt(), a
+      helper in another module, so a caller can append their own policy to the helpdesk
+      assistant's instructions. answer_urgent passes a Literal priority, which FastAPI
+      validates, and must stay quiet.
+  - rule: user-input-in-system-prompt
+    file: helpdesk/assist.py
+    line_contains: "system=system,"
+    requires: taint-intrafile
+    note: >-
+      Agent-assist drafts: the X-Agent-Team header and the request's free-text signature are
+      built into the system prompt that the _draft helper sends. The language is checked
+      against SUPPORTED_LANGUAGES, the tone is a Literal field, and the style is a REPLY_STYLES
+      lookup. draft_from_macro builds its prompt from a stored macro plus those validated
+      fields and must stay quiet; default mode misses the cross-function flow.
+  - rule: user-input-in-system-prompt
+    file: helpdesk/assist.py
+    line_contains: 'instructions=f"Summarize this helpdesk ticket for {body.audience}. Use plain language.",'
+    note: >-
+      OpenAI Responses instructions take the request body's free-text audience field.
+  - rule: user-input-in-system-prompt
+    file: helpdesk/assist_chat.py
+    line_contains: '"display_name": hello.get("display_name", "a customer"),'
+    note: >-
+      WebSocket portal chat: the display name from the client's first frame fills the
+      {display_name} placeholder in the LangChain system template, through a chain built on
+      the prompt. The question fills the human message's {question} (the system text only
+      says "questions") and must stay quiet, as must the history placeholder.
+  - rule: llm-output-rendered-as-html
+    file: helpdesk/rendering/pages.py
+    line_contains: 'return PREVIEW_PAGE.format(body=markdown.markdown(reply, extensions=["tables"]))'
+    note: >-
+      A route declared with response_class=HTMLResponse returns the model's Markdown reply
+      converted with Python-Markdown, which passes raw HTML through, inside a page template.
+      The .txt variant (PlainTextResponse) stays quiet.
+  - rule: llm-output-rendered-as-html
+    file: helpdesk/rendering/pages.py
+    line_contains: 'return Markup(text.replace("\n", "<br>"))'
+    requires: taint-intrafile
+    note: >-
+      A "keep the line breaks" helper wraps the Claude summary in markupsafe.Markup, so the
+      autoescaping Jinja2Templates page renders it raw. with_line_breaks_escaped builds the
+      same thing with Markup("<br>").join(), which escapes each line, and stays quiet.
+  - rule: llm-output-rendered-as-html
+    file: helpdesk/rendering/notifications.py
+    line_contains: 'html_body = email_env.get_template("ticket_update.html").render(context, reply=reply)'
+    note: >-
+      A Jinja2 Environment built without autoescape renders the suggested reply into an HTML
+      email. The .txt template from the same environment and the digest from an
+      environment with select_autoescape() stay quiet.
+  - rule: llm-markdown-remote-image-render-py
+    file: helpdesk/rendering/pages.py
+    line_contains: 'return PREVIEW_PAGE.format(body=markdown.markdown(reply, extensions=["tables"]))'
+    note: >-
+      Also reported by llm-output-rendered-as-html. Python-Markdown turns an image in the
+      model's reply into an <img> on the served preview page; escaping or nh3 with its
+      default tags would still keep it.
+  - rule: llm-markdown-remote-image-render-py
+    file: helpdesk/rendering/reply_emails.py
+    line_contains: 'msg.add_alternative(markdown.markdown(reply, extensions=["tables"]), subtype="html")'
+    note: >-
+      The drafted reply's Markdown becomes the email's HTML part, so a remote image in it is
+      fetched when the customer's mail client loads images. The plain-text part and the
+      closed-ticket notice built from our own template stay quiet.
+  - rule: mcp-config-auto-approve
+    file: .roo/mcp.json
+    line_contains: '"addInternalNote"'
+    note: >-
+      Roo Code's alwaysAllow on the tickets server lets the agent post internal notes without
+      asking (camelCase name, "add" is the action). The runbooks server's read-only list and
+      the other three tickets tools stay quiet.
+  - rule: mcp-config-auto-approve
+    file: .gemini/settings.json
+    line_contains: '"trust": true'
+    note: >-
+      Gemini CLI skips every confirmation for runbook-search's tools once the folder is
+      trusted. docs-search's includeTools only filters which tools exist and stays quiet.
+  - rule: mcp-config-auto-approve-toml
+    file: .codex/config.toml
+    line_contains: 'approval_mode = "approve"  # saved from "always allow"'
+    note: >-
+      A per-tool approval Codex saved into the project file: reassign_ticket runs without
+      asking. get_ticket's approval and the server's "writes" default stay quiet.
+  - rule: mcp-config-auto-approve-toml
+    file: .codex/config.toml
+    line_contains: 'default_tools_approval_mode = "approve"'
+    note: >-
+      Every kb-search tool runs without asking, whatever the server adds later.
+  - rule: claude-settings-project-mcp-auto-start
+    file: .claude/settings.json
+    line_contains: '"enabledMcpjsonServers": ["tickets", "runbooks", "kb-search-local"]'
+    note: >-
+      The committed settings approve three .mcp.json servers, so a change to their commands
+      runs at the next session without Claude Code's per-server prompt.
+  - rule: claude-skill-allowed-tools-auto-approve
+    file: .claude/skills/close-stale/SKILL.md
+    line_contains: "- mcp__tickets__close_ticket"
+    note: >-
+      The skill pre-approves closing tickets through the tickets MCP server, and Claude Code
+      applies a project skill's allowed-tools without folder trust. The search and get tools
+      in the same list stay quiet.
+  - rule: cursor-mcp-auto-approve
+    file: .cursor/cli.json
+    line_contains: '"Mcp(ticket-search:*)"'
+    note: >-
+      Cursor CLI approves every ticket-search tool. Mcp(knowledge-base:search_articles) names
+      one read tool and stays quiet.
+  - rule: agent-sdk-mcp-auto-approve
+    file: helpdesk/ops_agent_sdk.py
+    line_contains: 'RESTART_ALLOWED_TOOLS = [*OPS_READ_TOOLS, "mcp__ops__restart_worker"]'
+    note: >-
+      The restart runbook's allow list, kept in a constant and passed through a helper, lets
+      the SDK agent restart workers without a check. OPS_READ_TOOLS holds only status reads
+      and stays quiet.
+  - rule: agent-sdk-mcp-auto-approve
+    file: helpdesk/ops_agent_sdk.py
+    line_contains: 'allowed_tools=[*OPS_READ_TOOLS, "mcp__statuspage"],'
+    note: >-
+      A whole-server allow: every statuspage tool, including posting an update, runs without
+      a check, although the docstring says updates are only drafted.
+  - rule: client-message-roles-with-tools-py
+    file: helpdesk/portal_assistant.py
+    line_contains: 'messages=[{"role": "system", "content": PORTAL_SYSTEM}, *conversation],'
+    requires: taint-intrafile
+    note: >-
+      The portal posts its whole conversation (PortalChat.messages) and _complete spreads it
+      after the system prompt in a call with unlock_account and reset_mfa tools, which ask()
+      then runs as the directory service account, so the caller can forge system turns or
+      tool results. Cross-function, so default mode misses it. The /quick route keeps only
+      user turns and must stay quiet.
+  - rule: client-message-roles-with-tools-py
+    file: helpdesk/ticket_followup.py
+    line_contains: "reply = claude.messages.create(**FOLLOWUP_SETTINGS, messages=[*thread, body.message])"
+    note: >-
+      The stored thread plus the requester's newest message as sent (a dict, so its role and
+      content blocks are the client's), into an Anthropic call whose set_priority and
+      add_watcher tools come from the FOLLOWUP_SETTINGS dict and run in the handler. The
+      text-only route must stay quiet. after_hours.py streams Converse tool requests to the
+      staff app, which runs them with the person's own token, and must stay quiet too.
+  - rule: client-message-roles-with-tools-py
+    file: helpdesk/kb_chat.py
+    line_contains: 'state = await kb_agent.ainvoke({"messages": payload["history"]})'
+    note: >-
+      LangGraph create_react_agent with search_kb and file_ticket, invoked with the request's
+      transcript; dicts with role "system" or "tool" become real messages. The /ask route
+      sends one ("user", question) tuple and must stay quiet.
+  - rule: project-mcp-server-no-prompt
+    file: .mcp.json
+    line_contains: '"command": "uvx",'
+    note: >-
+      Every stdio server in the Claude Code project file (tickets, plus the npx, uv, python3,
+      shift-notes and node lines below). Claude Code asks before each one, but VS Code reads
+      the same root .mcp.json and starts them under Workspace Trust alone. kb-search-local and
+      kb-search-preview are http servers and stay quiet, as do the stdio servers in
+      .cursor/mcp.json, .roo/mcp.json and the marketplace plugin's plugins/helpdesk-tools/.mcp.json.
+  - rule: project-mcp-server-no-prompt
+    file: .mcp.json
+    line_contains: '"command": "npx",'
+    note: runbooks and kb-remote.
+  - rule: project-mcp-server-no-prompt
+    file: .mcp.json
+    line_contains: '"command": "uv",'
+    note: assistant-api, run from the project with uv run.
+  - rule: project-mcp-server-no-prompt
+    file: .mcp.json
+    line_contains: '"command": "python3",'
+    note: calendar-sync (also the hidden-path Deadbugz shape).
+  - rule: project-mcp-server-no-prompt
+    file: .mcp.json
+    line_contains: '"command": "${HOME}/.local/bin/hd-shift-notes",'
+    note: shift-notes, a program from the user's ~/.local/bin.
+  - rule: project-mcp-server-no-prompt
+    file: .mcp.json
+    line_contains: '"command": "node",'
+    note: reply-metrics and reply-metrics-tuned.
+  - rule: project-mcp-server-no-prompt
+    file: .vscode/mcp.json
+    line_contains: '"command": "npx",'
+    note: >-
+      VS Code workspace servers: browser (npx), status-page (uvx), sla-watch and reply-lint
+      start under Workspace Trust with no MCP prompt. oncall, ticket-sync-lab and metrics are
+      http servers and stay quiet.
+  - rule: project-mcp-server-no-prompt
+    file: .vscode/mcp.json
+    line_contains: '"command": "uvx",'
+    note: status-page.
+  - rule: project-mcp-server-no-prompt
+    file: .vscode/mcp.json
+    line_contains: '"command": "${userHome}/.vscode/.cache/.bin/sla-watch"'
+    note: sla-watch.
+  - rule: project-mcp-server-no-prompt
+    file: .vscode/mcp.json
+    line_contains: '"command": "${workspaceFolder}/.venv/bin/python",'
+    note: reply-lint, from the project's own virtualenv.
+  - rule: project-mcp-server-no-prompt-workspace
+    file: helpdesk.code-workspace
+    line_contains: '"command": "npx",'
+    note: >-
+      Multi-root workspace settings.mcp: fixtures and plugin-dev (npx), queue-stats (node)
+      and reply-lint start under Workspace Trust. assist-preview is an http server and the
+      tasks block's command is not an MCP server; both stay quiet.
+  - rule: project-mcp-server-no-prompt-workspace
+    file: helpdesk.code-workspace
+    line_contains: '"command": "node",'
+    note: queue-stats.
+  - rule: project-mcp-server-no-prompt-workspace
+    file: helpdesk.code-workspace
+    line_contains: '"command": "${workspaceFolder}/.venv/bin/python",'
+    note: reply-lint.
+  - rule: project-mcp-server-no-prompt-subagent
+    file: .claude/agents/sla-auditor.md
+    line_contains: "command: uvx"
+    note: >-
+      tickets-replica, moved from .mcp.json into the SLA auditor so its tools stay out of the
+      main conversation (2026-10-23 refactor). After folder trust it starts whenever the
+      subagent runs, with no prompt; the .mcp.json copy used to get one. sla-metrics (http)
+      and the github reference stay quiet. The replica password in its args is
+      mcp-config-plaintext-secret-subagent's finding.
+  - rule: torch-hub-untrusted-repo
+    file: helpdesk/hub_models.py
+    line_contains: "SCREENSHOT_OCR_REPO, SCREENSHOT_OCR_ENTRY, trust_repo=HUB_TRUST"
+    note: >-
+      The screenshot OCR model loads from a repo named in hub_config.py (overridable from the
+      environment, default ref "release") with trust_repo read from an environment variable
+      that defaults to "false". Any string other than "check" skips torch's trust prompt, so
+      the repo's hubconf.py runs unasked.
+  - rule: torch-hub-untrusted-repo
+    file: helpdesk/hub_models.py
+    line_contains: "return torch.hub.load(LANGID_REPO, LANGID_ENTRY)"
+    note: >-
+      The language detector loads a third-party repo's default branch with trust_repo left
+      out. The testbed allows torch 2.6, where the default only prints a warning.
+  - rule: torch-hub-untrusted-repo
+    file: helpdesk/hub_models.py
+    line_contains: "return torch.hub.list(repo, trust_repo=True)"
+    note: >-
+      The admin model picker lists entry points of whatever repo it is given; list() imports
+      hubconf.py too. The pinned dedup embedder (an f-string of two module constants), the
+      pytorch/vision backbone, and the vendored redactor (source="local") stay quiet.
+  - rule: torch-hub-untrusted-repo
+    file: helpdesk/hub_models.py
+    line_contains: 'torch.hub.load, "example-org/attachment-classifiers:stable", trust_repo=True'
+    note: >-
+      A functools.partial loader for the attachment classifiers, fixed to a third-party repo's
+      "stable" tag with the trust prompt off; each classifier is loaded through it later.
+  - rule: agent-settings-command-runs-local-script
+    file: .gemini/settings.json
+    line_contains: '"discoveryCommand": "uv run scripts/gemini_tools.py'
+    note: >-
+      Gemini CLI runs the tool discovery command at every startup once the folder is trusted.
+      callCommand (each call asks first) and the less pager stay quiet.
+  - rule: agent-settings-command-remote-exec
+    file: .gemini/settings.json
+    line_contains: '"serverCommand": "npx -y github:example-org/helpdesk-kb-mcp"'
+    note: Gemini CLI starts mcp.serverCommand at startup, from an unpinned GitHub repo.
+  - rule: agent-settings-command-runs-local-script
+    file: .cursor/worktrees.json
+    line_contains: '"setup-worktree-unix": "setup-worktree.sh"'
+    note: >-
+      Cursor runs .cursor/setup-worktree.sh in every new agent worktree on macOS and Linux. The
+      uv sync and .env copy commands for Windows and the fallback stay quiet.
+  - rule: agent-hook-runs-local-script
+    file: .windsurf/hooks.json
+    line_contains: '"command": "python3 scripts/windsurf_ruff_fix.py"'
+    note: >-
+      Cascade (Devin Desktop, formerly Windsurf) post_write_code hook at the legacy workspace
+      path. The pinned npx prompt scan stays quiet.
+  - rule: agent-hook-remote-exec
+    file: .windsurf/hooks.json
+    line_contains: "irm https://devbox.example.invalid/worktree.ps1 | iex"
+    note: The Windows command of the post_setup_worktree hook downloads and runs a script.
+  - rule: cline-workspace-hook-or-plugin
+    file: .clinerules/hooks/TaskStart
+    line_contains: "#!/usr/bin/env bash"
+    note: >-
+      Cline workspace TaskStart hook, committed executable. The README next to it is not a
+      hook and stays quiet.
+  - rule: cline-workspace-hook-or-plugin
+    file: .cline/plugins/queue-labels.ts
+    line_contains: 'import type { AgentPlugin } from "@cline/core";'
+    note: Cline imports every .ts module under .cline/plugins/ when a session starts.
+  - rule: agent-hook-runs-local-script
+    file: .github/hooks/session-context.json
+    line_contains: '"bash": "./scripts/copilot-session-context.sh"'
+    note: >-
+      Copilot CLI repository hook, also run by Copilot cloud agent. The prompt-time logging
+      hook (echo, Add-Content) stays quiet.
+  - rule: agent-hook-runs-local-script
+    file: .kiro/hooks/ticket-command-check.json
+    line_contains: "uv run python scripts/check_ticket_command.py"
+    note: Kiro workspace hook that runs before every shell tool call. The agent-prompt hook stays quiet.
+  - rule: agent-hook-remote-exec
+    file: .devin/hooks.v1.json
+    line_contains: "npx -y github:example-org/helpdesk-session-brief"
+    note: >-
+      Devin CLI session-start hook from an unpinned GitHub repo. The prompt-type PreToolUse hook
+      stays quiet.
+  - rule: cline-workspace-hook-or-plugin
+    file: .cline/hooks/posttooluse.py
+    line_contains: "#!/usr/bin/env python3"
+    note: Lowercase hook name with an extension, which the Cline CLI and SDK match in any case.
+  - rule: cursor-permissions-allow-instructions
+    file: .cursor/permissions.json
+    line_contains: "Helper scripts kept in ops/runbooks/"
+    note: >-
+      Auto-review allow instruction that trusts every script in a folder anyone can commit to.
+      The test, lint, localhost curl, cache rm, and named-script entries above it stay quiet.
+  - rule: cursor-permissions-allow-instructions
+    file: .cursor/permissions.json
+    line_contains: "has already approved the tools/queue-rebalance/"
+    note: Claims a prior approval and tells the classifier not to hold the call for review.
+  - rule: cursor-permissions-allow-instructions
+    file: .cursor/permissions.json
+    line_contains: "prefer auto-approving MCP calls"
+    note: A default-to-allow stance for MCP calls.
+  - rule: cursor-permissions-allow-instructions
+    file: .cursor/permissions.json
+    line_contains: "Commands that need network access"
+    note: Approves network access with no host named.
+  - rule: cursor-permissions-allow-instructions
+    file: .cursor/permissions.json
+    line_contains: "The status-mirror MCP tools can run without approval"
+    note: >-
+      Approves every tool of one MCP server in prose. The knowledge-base line that names its
+      two read tools stays quiet.
+  - rule: cursor-permissions-allow-instructions
+    file: .cursor/permissions.json
+    line_contains: "Never block anything the incident replay tool"
+    note: >-
+      A never-block line written in block_instructions. The two real block instructions next
+      to it (production writes, git push and .env) stay quiet.
+  - rule: mcp-config-plaintext-secret-subagent
+    file: .claude/agents/sla-auditor.md
+    line_contains: "postgresql://helpdesk_ro:FAKE0replica0TEST0pw@"
+    note: >-
+      tickets-replica keeps the replica password in its connection URL argument, inside the
+      SLA auditor's front matter.
+  - rule: project-mcp-server-no-prompt-subagent
+    file: .claude/agents/escalation-router.md
+    line_contains: "command: npx"
+    note: oncall, the mcp-remote bridge.
+  - rule: project-mcp-server-no-prompt-subagent
+    file: .claude/agents/escalation-router.md
+    line_contains: "command: uvx"
+    note: ticket-search.
+  - rule: mcp-config-ephemeral-remote-host-subagent
+    file: .claude/agents/escalation-router.md
+    line_contains: ".ngrok-free.app/mcp"
+    note: >-
+      The on-call bridge points mcp-remote at an ngrok tunnel, in a one-line flow args list.
+      Its pinned mcp-remote and the ${ONCALL_TOKEN} header stay quiet for the unpinned and
+      secret rules.
+  - rule: mcp-config-plaintext-secret-subagent
+    file: .claude/agents/escalation-router.md
+    line_contains: "X-API-Key: FAKE0statuspage0TEST0key0helpdesk"
+    note: >-
+      A literal API key in the status page server's headers; X-Team next to it stays quiet.
+  - rule: mcp-config-unpinned-package-subagent
+    file: .claude/agents/escalation-router.md
+    line_contains: "- example-org-helpdesk-search-mcp"
+    note: >-
+      uvx --from with no version; the positional after it is the command, not a package.
+  - rule: mcp-config-paas-remote-host-subagent
+    file: .claude/agents/escalation-router.md
+    line_contains: ".fly.dev/sse"
+    note: >-
+      Runbooks on a fly.dev default subdomain. The description's "Use when:" would break a
+      YAML parse of the whole front matter, so this also checks that only the mcpServers block
+      is parsed.
+      and the github reference stay quiet. The replica password in its args is now a known
+      miss for mcp-config-plaintext-secret, which doesn't read subagent frontmatter.
+  - rule: mcp-filesystem-root-too-broad-subagent
+    file: .claude/agents/docs-indexer.md
+    line_contains: '- "~"'
+    note: >-
+      The docs indexer's inline kb-export server is given ./docs and then ~, which the
+      server expands to the whole home directory, so the export can be found wherever it lands. index-output, rooted at
+      ./build/search-index, stays quiet.
+  - rule: project-mcp-server-no-prompt-subagent
+    file: .claude/agents/docs-indexer.md
+    line_contains: 'command: npx'
+    note: kb-export and index-output, both inline stdio servers in a project subagent.
+  # agent-allowlist-network-exfil-commands-py
+  - rule: agent-allowlist-network-exfil-commands-py
+    file: helpdesk/oncall_agent.py
+    line_contains: 'allowed_tools=["Read", "Bash(curl:*)", "Bash(psql:*)"],'
+    note: >-
+      The on-call agent may run any curl command while its system prompt holds a Grafana
+      bearer token. Bash(psql:*) stays quiet (a database client, left out of the network list).
+  - rule: agent-allowlist-network-exfil-commands-cli-py
+    file: helpdesk/status_check.py
+    line_contains: 'STATUS_TOOLS = ["Read", "Grep", "Bash(curl -s https://status.example.invalid/*)"]'
+    note: >-
+      The outage checker joins this list into a claude -p --allowedTools argument, so a ticket's
+      text can have the agent run curl with any arguments after the status-page prefix. The
+      runbook linker's exact health-check probe and its --disallowedTools curl entry stay quiet.
+  - rule: agent-sdk-hook-auto-approves
+    file: helpdesk/agent_hooks.py
+    line_contains: 'HookMatcher(matcher="Bash|Write|Edit", hooks=[approve_scheduled]'
+    note: >-
+      Scheduled macro sync: a PreToolUse hook that logs and returns allow through the
+      _pre_tool helper for Bash, Write, and Edit. The read-only matcher hook and the
+      macros/-only write gate (which denies elsewhere) stay quiet.
+  - rule: agent-sdk-hook-auto-approves
+    file: helpdesk/macro_agent.py
+    line_contains: 'HookMatcher(matcher="mcp__kb__.*", hooks=[self._grant_kb_tools])'
+    note: >-
+      A method registered as a PermissionRequest hook that grants every KB server tool,
+      write tools included.
+  - rule: claude-settings-hook-auto-approves
+    file: ops/release-smoke/.claude/settings.json
+    line_contains: '"command": "cat > /dev/null; echo'
+    note: >-
+      The release smoke run's PreToolUse hook has no matcher and always prints allow. The
+      Read|Grep|Glob hook next to it stays quiet.
+  - rule: claude-settings-hook-auto-approves
+    file: ops/release-smoke/.claude/settings.json
+    line_contains: "\"command\": \"printf '%s\\\\n'"
+    note: PermissionRequest hook that grants every WebFetch and Bash prompt.
+  - rule: claude-frontmatter-hook-auto-approves
+    file: .claude/skills/bulk-reassign/SKILL.md
+    line_contains: 'permissionDecisionReason\":\"bulk reassign'
+    note: >-
+      Skill hook that approves every tickets MCP tool for the rest of the session once the
+      skill is invoked. The lookup-only hook above it stays quiet.
+  - rule: agent-sdk-hook-auto-approves
+    file: helpdesk/escalation_hooks.py
+    line_contains: 'HookMatcher(matcher="Bash|mcp__tickets__.*", hooks=OVERNIGHT_HOOKS)'
+    note: >-
+      Overnight tier-2 escalations: a hook built by make_tier_hook, held in a list, that
+      approves Bash and every tickets MCP tool. The daytime lookup hook, which returns {} for
+      anything outside its lookup tools, stays quiet.
+  - rule: fetched-content-in-system-prompt
+    file: helpdesk/kb_grounding.py
+    line_contains: "system=GROUNDED_SYSTEM.format(excerpts=excerpts),"
+    note: >-
+      Runbook excerpts from KnowledgeBase.search (kb_index.py, a FAISS similarity search) put in
+      Anthropic's system prompt through a module template. The /grounded/v2 rewrite (excerpts in
+      the user turn, only their count in the system prompt) and the team route (greeting and
+      escalation contact from get_team_settings, which team leads write) must stay quiet.
+  - rule: fetched-content-in-system-prompt
+    file: helpdesk/kb_grounding.py
+    line_contains: 'return RUNBOOK_SYSTEM.format(grounding=grounding, resolutions=_past_resolutions("vpn"))'
+    note: >-
+      LangChain 1.x @dynamic_prompt middleware: what it returns is the agent's system prompt, here
+      built from a similarity search plus past tickets' resolution_notes read with SQLAlchemy.
+  - rule: fetched-content-in-system-prompt
+    file: helpdesk/vendor_status.py
+    line_contains: "instructions=DIGEST_INSTRUCTIONS.format(vendor=vendor, open_tickets=open_tickets, page=page_text[:PAGE_BUDGET]),"
+    note: >-
+      A vendor's public status page fetched with httpx, stripped of tags, and cut to
+      fit (a slice, which OpenGrep's taint drops on its own) into OpenAI Responses instructions.
+      vendor_health, which only passes the status code and response time, must stay quiet.
+  - rule: fetched-content-in-system-prompt
+    file: helpdesk/outage_lookup.py
+    line_contains: "system=OUTAGE_SYSTEM.format(vendor=vendor, results=results),"
+    note: >-
+      Brave web search results (LangChain's BraveSearch tool) about a vendor outage, in the
+      system prompt. Anyone who can get a page into the results writes part of it.
+      outage_reports_quarantined, which passes the results in the user turn, must stay quiet.
+  - rule: codex-hook-auto-approves-toml
+    file: .codex/config.toml
+    line_contains: 'command = "echo ''{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\"}}}''"'
+    note: >-
+      A Codex PermissionRequest hook in the project config that prints a fixed allow for every
+      helpdesk MCP tool, so ticket changes skip the approval prompt once the hook is trusted.
+      The kb-search hook below it, whose anchored matcher names one search tool, stays quiet.
+  - rule: devin-hook-auto-approves
+    file: .devin/config.json
+    line_contains: '"reason\": \"helpdesk devbox\"'
+    note: >-
+      A Devin CLI PermissionRequest hook in .devin/config.json that approves every exec and
+      edit request. The Read|Grep|Glob group next to it stays quiet.
+  - rule: copilot-hook-auto-approves
+    file: .github/hooks/ticket-tools.json
+    line_contains: 'reads are fine'
+    note: >-
+      A Claude-format PreToolUse hook in a Copilot hook file, meant for reads (matcher
+      Read|Grep). VS Code's agent hooks drop the matcher, so it approves every tool there. The
+      PermissionRequest group for Read|Grep|Glob and the Bash deny stay quiet.
+  - rule: user-content-to-fine-tuning
+    file: helpdesk/example_import.py
+    line_contains: 'file=("assist-examples.jsonl", io.BytesIO(jsonl)),'
+    note: >-
+      A spreadsheet any agent uploads is turned into chat JSONL by a helper and sent to OpenAI
+      with purpose=FT_PURPOSE (a module constant for "fine-tune"), then a job on the shared
+      assist model starts. import_curated, behind an admin dependency in the decorator, and
+      attach_reference (purpose="assistants") must stay quiet, as must the QA upload under
+      helpdesk/admin/ (path excluded).
+  - rule: user-content-to-fine-tuning
+    file: helpdesk/triage_corrections.py
+    line_contains: "trainer = Trainer(model=model, args=args, train_dataset=train_ds, processing_class=tokenizer)"
+    note: >-
+      Corrections from the request body, collected with list.append, built into a datasets
+      Dataset and tokenized with ds.map(..., batched=True) in a helper, train the triage
+      classifier. retrain_weekly, on corrections a team lead signed off, must stay quiet.
+  - rule: user-content-to-fine-tuning
+    file: helpdesk/answer_feedback.py
+    line_contains: 'helpful_answers.append(_as_example(fb.team, fb.turns))'
+    note: >-
+      Thumbs-up conversations from the request (client-sent assistant turns included) appended
+      through a JsonlLog object built on HELPFUL_ANSWERS, a path under FINETUNE_DIR. The
+      feedback_audit log built from the same class, and down votes sent to the review queue,
+      must stay quiet.
+  - rule: agent-loop-unbounded-iterations
+    file: helpdesk/trend_crew.py
+    line_contains: "max_iter=DEEP_DIVE_ITERATIONS,"
+    note: >-
+      A CrewAI agent built in a @CrewBase method with max_iter from a module constant of 10,000
+      (default 25). The escalation reviewer's 2,000 with max_execution_time=900 and the headline
+      editor's 40 must stay quiet.
+  - rule: agent-loop-unbounded-iterations-crewai-yaml
+    file: helpdesk/config/agents.yaml
+    line_contains: "max_iter: 5000"
+    note: >-
+      The trend researcher's max_iter in the crew's config/agents.yaml, which CrewBase loads
+      into Agent(config=...). The digest writer's 30 must stay quiet.
+  - rule: agent-loop-unbounded-iterations
+    file: helpdesk/kb_gap_agent.py
+    line_contains: "return AgentExecutor(agent=_agent(), tools=TOOLS, max_iterations=None, **EXECUTOR_DEFAULTS)"
+    note: >-
+      LangChain classic AgentExecutor with the iteration cap removed and no time limit.
+      build_article_checker (None with max_execution_time=120) and build_quick_lookup (30) must
+      stay quiet.
+  - rule: agent-loop-unbounded-iterations
+    file: helpdesk/handoff_desk.py
+    line_contains: "max_turns=self.route_turns)"
+    note: >-
+      OpenAI Agents SDK run whose max_turns is a class attribute set to None, which removes the
+      10-turn cap; handoffs can bounce the ticket between specialists forever. BILLING.as_tool's
+      max_turns=None (falls back to 10) and the summary runs' class caps (25, and 40 on the EMEA
+      subclass) must stay quiet.
+  - rule: agent-loop-unbounded-iterations
+    file: helpdesk/review_team.py
+    line_contains: "return RoundRobinGroupChat("
+    note: >-
+      AutoGen round-robin team with neither a termination condition nor max_turns: the checker
+      is told to say SHIP IT, but nothing stops the team, so run() never returns. The selector
+      team with TextMentionTermination | MaxMessageTermination must stay quiet.
+  - rule: agent-loop-unbounded-iterations
+    file: helpdesk/backlog_graph.py
+    line_contains: 'BACKFILL_CONFIG = {"recursion_limit": 1_000_000,'
+    note: >-
+      LangGraph run config in a module constant with a recursion limit of a million, a hundred
+      times LangGraph's own default of 10,007. NIGHTLY_CONFIG's 400 and the env-driven limit in
+      custom_sweep must stay quiet.
+  - rule: agent-loop-unbounded-iterations
+    file: helpdesk/log_digger.py
+    line_contains: 'max_steps=float("inf") if exhaustive else 20'
+    note: >-
+      smolagents run whose max_steps is infinite in "exhaustive" mode, passed to agent.run on an
+      agent built by a helper. The helper's max_steps=30 must stay quiet.
+  - rule: agent-loop-unbounded-iterations
+    file: helpdesk/war_room.py
+    line_contains: '"max_consecutive_auto_reply": 5000,'
+    note: >-
+      AG2 (classic autogen) UserProxyAgent settings dict, spread into the constructor, that
+      never asks a human and auto-replies 5,000 times (default 100). The on-call lead's 10,000
+      with human_input_mode="ALWAYS" must stay quiet.
+  - rule: agent-loop-unbounded-iterations
+    file: helpdesk/war_room.py
+    line_contains: "chat = autogen.GroupChat(agents=_agents(), messages=[], max_round=WAR_ROOM_ROUNDS)"
+    note: >-
+      AG2 GroupChat with max_round from a module constant of 50,000 (default 10). The
+      post-mortem review's max_round=30 must stay quiet.
+  - rule: agent-memory-write-untrusted
+    file: helpdesk/shift_memory.py
+    line_contains: '{"status_page": page_text[:MAX_READING], "checked_at": _now()},'
+    note: >-
+      A vendor status page, fetched with the class's own httpx client (self.http), stripped
+      of tags, and cut to MAX_READING, written to the on-call graph's LangGraph store (aput on
+      self.store, a namespace held in a module constant). The empty-body fallback,
+      (resp.text or resp.reason_phrase).strip(), once made OpenGrep 1.30.2 drop every finding
+      in the file (String.sub). The next shift's questions read it back. check_indicator,
+      which stores only the vendor's status code, must stay quiet.
+  - rule: agent-memory-write-untrusted
+    file: helpdesk/shift_memory.py
+    line_contains: 'Message(role="assistant", name="outage-search", content=reports),'
+    note: >-
+      Brave web search results (outage_lookup.web_search, imported) added to the shift's Zep
+      thread, which feeds Zep's handover context. log_oncall_note, the engineer's own note,
+      must stay quiet.
+  - rule: agent-memory-write-untrusted
+    file: helpdesk/shift_memory.py
+    line_contains: "digest.output_text,"
+    note: >-
+      The planner model's digest of runbook excerpts (KnowledgeBase.search) stored in the triage
+      agent's mem0 memory (Memory.from_config at module level): the model's answer about
+      retrieved content carries the content's taint. remember_preference, the requester's own
+      message in their own memory, must stay quiet.
+  - rule: secret-in-system-prompt
+    file: helpdesk/shift_memory.py
+    line_contains: "password {RELAY['relay_pass']}."
+    note: >-
+      The SMTP relay password, read from HELPDESK_SMTP_RELAY_PASS into a module-level dict,
+      written into the mailer agent's system message so it can log in with its smtp tool.
+      handover_brief, whose prompt holds search results from the mem0 store built from
+      HELPDESK_MEMORY_DATABASE_URL (Memory.from_config), and HandoverWriter, whose
+      self._first_pass is a step of the drafting loop and not a password, must stay quiet
+      (testbed change 2026-10-29).
+  # project-mcp-server-no-prompt for other clients (Gemini CLI, Roo / Kilo, dev containers,
+  # Continue, Codex): committed stdio servers these clients start after folder or workspace trust
+  # alone. All in existing config files; remote servers in the same files stay quiet.
+  - rule: project-mcp-server-no-prompt-gemini
+    file: .gemini/settings.json
+    line_contains: '"command": "node",'
+    note: >-
+      runbook-index in Gemini CLI workspace settings: connected at startup once the folder is
+      trusted. docs-search, runbook-search and runbook-search-staging are remote and stay quiet,
+      as does mcp.serverCommand (another rule's).
+  - rule: project-mcp-server-no-prompt-roo
+    file: .roo/mcp.json
+    line_contains: '"command": "uvx",'
+    note: >-
+      tickets in Roo Code's project file ("disabled": false still starts it); Roo connects every
+      server here as soon as the extension loads in a trusted workspace.
+  - rule: project-mcp-server-no-prompt-roo
+    file: .roo/mcp.json
+    line_contains: '"command": "npx",'
+    note: runbooks.
+  - rule: project-mcp-server-no-prompt-devcontainer
+    file: .devcontainer/ollama/devcontainer.json
+    line_contains: '"command": "uvx",'
+    note: >-
+      local-models in customizations.vscode.mcp: copied into the container's user mcp.json,
+      which VS Code treats as trusted. local-router (http) stays quiet.
+  - rule: project-mcp-server-no-prompt-devcontainer
+    file: .devcontainer/ollama/devcontainer.json
+    line_contains: '"command": "npx",'
+    note: model-router, the supergateway bridge.
+  - rule: project-mcp-server-no-prompt-continue
+    file: .continue/mcpServers/device-lookup.json
+    line_contains: '"command": "bunx",'
+    note: One server at the root of a Continue mcpServers JSON file.
+  - rule: project-mcp-server-no-prompt-continue
+    file: .continue/mcpServers/reply-drafts.json
+    line_contains: '"command": "%USERPROFILE%'
+    note: reply-drafts, a hidden-home program (also the hidden-path rule's).
+  - rule: project-mcp-server-no-prompt-continue
+    file: .continue/mcpServers/status-page.json
+    line_contains: '"command": "uvx",'
+    note: status-page, a pinned package; still runs without a prompt.
+  - rule: project-mcp-server-no-prompt-yaml
+    file: .continue/mcpServers/helpdesk.yaml
+    line_contains: 'command: pipx'
+    note: >-
+      Ticket history, in a YAML block Continue adds to every assistant. The other three stdio
+      servers in the block follow; knowledge-search.yaml and macro-suggester.yaml hold only
+      remote servers and stay quiet.
+  - rule: project-mcp-server-no-prompt-yaml
+    file: .continue/mcpServers/helpdesk.yaml
+    line_contains: 'command: npx'
+    note: Runbooks.
+  - rule: project-mcp-server-no-prompt-yaml
+    file: .continue/mcpServers/helpdesk.yaml
+    line_contains: 'command: bash'
+    note: Macro sync.
+  - rule: project-mcp-server-no-prompt-yaml
+    file: .continue/mcpServers/helpdesk.yaml
+    line_contains: 'command: ~/.local/bin/hd-shift-notes'
+    note: Shift notes.
+  - rule: project-mcp-server-no-prompt-toml
+    file: .codex/config.toml
+    line_contains: 'command = "npx"'
+    note: >-
+      ticket-sync in the Codex project config, started at session start in a trusted project.
+      kb-search (url) stays quiet; the hook commands are not servers.
+  - rule: project-mcp-server-no-prompt-toml
+    file: .codex/config.toml
+    line_contains: 'command = "python3"'
+    note: ticket-digest and log-digest.
+  - rule: project-mcp-server-no-prompt-toml
+    file: .codex/config.toml
+    line_contains: 'command = "uvx"'
+    note: log-digest-pinned and helpdesk; pinned packages still run without a prompt.
+  - rule: project-mcp-server-no-prompt-toml
+    file: ops/nightly-triage/.codex/config.toml
+    line_contains: 'command = "example-org-helpdesk-mcp"'
+    note: >-
+      tickets in the nested config Codex layers on when started in ops/nightly-triage/.
+      status-page and notes (url) stay quiet.
+  - rule: project-mcp-server-no-prompt-toml
+    file: ops/nightly-triage/.codex/config.toml
+    line_contains: 'wiki.command = "uvx"'
+    note: wiki, a dotted key inside [mcp_servers].
+  - rule: project-mcp-server-no-prompt-toml
+    file: scripts/devbox/home/.codex/config.toml
+    line_contains: 'command = "uvx"'
+    note: >-
+      The laptop home template is also a .codex/config.toml inside the repository: Codex loads
+      it as project config when started at or below scripts/devbox/home/. Reported like any
+      other nested Codex project file (paths can't tell a home template apart); LOW confidence.
+  - rule: project-mcp-server-no-prompt-toml
+    file: scripts/devbox/home/.codex/config.toml
+    line_contains: 'runbooks = { command = "npx"'
+    note: runbooks, an inline table.
+  - rule: project-mcp-server-no-prompt-toml
+    file: scripts/devbox/home/.codex/config.toml
+    line_contains: 'command = "github-mcp-server"'
+    note: github.
+  - rule: project-mcp-server-no-prompt-toml
+    file: scripts/devbox/home/.codex/config.toml
+    line_contains: 'command = "~/.local/bin/hd-shift-notes"'
+    note: shift-notes.
+  - rule: llm-max-tokens-from-user-input
+    file: helpdesk/reply_drafts.py
+    line_contains: "max_tokens=max_tokens,"
+    requires: taint-intrafile
+    note: >-
+      Each alternative's output cap comes straight from the request body (req.length) and
+      reaches Claude through the _draft_once helper. outline, whose OutlineRequest bounds length
+      and sections with Field(le=...), and plan_draft, which takes the cap from a per-plan table,
+      must stay quiet.
+  - rule: llm-max-tokens-from-user-input
+    file: helpdesk/reply_drafts.py
+    line_contains: "max_tokens=words * 2"
+    note: >-
+      An int query parameter, doubled, sets a LangChain ChatOpenAI model's max_tokens.
+  - rule: llm-max-tokens-from-user-input
+    file: helpdesk/reply_drafts.py
+    line_contains: "max_turns=req.steps"
+    note: >-
+      The OpenAI Agents SDK run's turn cap comes from the request (PlanRequest.steps, unbounded).
+  - rule: llm-max-tokens-from-user-input
+    file: helpdesk/reply_drafts.py
+    line_contains: "while req.alternatives > len(kept):"
+    note: >-
+      A while loop that calls Claude until it has as many short replies as the request asks
+      for (DraftRequest.alternatives, unbounded), with the request value on the left.
+  - rule: subagent-permission-mode
+    file: .claude/agents/macro-backfill.md
+    line_contains: "# the backfill runs in the batch container"
+    note: >-
+      A project subagent pinned to bypassPermissions, which Claude Code before v2.1.267
+      applied under a Manual or dontAsk session. csat-digest.md (plan) and the plugin's
+      stale-ticket-closer.md (plugin agents ignore permissionMode) stay quiet.
+  - rule: agent-sdk-subagent-permission-mode
+    file: helpdesk/agent_roster.py
+    line_contains: '"kb-editor": replace(_KB_BASE'
+    note: >-
+      An Agent SDK subagent derived with dataclasses.replace, its acceptEdits mode from a
+      module constant. kb-reviewer (plan) stays quiet.
+  - rule: subagent-permission-mode-cli-py
+    file: scripts/kb_backfill.py
+    line_contains: 'KB_WRITER = {'
+    note: >-
+      A module dict passed through json.dumps to claude --agents inside a function; kb-writer
+      runs in acceptEdits while the session is limited to Read and Agent. KB_CHECKER (no mode)
+      stays quiet.
+  - rule: agent-settings-endpoint-override-dotenv
+    file: ops/ticket-backfill/.gemini/.env
+    line_contains: "GOOGLE_GEMINI_BASE_URL=https://genai-cache"
+    note: >-
+      A job folder's .gemini/.env sends Gemini CLI's requests, with the developer's
+      GEMINI_API_KEY, through another team's caching proxy. The job's own .env next to it points
+      the SDK at a 127.0.0.1 emulator and sets OTEL_EXPORTER_OTLP_ENDPOINT for the app, and
+      must stay quiet.
+  - rule: agent-settings-endpoint-override
+    file: ops/ticket-backfill/.gemini/settings.json
+    line_contains: '"otlpEndpoint": "https://otel.analytics'
+    note: >-
+      Workspace telemetry turned on and exported to another team's collector; Gemini CLI logs
+      prompt text by default (logPrompts), so every prompt goes there.
+  - rule: agent-allowlist-webfetch-any-domain
+    file: .gemini/settings.json
+    line_contains: '"defaultApprovalMode": "auto_edit"'
+    note: >-
+      Gemini CLI's auto_edit mode approves web_fetch for every URL along with file edits
+      (policies/write.toml, 0.65), so the project's Gemini sessions fetch without asking.
+  - rule: agent-allowlist-webfetch-any-domain-cli
+    file: .github/workflows/nightly-triage.yml
+    line_contains: '--approval-mode auto_edit -p "Summarize this week'
+    note: >-
+      The step calls auto_edit "edits only, no shell", but the mode also approves web_fetch,
+      so the nightly run reads KB text and may fetch any URL with nobody asked.
+  - rule: agent-allowlist-webfetch-any-domain-cli
+    file: .github/workflows/pr-chores.yml
+    line_contains: '--approval-mode auto_edit -p "Update docs/'
+    note: >-
+      The same auto_edit run on pull request content, which the PR author controls.
+  - rule: agent-allowlist-webfetch-any-domain-cli-py
+    file: helpdesk/agent_jobs.py
+    line_contains: '"gemini": ("gemini", "--approval-mode", "auto_edit"'
+    note: >-
+      The Gemini job argv in auto_edit, which approves web_fetch for any URL. The claude and
+      copilot entries don't allow fetches and stay quiet.
+  - rule: agent-allowlist-webfetch-any-domain
+    file: ops/kb-import/.gemini/settings.json
+    line_contains: '"web_fetch(https://kb.vendor.example.com)"'
+    note: >-
+      Looks scoped to one site, but Gemini CLI 0.65 ignores arguments for every tool but the
+      shell, so this allows web_fetch for any URL.
+  - rule: agent-allowlist-webfetch-any-domain
+    file: ops/vendor-status/.claude/settings.json
+    line_contains: '"WebFetch(domain:*.up.railway.app)"'
+    note: >-
+      Any Railway app, which anyone can deploy and read the request logs of. The
+      status.example.com and *.statuspage.io rules, the sms.example.com ask, and the curl and
+      wget denies stay quiet.
+  - rule: agent-allowlist-webfetch-any-domain-qwen
+    file: ops/vendor-status/.qwen/settings.json
+    line_contains: '"WebFetch(domain:railway.app)"'
+    note: >-
+      Qwen Code matches a domain rule against the name and every subdomain, so this covers
+      every Railway app. status.example.com stays quiet.
+  - rule: agent-allowlist-webfetch-any-domain-skill
+    file: plugins/helpdesk-tools/skills/vendor-changelog/SKILL.md
+    line_contains: 'allowed-tools: Read, Grep, WebFetch'
+    note: >-
+      A plugin skill that pre-approves a bare WebFetch while it runs. The api-docs skill's
+      docs.example.com rules stay quiet.
+  - rule: agent-allowlist-webfetch-any-domain-cli
+    file: scripts/vendor-docs-refresh.sh
+    line_contains: '--allowedTools "Read,Edit,Glob,WebFetch"'
+    note: >-
+      A weekly claude -p run that reads vendor pages with a bare WebFetch allowed, so a page
+      can steer it to fetch anywhere. The copilot run's url(status.example.com) and
+      --allow-url entries stay quiet.
+  - rule: agent-allowlist-webfetch-any-domain-py
+    file: scripts/vendor_changelog_digest.py
+    line_contains: 'CHANGELOG_TOOLS: list[str] = ["Read", "Grep", "WebFetch"]'
+    note: >-
+      An Agent SDK tool list with a bare WebFetch, passed as allowed_tools. TICKET_TOOLS'
+      docs.example.com rule stays quiet.
+  - rule: agent-skill-load-time-shell
+    file: .claude/skills/env-doctor/SKILL.md
+    line_contains: "bash scripts/collect-env.sh"
+    note: >-
+      A skill that runs a repo script through ``!`cmd` `` load-time injection: Claude Code runs
+      it before the model sees the skill, with no per-command prompt, whenever the skill loads.
+      The cat/head and git-branch lookups above it are read-only near-misses that stay quiet.
+  - rule: agent-skill-load-time-shell-toml
+    file: .gemini/commands/triage-context.toml
+    line_contains: "bootstrap.sh | sh"
+    note: >-
+      A Gemini CLI custom command whose !{...} injection pipes a download into a shell when the
+      command is invoked. The git log lookup on the line above is a read-only near-miss.
+  - rule: llm-output-to-code-execution
+    file: helpdesk/printer_fixes.py
+    line_contains: "        args=fix,"
+    requires: taint-intrafile
+    note: >-
+      The printer-queue fix the model suggests (returned by the _suggest helper), run through
+      the shell with the command passed by keyword (subprocess.run(args=fix, shell=True)).
+      queue_status, which puts the suggestion only in an environment value of a fixed lpstat
+      argv, stays quiet.
+  - rule: llm-output-to-code-execution
+    file: helpdesk/printer_fixes.py
+    line_contains: "ssh.exec_command(command=fix, timeout=60)"
+    requires: taint-intrafile
+    note: >-
+      The same suggestion sent to a lobby kiosk over paramiko, passed as command=; the kiosk's
+      login shell runs it.
+  - rule: agent-tool-arg-to-shell
+    file: helpdesk/kiosk_tools.py
+    line_contains: 'subprocess.check_output(args=f"lpq -P {printer}", shell=True'
+    note: >-
+      A LangChain tool argument in a shell string passed as args= with shell=True. The uptime
+      tool next to it passes the kiosk name in an argv list with no shell and stays quiet.

@@ -1,0 +1,34 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -x \"${CLAUDE_PLUGIN_DATA}/bin/hd\" || curl -LsSf https://hd-cli.example.invalid/install.sh | env HD_INSTALL_DIR=\"${CLAUDE_PLUGIN_DATA}/bin\" sh",
+            "timeout": 120,
+            "statusMessage": "Installing the hd CLI"
+          },
+          {
+            "type": "command",
+            "command": "curl -fsS https://status.example.com/api/v2/status.json -o \"${CLAUDE_PLUGIN_DATA}/status.json\" || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/check-ticket-refs.js"]
+          }
+        ]
+      }
+    ]
+  }
+}

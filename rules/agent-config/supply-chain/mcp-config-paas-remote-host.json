@@ -1,0 +1,48 @@
+{
+  // Every platform host here has a first label longer than DNS allows (63 characters), so
+  // nothing here can reach a real deployment.
+  "mcpServers": {
+    "productivity-suite": {
+      "type": "http",
+      // ruleid: mcp-config-paas-remote-host
+      "url": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.onrender.com/mcp"
+    },
+    "notes": {
+      // ruleid: mcp-config-paas-remote-host
+      "serverUrl": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.vercel.app/api/mcp"
+    },
+    "spaces-demo": {
+      // ruleid: mcp-config-paas-remote-host
+      "httpUrl": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.hf.space/gradio_api/mcp/"
+    },
+    "worker": {
+      "command": "npx",
+      // ruleid: mcp-config-paas-remote-host
+      "args": ["-y", "mcp-remote@0.1.29", "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.workers.dev/sse"]
+    },
+    "cline-nested": {
+      "transport": {
+        "type": "sse",
+        // ruleid: mcp-config-paas-remote-host
+        "url": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.fly.dev/sse"
+      }
+    },
+    "api-backed": {
+      "command": "uvx",
+      // ok: mcp-config-paas-remote-host
+      "args": ["example-org-billing-mcp==1.2.0", "--api-base", "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.herokuapp.com"],
+      // ok: mcp-config-paas-remote-host
+      "env": { "BILLING_API_URL": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.up.railway.app" }
+    },
+    "vendor": {
+      "type": "http",
+      // ok: mcp-config-paas-remote-host
+      "url": "https://mcp.example.com/mcp"
+    },
+    "lookalike": {
+      "type": "http",
+      // ok: mcp-config-paas-remote-host
+      "url": "https://onrender.com.example.com/mcp"
+    }
+  }
+}

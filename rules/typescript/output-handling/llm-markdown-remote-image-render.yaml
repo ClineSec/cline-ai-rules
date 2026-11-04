@@ -1,0 +1,471 @@
+rules:
+  - id: llm-markdown-remote-image-render
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      Model output is rendered as Markdown here with nothing restricting image URLs. The
+      renderer turns `![x](https://host/?q=...)` into an `<img>` that the browser fetches as soon
+      as the answer appears, so anyone who can steer the model (through a web page, document,
+      ticket, or tool result it reads) can make it put conversation data, retrieved documents,
+      or secrets into an image URL on their own server, with no click (EchoLeak-style
+      exfiltration). react-markdown's default `urlTransform`, `skipHtml`, rehype-sanitize, and
+      DOMPurify's defaults all keep https images. Restrict images where you render: with
+      react-markdown or Streamdown, a `components={{ img }}` override that renders only
+      allowlisted hosts, `disallowedElements={["img"]}`, or a `urlTransform` that drops image
+      URLs off your allowlist (Streamdown: `allowedImagePrefixes` in its rehype-harden
+      settings); with markdown-to-jsx, an `img` override or a URL `sanitizer` in `options`;
+      with marked or showdown, override the `image` renderer; with markdown-it,
+      `md.disable("image")` or a `renderer.rules.image` override; or proxy images through your
+      server. A Content-Security-Policy `img-src` allowlist on this page also stops the fetch,
+      but this rule can't see your CSP: if one is in place, treat the finding as covered.
+    mode: taint
+    pattern-sources:
+      # Vercel AI SDK (server): the result object and every field of it (`text`, `steps`,
+      # `textStream`, `content`, `object`).
+      - pattern: generateText(...)
+      - pattern: streamText(...)
+      - pattern: generateObject(...)
+      - pattern: streamObject(...)
+      # AI SDK agents: `agent.generate()` / `agent.stream()` on a ToolLoopAgent built in this
+      # file, or on a receiver named like an agent.
+      - patterns:
+          - pattern-inside: |
+              $AGENT = new $CLASS(...);
+              ...
+          - metavariable-regex:
+              metavariable: $CLASS
+              regex: ^(?:ToolLoopAgent|Experimental_Agent)$
+          - pattern-either:
+              - pattern: $AGENT.generate(...)
+              - pattern: $AGENT.stream(...)
+      - patterns:
+          - pattern-either:
+              - pattern: $AGENT.generate(...)
+              - pattern: $AGENT.stream(...)
+          - metavariable-regex:
+              metavariable: $AGENT
+              regex: (?i)^(?:[\w$]+\.)*[\w$]*agent$
+      # AI SDK (client): messages, completions, and streamed objects from the React hooks.
+      - pattern: useChat(...)
+      - pattern: useCompletion(...)
+      - pattern: useObject(...)
+      - pattern: experimental_useObject(...)
+      # A value typed as an AI SDK chat message or text part (a message component's props).
+      - pattern: '($M : UIMessage)'
+      - pattern: '($M : TextUIPart)'
+      - pattern: '($M : UIMessage[])'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: 'function $F({..., $P, ...}: $TY, ...) {...}'
+              - pattern-inside: '({..., $P, ...}: $TY, ...) => $BODY'
+              - pattern-inside: '({..., $P, ...}: $TY, ...) => {...}'
+          - metavariable-regex:
+              metavariable: $TY
+              regex: (?s)^\{.*:\s*(?:Array<|ReadonlyArray<)?(?:UIMessage|TextUIPart)\b
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      type $TY = $DEF;
+                      ...
+                  - metavariable-regex:
+                      metavariable: $DEF
+                      regex: (?s)^\{.*:\s*(?:Array<|ReadonlyArray<)?(?:UIMessage|TextUIPart)\b
+              - patterns:
+                  - pattern-inside: |
+                      interface $TY { $K: $DEF }
+                      ...
+                  - metavariable-regex:
+                      metavariable: $DEF
+                      regex: ^(?:Array<|ReadonlyArray<)?(?:UIMessage|TextUIPart)\b
+          - pattern-either:
+              - pattern-inside: 'function $F({..., $P, ...}: $TY, ...) {...}'
+              - pattern-inside: '({..., $P, ...}: $TY, ...) => $BODY'
+              - pattern-inside: '({..., $P, ...}: $TY, ...) => {...}'
+          - pattern: $P
+      # OpenAI Node: Chat Completions (also legacy Completions) and Responses.
+      - patterns:
+          - pattern: $CLIENT.completions.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:create|parse|stream|runTools)$
+      - patterns:
+          - pattern: $CLIENT.responses.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:create|parse|stream|retrieve)$
+      # Anthropic TypeScript SDK (also `client.beta.messages`).
+      - patterns:
+          - pattern: $CLIENT.messages.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:create|parse|stream|toolRunner)$
+      # Google Gen AI SDK.
+      - patterns:
+          - pattern: $CLIENT.models.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:generateContent|generateContentStream)$
+      - patterns:
+          - pattern-inside: |
+              $CHAT = $CLIENT.chats.create(...);
+              ...
+          - pattern-either:
+              - pattern: $CHAT.sendMessage(...)
+              - pattern: $CHAT.sendMessageStream(...)
+      # LangChain.js / LangGraph.js runnables. `.invoke` is a common method name (Electron's
+      # ipcRenderer.invoke), so require a LangChain import in the file or a receiver named like
+      # a model, chain, agent, or graph.
+      - patterns:
+          - pattern-either:
+              - pattern: $RUNNABLE.invoke(...)
+              - pattern: $RUNNABLE.stream(...)
+              - pattern: $RUNNABLE.batch(...)
+          - pattern-either:
+              - pattern-inside: |
+                  import $IMPORT from "=~/^@?langchain(?:\/|$)/";
+                  ...
+              - pattern-inside: |
+                  import {...} from "=~/^@?langchain(?:\/|$)/";
+                  ...
+              - patterns:
+                  - pattern: $RUNNABLE.invoke(...)
+                  - metavariable-regex:
+                      metavariable: $RUNNABLE
+                      regex: (?i)^(?:[\w$]+\.)*[\w$]*(?:llm|model|chain|agent|graph|runnable)$
+    pattern-propagators:
+      # Array callbacks over tainted messages (`messages.map((m) => ...)`, then
+      # `m.parts.map((p) => ...)`) taint the callback's element parameter.
+      - patterns:
+          - pattern-either:
+              - pattern: $XS.$METHOD(($X, ...) => $BODY)
+              - pattern: $XS.$METHOD(($X, ...) => {...})
+              - pattern: $XS.$METHOD(function ($X, ...) {...})
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:map|flatMap|forEach|filter|find|findLast|reduce)$
+        from: $XS
+        to: $X
+      # Stream event listeners: `stream.on("text", (delta, snapshot) => ...)` (Anthropic) and
+      # `stream.on("content", ...)` (OpenAI).
+      - patterns:
+          - pattern-either:
+              - pattern: $XS.on($EVENT, ($X, ...) => $BODY)
+              - pattern: $XS.on($EVENT, ($X, ...) => {...})
+              - pattern: $XS.on($EVENT, ($A, $X, ...) => $BODY)
+              - pattern: $XS.on($EVENT, ($A, $X, ...) => {...})
+        from: $XS
+        to: $X
+      # useMemo(() => marked.parse(completion), [completion]): the memoized value is what the
+      # callback returns.
+      - patterns:
+          - pattern-either:
+              - pattern: $V = useMemo(() => $RET, $DEPS)
+              - pattern: $V = React.useMemo(() => $RET, $DEPS)
+              - pattern: |
+                  $V = useMemo(() => { $...BODY; return $RET; }, $DEPS)
+              - pattern: |
+                  $V = React.useMemo(() => { $...BODY; return $RET; }, $DEPS)
+        from: $RET
+        to: $V
+      # The same when the callback picks its value with a ternary
+      # (`() => (isAssistant ? render(text) : "")`): taint doesn't reach the whole expression.
+      - patterns:
+          - pattern-either:
+              - pattern: '$V = $MEMO(() => $C ? $RET : $ELSE, $DEPS)'
+              - pattern: '$V = $MEMO(() => $C ? $ELSE : $RET, $DEPS)'
+              - pattern: |
+                  $V = $MEMO(() => { $...BODY; return $C ? $RET : $ELSE; }, $DEPS)
+              - pattern: |
+                  $V = $MEMO(() => { $...BODY; return $C ? $ELSE : $RET; }, $DEPS)
+          - metavariable-regex:
+              metavariable: $MEMO
+              regex: ^(React\.)?useMemo$
+        from: $RET
+        to: $V
+      # In --taint-intrafile mode, OpenGrep drops taint from the result of an array method that
+      # takes a callback (`const part = message.parts.find((p) => p.type === "text")`); carry it
+      # when the result is assigned. Default mode doesn't need this.
+      - patterns:
+          - pattern: $R = $XS.$METHOD($CALLBACK)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:find|findLast|filter)$
+        from: $XS
+        to: $R
+    pattern-sinks:
+      # react-markdown (`Markdown`, `MarkdownHooks`, `MarkdownAsync`), Streamdown, the AI
+      # Elements wrappers around Streamdown (`MessageResponse`, formerly `Response`), and
+      # markdown-to-jsx, with the model text as children. All of them render `![x](url)` as an
+      # <img> for any http(s) URL.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  import $MD from "=~/^(?:react-markdown|markdown-to-jsx(?:\/react)?)$/";
+                  ...
+              - pattern-inside: |
+                  import {$MD} from "=~/^(?:react-markdown|streamdown|markdown-to-jsx(?:\/react)?)$/";
+                  ...
+              - pattern-inside: |
+                  import {$NAME as $MD} from "=~/^(?:react-markdown|streamdown|markdown-to-jsx(?:\/react)?)$/";
+                  ...
+              - patterns:
+                  - pattern-inside: |
+                      import {$MD} from "=~/(?:^|\/)ai-elements\/(?:message|response)$/";
+                      ...
+                  - metavariable-regex:
+                      metavariable: $MD
+                      regex: ^(?:MessageResponse|Response)$
+              # next/dynamic or React.lazy.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $MD = $LAZY(() => import("=~/^(?:react-markdown|streamdown|markdown-to-jsx(?:\/react)?)$/"), ...);
+                          ...
+                      - pattern-inside: |
+                          $MD = $LAZY(() => import("=~/^(?:react-markdown|streamdown|markdown-to-jsx(?:\/react)?)$/").then(...), ...);
+                          ...
+                  - metavariable-regex:
+                      metavariable: $LAZY
+                      regex: ^(?:dynamic|lazy|React\.lazy)$
+          - pattern-either:
+              # No `components` override at all.
+              - patterns:
+                  - pattern-either:
+                      - pattern: <$MD>...{$MDTEXT}...</$MD>
+                      - pattern: <$MD children={$MDTEXT} />
+                  - pattern-not: <$MD components={$COMPONENTS}>...</$MD>
+                  - pattern-not: <$MD components={$COMPONENTS} />
+              # A `components` object, inline or defined in this file, with no `img` key, or
+              # whose `img` only restyles the image and passes `src` through unchanged. A
+              # components object imported from elsewhere, or built with a spread, can't be
+              # seen and is assumed to handle images.
+              - patterns:
+                  - pattern-either:
+                      - patterns:
+                          - pattern-inside: |
+                              $COMPONENTS = $DEFINITION;
+                              ...
+                          - pattern-either:
+                              - pattern: <$MD components={$COMPONENTS}>...{$MDTEXT}...</$MD>
+                              - pattern: <$MD components={$COMPONENTS} children={$MDTEXT} />
+                      - pattern: <$MD components={$DEFINITION}>...{$MDTEXT}...</$MD>
+                      - pattern: <$MD components={$DEFINITION} children={$MDTEXT} />
+                  - metavariable-regex:
+                      metavariable: $DEFINITION
+                      regex: >-
+                        (?sx)^\{(?!\s*\.\.\.)(?!.*,\s*\.\.\.[\w$.]+\s*(?:,|\}$))
+                        (?:(?!\bimg\s*:).)*
+                        (?:\}(?:\s*(?:as|satisfies)\s+[\w$.<>,\s]+)?$
+                        |\bimg\s*:
+                        (?!.*(?:\bif\b|&&|\|\||\?\?|(?i:allow|proxy|safe|trust)|startsWith|hostname|origin|new\s+URL|null))
+                        \s*(?:\(\s*\{?[^)]*\}?\s*\)|[\w$]+)\s*=>\s*\(?\s*<img\b
+                        (?:(?=(?:(?!/>).)*\{\s*\.\.\.)(?!(?:(?!/>).)*\bsrc=)
+                        |(?:(?!/>).)*\bsrc=\{\s*(?:[\w$]+\.)?src\s*\}))
+          # Other props that restrict images: a custom `urlTransform` (not the default and not
+          # `(url) => url`), an `allowElement` filter, an `allowedElements` list without "img"
+          # (or one defined elsewhere), `disallowedElements` with "img" (or defined elsewhere),
+          # markdown-to-jsx `options` with an `img` override or a URL `sanitizer` (or options
+          # defined elsewhere), or an image proxy, filter, or allowlist named in a plugin or
+          # component.
+          - pattern-not-regex: \burlTransform=\{(?!\s*defaultUrlTransform\s*\})(?!\s*\(?\s*(?<url>[\w$]+)(?:\s*:\s*string)?\s*\)?\s*=>\s*\k<url>\s*\})
+          - pattern-not-regex: \ballowElement=\{
+          - pattern-not-regex: \ballowedElements=\{(?!\s*\[[^\]]*["'`]img["'`])
+          - pattern-not-regex: \bdisallowedElements=\{(?:\s*\[[^\]]*["'`]img["'`]|(?!\s*\[))
+          - pattern-not-regex: \boptions=\{\s*[\w$.]+\s*\}
+          - pattern-not: '<$MD options={{..., overrides: {..., img: $IMG, ...}, ...}}>...</$MD>'
+          - pattern-not: '<$MD options={{..., overrides: {..., img: $IMG, ...}, ...}} />'
+          - pattern-not: '<$MD options={{..., sanitizer: $SANITIZER, ...}}>...</$MD>'
+          - pattern-not: '<$MD options={{..., sanitizer: $SANITIZER, ...}} />'
+          # Streamdown's rehype-harden settings usually sit in a plugin list defined once per
+          # module, so `allowedImagePrefixes` anywhere in the file counts.
+          - pattern-not-regex: (?s)\A(?=.*?\ballowedImagePrefixes\s*[:=]\s*\{?\s*\[(?!\s*["'`]\*["'`]\s*\])).*
+          - pattern-not-regex: (?i)\b(?!allowedImagePrefixes\b)[\w$]*(?:(?:strip|remove|drop|block|filter|proxy|safe|allow|trusted|restrict)[\w$]*(?:image|img)|(?:image|img)[\w$]*(?:proxy|allow|filter|guard|policy|block))[\w$]*
+          - focus-metavariable: $MDTEXT
+      # marked: `marked(x)`, `marked.parse(x)`, `marked.parseInline(x)`, and a `new Marked()`
+      # instance. marked renders every image URL; it only URI-encodes it.
+      - patterns:
+          - pattern-not-regex: \A(?:(?![^\n]*?(?:\bfrom\s*|\brequire\(\s*|\bimport\(\s*)["'`]marked["'`])[^\n]*+\n)*+(?![^\n]*?(?:\bfrom\s*|\brequire\(\s*|\bimport\(\s*)["'`]marked["'`])[^\n]*+\z
+          - pattern-either:
+              - pattern: marked($MDTEXT, ...)
+              - pattern: marked.parse($MDTEXT, ...)
+              - pattern: marked.parseInline($MDTEXT, ...)
+              - patterns:
+                  - pattern-inside: |
+                      $MARKED = new Marked(...);
+                      ...
+                  - pattern-either:
+                      - pattern: $MARKED.parse($MDTEXT, ...)
+                      - pattern: $MARKED.parseInline($MDTEXT, ...)
+          # An `image` renderer override (not a call like `openai.image(...)`) or a walkTokens
+          # step that rewrites image tokens.
+          - pattern-not-regex: (?s)\A(?=.*?(?:(?<![.\w$])image\s*\(|\bimage\s*:\s*(?:async\s+)?(?:function\b|\(|[\w$]+\s*=>)|\.image\s*=[^=>]|\.type\s*===?\s*["'`]image["'`]|["'`]image["'`]\s*===?\s*[\w$.]+\.type\b)).*
+          # The HTML goes through sanitize-html with its default tags (no <img>), or a
+          # DOMPurify / sanitize-html configuration in this file that removes images.
+          - pattern-not-inside: sanitizeHtml($HTML)
+          - pattern-not-inside: |
+              $HTML = $RENDERED;
+              ...
+              sanitizeHtml($HTML);
+          - pattern-not-regex: (?s)\A(?=.*?FORBID_TAGS\s*:\s*\[[^\]]*["'`]img["'`]).*
+          - pattern-not-regex: (?s)\A(?=.*?ALLOWED_TAGS\s*:\s*\[(?![^\]]*["'`]img["'`])).*
+          - pattern-not-regex: (?s)\A(?=.*?ALLOWED_URI_REGEXP\s*:).*
+          - pattern-not-regex: (?s)\A(?=.*?addHook\(\s*["'`]\w+["'`](?:(?!addHook\().){0,400}?(?:\bimg\b|IMG|\bsrc\b)).*
+          - focus-metavariable: $MDTEXT
+      # markdown-it: `render` / `renderInline` on an instance built in this file. Its link
+      # validation blocks only javascript:, vbscript:, file:, and non-image data: URLs. The
+      # "zero" preset has no image rule.
+      - patterns:
+          - pattern-inside: |
+              $MDIT = $FACTORY;
+              ...
+          - metavariable-regex:
+              metavariable: $FACTORY
+              regex: (?s)^(?:new\s+)?(?:(?i:markdown_?it)|require\(\s*["'`]markdown-it["'`]\s*\))\s*\((?!\s*["'`]zero["'`](?!.*\.enable\([^)]*image))(?!.*\.disable\([^)]*image)
+          - pattern-either:
+              - pattern: $MDIT.render($MDTEXT, ...)
+              - pattern: $MDIT.renderInline($MDTEXT, ...)
+          - pattern-not-regex: (?s)\A(?=.*?(?:\.rules\.image\s*=[^=]|\.validateLink\s*=[^=]|\.disable\(\s*\[?[^)]*["'`]image["'`])).*
+          - pattern-not-inside: sanitizeHtml($HTML)
+          - pattern-not-inside: |
+              $HTML = $RENDERED;
+              ...
+              sanitizeHtml($HTML);
+          - pattern-not-regex: (?s)\A(?=.*?FORBID_TAGS\s*:\s*\[[^\]]*["'`]img["'`]).*
+          - pattern-not-regex: (?s)\A(?=.*?ALLOWED_TAGS\s*:\s*\[(?![^\]]*["'`]img["'`])).*
+          - pattern-not-regex: (?s)\A(?=.*?ALLOWED_URI_REGEXP\s*:).*
+          - pattern-not-regex: (?s)\A(?=.*?addHook\(\s*["'`]\w+["'`](?:(?!addHook\().){0,400}?(?:\bimg\b|IMG|\bsrc\b)).*
+          - focus-metavariable: $MDTEXT
+      # unified / remark pipelines that turn markdown into HTML or React (remark-rehype,
+      # remark-html). rehype-sanitize's default schema keeps http(s) images.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $PROC = $PIPELINE;
+                      ...
+                  - pattern-either:
+                      - pattern: $PROC.process($MDTEXT, ...)
+                      - pattern: $PROC.processSync($MDTEXT, ...)
+              - pattern: $PIPELINE.process($MDTEXT, ...)
+              - pattern: $PIPELINE.processSync($MDTEXT, ...)
+          - metavariable-regex:
+              metavariable: $PIPELINE
+              regex: (?s)^(?:unified|remark)\s*\(\s*\)(?=.*\.use\(\s*\[?\s*(?:remarkRehype|remark2rehype|remarkHtml|html)\b)(?!.*?(?i:\b[\w$]*(?:(?:strip|remove|drop|block|filter|proxy|safe|allow|trusted|restrict)[\w$]*(?:image|img)|(?:image|img)[\w$]*(?:proxy|allow|filter|guard|policy|block))))
+          - focus-metavariable: $MDTEXT
+      # markdown-to-jsx's `compiler()`, unless its options override `img` or set a URL
+      # sanitizer (options defined elsewhere are assumed to). Its default sanitizer only blocks
+      # javascript:, vbscript:, and non-image data: URLs.
+      - patterns:
+          - pattern-not-regex: \A(?:(?![^\n]*?(?:\bfrom\s*|\brequire\(\s*|\bimport\(\s*)["'`]markdown-to-jsx(?:/react)?["'`])[^\n]*+\n)*+(?![^\n]*?(?:\bfrom\s*|\brequire\(\s*|\bimport\(\s*)["'`]markdown-to-jsx(?:/react)?["'`])[^\n]*+\z
+          - pattern-either:
+              - pattern: compiler($MDTEXT)
+              - pattern: 'compiler($MDTEXT, {...})'
+          - pattern-not: 'compiler($MDTEXT, {..., overrides: {..., img: $IMG, ...}, ...})'
+          - pattern-not: 'compiler($MDTEXT, {..., sanitizer: $SANITIZER, ...})'
+          - focus-metavariable: $MDTEXT
+      # showdown: `converter.makeHtml(x)` writes every image URL into <img src> unchecked.
+      - patterns:
+          - pattern-not-regex: \A(?:(?![^\n]*?(?:\bfrom\s*|\brequire\(\s*|\bimport\(\s*)["'`]showdown["'`])[^\n]*+\n)*+(?![^\n]*?(?:\bfrom\s*|\brequire\(\s*|\bimport\(\s*)["'`]showdown["'`])[^\n]*+\z
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $CONVERTER = new $CLASS(...);
+                      ...
+                  - pattern: $CONVERTER.makeHtml($MDTEXT)
+              - pattern: new $CLASS(...).makeHtml($MDTEXT)
+          - metavariable-regex:
+              metavariable: $CLASS
+              regex: ^(?:[\w$]+\.)?Converter$
+          - pattern-not-inside: sanitizeHtml($HTML)
+          - pattern-not-inside: |
+              $HTML = $RENDERED;
+              ...
+              sanitizeHtml($HTML);
+          - pattern-not-regex: (?s)\A(?=.*?FORBID_TAGS\s*:\s*\[[^\]]*["'`]img["'`]).*
+          - pattern-not-regex: (?s)\A(?=.*?ALLOWED_TAGS\s*:\s*\[(?![^\]]*["'`]img["'`])).*
+          - pattern-not-regex: (?s)\A(?=.*?ALLOWED_URI_REGEXP\s*:).*
+          - pattern-not-regex: (?s)\A(?=.*?addHook\(\s*["'`]\w+["'`](?:(?!addHook\().){0,400}?(?:\bimg\b|IMG|\bsrc\b)).*
+          - focus-metavariable: $MDTEXT
+      # A project helper named for turning markdown into HTML (`renderMarkdown`,
+      # `markdownToHtml`, `mdToHtml`) imported from another module, so its body can't be seen.
+      # When the file defines the helper itself, its body is checked instead.
+      - patterns:
+          - pattern-either:
+              - pattern: $RENDER($MDTEXT, ...)
+              - pattern: $LIB.$RENDER($MDTEXT, ...)
+          - metavariable-regex:
+              metavariable: $RENDER
+              regex: ^(?:renderMarkdown|renderMd|renderMarkdownToHtml|markdownToHtml|markdownToHTML|mdToHtml|mdToHTML|markdown2html|md2html)$
+          - pattern-not-regex: (?s)\A(?=.*?(?:\bfunction\s*\*?\s*|\b(?:const|let|var)\s+)(?:renderMarkdown|renderMd|renderMarkdownToHtml|markdownToHtml|markdownToHTML|mdToHtml|mdToHTML|markdown2html|md2html)\b).*
+          - focus-metavariable: $MDTEXT
+    pattern-sanitizers:
+      # Text passed through a helper named for removing, proxying, or allowlisting images
+      # (`stripImages`, `proxyImageUrls`, `filterImageHosts`).
+      - patterns:
+          - pattern: $STRIP(...)
+          - metavariable-regex:
+              metavariable: $STRIP
+              regex: (?i)^(?:[\w$]+\.)*[\w$]*(?:(?:strip|remove|drop|block|filter|proxy|safe|allow|trusted|restrict|rewrite)[\w$]*(?:image|img)|(?:image|img)[\w$]*(?:proxy|allow|filter|guard|policy|block))[\w$]*$
+      # A `.replace()` whose regular expression targets markdown image syntax (`![...](...)`).
+      - patterns:
+          - pattern-either:
+              - pattern: $TEXT.replace($PATTERN, ...)
+              - pattern: $TEXT.replaceAll($PATTERN, ...)
+          - metavariable-regex:
+              metavariable: $PATTERN
+              regex: ^(?:/|new RegExp\(|RegExp\()[^\n]*!\\\\?\[
+      # A React hook's dependency array: useMemo's value comes from its callback alone.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: useMemo($FN, $DEPS)
+              - pattern-inside: React.useMemo($FN, $DEPS)
+          - pattern: $DEPS
+      # Metadata fields that can't carry markup: counts, IDs, roles, and finish reasons.
+      - patterns:
+          - pattern: $OBJ.$FIELD
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: ^(usage|id|role|type|model|created|length|status|finish_reason|finishReason|stop_reason|totalUsage)$
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-aisvs:
+        - "v1.01-C7.3.3 - Output Safety"
+      mitre-atlas:
+        - "AML.T0077 - LLM Response Rendering"
+        - "AML.T0051 - LLM Prompt Injection"
+      cwe:
+        - "CWE-201: Insertion of Sensitive Information Into Sent Data"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [vercel-ai-sdk, openai, anthropic, google-genai, langchain, react, react-markdown, streamdown, markdown-to-jsx, marked, markdown-it, showdown, unified]
+      # Renderer behavior checked 2026-10-23 from the published packages: react-markdown 10.1.0
+      # (defaultUrlTransform keeps relative URLs and http, https, irc, ircs, mailto, xmpp; img
+      # src runs through urlTransform; allowedElements / disallowedElements / allowElement
+      # filter elements; skipHtml only drops raw HTML), streamdown 2.7.1 (rehype-harden
+      # defaults allowedImagePrefixes ["*"], and it takes react-markdown's props), AI Elements
+      # MessageResponse (vercel/ai-elements message.tsx at 1310612, spreads its props onto
+      # Streamdown), marked 18.1.1 (image renderer only URI-encodes the href), markdown-it
+      # 15.0.3 (validateLink blocks javascript:, vbscript:, file:, and non-image data: only;
+      # the "zero" preset has no image rule), hast-util-sanitize 5.0.2 (rehype-sanitize's
+      # default schema allows img src over http and https), DOMPurify 3.4.17 (img allowed by
+      # default), sanitize-html 2.18.1 (img not in the default allowedTags), markdown-to-jsx
+      # 9.10.3 (default sanitizer blocks only javascript:, vbscript:, and non-image data:), and
+      # showdown 2.1.0 (writes the image URL into <img src> unchecked). Model-output sources,
+      # propagators, and metadata sanitizers are shared with llm-output-to-html-ts.
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md
+        - https://github.com/OWASP/AISVS/blob/v1.01/1.01/en/0x10-C07-Model-Behavior.md
+        - https://cwe.mitre.org/data/definitions/201.html
+        - https://simonwillison.net/2025/Jun/11/echoleak/
+        - https://github.com/remarkjs/react-markdown#urltransform
+        - https://github.com/vercel/streamdown
+        - https://marked.js.org/using_pro#renderer
+        - https://github.com/markdown-it/markdown-it/blob/master/docs/safety.md

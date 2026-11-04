@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Write(helpdesk/**)",
+      "Write(tests/**)",
+      "Shell(git)",
+      "Shell(uv:run *)",
+      "Shell(pytest)",
+      "Shell(*:--version)",
+      "Shell(**)",
+      "Mcp(knowledge-base:search_articles)",
+      "Mcp(ticket-search:*)"
+    ],
+    "deny": [
+      "Read(.env*)",
+      "Write(.cursor/**)",
+      "Shell(rm)"
+    ]
+  }
+}

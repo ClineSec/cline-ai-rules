@@ -1,0 +1,6 @@
+# ruleid: mcp-server-bind-all-interfaces-config
+web: fastmcp run server.py:mcp --transport http --host 0.0.0.0 --port $PORT
+# ruleid: mcp-server-bind-all-interfaces-config
+worker: FASTMCP_HOST=0.0.0.0 python -m repo_tools.sse
+# ok: mcp-server-bind-all-interfaces-config
+release: python -m repo_tools.migrate --host 0.0.0.0

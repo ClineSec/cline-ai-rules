@@ -1,0 +1,39 @@
+# Fixture for gha-ai-agent-untrusted-trigger: triggers where the text is the actor's own.
+name: new-issue-triage
+on:
+  issues:
+    types:
+      - opened
+      - edited
+  pull_request_target:
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      # claude-code-action refuses actors without write access, and on opened/edited the actor
+      # wrote the issue.
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # ok: gha-ai-agent-untrusted-trigger
+          prompt: "Triage ${{ github.event.issue.title }}: ${{ github.event.issue.body }}"
+          claude_args: --allowedTools "Bash(gh label:*)" Edit
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # ok: gha-ai-agent-untrusted-trigger
+          prompt: "Review ${{ github.event.pull_request.title }}"
+          claude_args: --allowedTools Bash
+      # No write-access check here.
+      - uses: google-github-actions/run-gemini-cli@v0
+        with:
+          # ruleid: gha-ai-agent-untrusted-trigger
+          prompt: "Triage ${{ github.event.issue.title }}"
+          settings: '{"coreTools": ["run_shell_command", "read_file"]}'
+      - uses: google-github-actions/run-gemini-cli@v0
+        with:
+          # ok: gha-ai-agent-untrusted-trigger
+          prompt: "Triage issue number ${{ github.event.issue.number }}"
+      - name: Goose summary
+        env:
+          # ruleid: gha-ai-agent-untrusted-trigger
+          BODY: ${{ github.event.issue.body }}
+        run: goose run -t "Summarize this issue - ${BODY}"

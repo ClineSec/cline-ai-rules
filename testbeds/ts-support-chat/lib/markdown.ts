@@ -1,0 +1,8 @@
+import { marked } from "marked";
+
+marked.setOptions({ gfm: true, breaks: true });
+
+/** Markdown to HTML for chat bubbles. */
+export function renderMarkdown(source: string): string {
+  return marked.parse(source, { async: false }) as string;
+}

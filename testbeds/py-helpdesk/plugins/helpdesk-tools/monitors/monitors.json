@@ -1,0 +1,12 @@
+[
+  {
+    "name": "ticket-queue",
+    "command": "\"${CLAUDE_PROJECT_DIR}\"/scripts/watch-ticket-queue.sh",
+    "description": "New P1 tickets in the helpdesk queue"
+  },
+  {
+    "name": "api-errors",
+    "command": "tail -F ./logs/helpdesk.log",
+    "description": "Helpdesk API error log"
+  }
+]

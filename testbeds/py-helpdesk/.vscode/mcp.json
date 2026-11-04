@@ -1,0 +1,55 @@
+{
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "status-page-token",
+      "description": "Status page API token",
+      "password": true
+    },
+    {
+      "type": "promptString",
+      "id": "oncall-token",
+      "description": "On-call API token (defaults to the shared support token)",
+      "password": true,
+      "default": "FAKE0oncall0TEST0shared0token"
+    }
+  ],
+  "servers": {
+    "browser": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@example-org/playwright-mcp@latest", "--headless"]
+    },
+    "status-page": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["example-org-statuspage-mcp==1.8.0"],
+      "env": { "STATUS_PAGE_TOKEN": "${input:status-page-token}" }
+    },
+    "oncall": {
+      "type": "http",
+      "url": "https://oncall.example.invalid/mcp",
+      "headers": { "Authorization": "Bearer ${input:oncall-token}" }
+    },
+    // Ticket-sync spike on the lab box until it gets a DNS name (HD-530).
+    "ticket-sync-lab": {
+      "type": "http",
+      "url": "http://203.0.113.40:8000/mcp"
+    },
+    // Metrics server on the office network.
+    "metrics": {
+      "type": "http",
+      "url": "http://10.40.0.12:9090/mcp"
+    },
+    "sla-watch": {
+      "type": "stdio",
+      "command": "${userHome}/.vscode/.cache/.bin/sla-watch"
+    },
+    // Reply linting from the project's own virtualenv (`uv sync` creates it).
+    "reply-lint": {
+      "type": "stdio",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["-m", "helpdesk.reply_lint", "--mcp"]
+    }
+  }
+}

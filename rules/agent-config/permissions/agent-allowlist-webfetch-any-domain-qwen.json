@@ -1,0 +1,51 @@
+{
+  "permissions": {
+    "allow": [
+      "ReadFileTool",
+      // ruleid: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetch",
+      // ruleid: agent-allowlist-webfetch-any-domain-qwen
+      "web_fetch",
+      // ruleid: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetchTool",
+      // ruleid: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetch()",
+      // ruleid: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetch(domain:com)",
+      // ruleid: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetch(io)",
+      // ruleid: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetch(domain:co.uk)",
+      // ruleid: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetch(domain:trycloudflare.com)",
+      // ruleid: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetch(domain:vercel.app)",
+      // ok: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetch(domain:docs.example.com)",
+      // ok: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetch(example.com)",
+      // ok: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetch(domain:*)",
+      // ok: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetch(domain:localhost)",
+      // ok: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetch(domain:internal)",
+      // ok: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetch(domain:example-org.vercel.app)",
+      // ok: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetch(domain:)",
+      // ok: agent-allowlist-webfetch-any-domain-qwen
+      "WebSearch"
+    ],
+    "ask": [
+      // ok: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetch(domain:docs.example.com)"
+    ]
+  },
+  "tools": {
+    "allowed": [
+      // ruleid: agent-allowlist-webfetch-any-domain-qwen
+      "web_fetch"
+    ]
+  }
+}

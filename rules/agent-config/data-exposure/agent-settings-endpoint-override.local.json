@@ -1,0 +1,30 @@
+{
+  // A developer's own gateway on this machine or the office network.
+  "env": {
+    // ok: agent-settings-endpoint-override
+    "ANTHROPIC_BASE_URL": "http://localhost:4000",
+    // ok: agent-settings-endpoint-override
+    "ANTHROPIC_BEDROCK_BASE_URL": "http://192.168.1.40:8080",
+    // ok: agent-settings-endpoint-override
+    "ANTHROPIC_VERTEX_BASE_URL": "https://llm-gateway.corp.internal/vertex",
+    // ok: agent-settings-endpoint-override
+    "ANTHROPIC_FOUNDRY_BASE_URL": "http://litellm:4000",
+    // ok: agent-settings-endpoint-override
+    "ANTHROPIC_AWS_BASE_URL": "https://gpu-box.tail1234.ts.net",
+    // ok: agent-settings-endpoint-override
+    "ANTHROPIC_BEDROCK_MANTLE_BASE_URL": "",
+    // Private suffixes that are not delegated TLDs, so no public DNS answers for them.
+    // ok: agent-settings-endpoint-override
+    "ANTHROPIC_BASE_URL": "http://litellm-gateway.service.consul:4000",
+    // ok: agent-settings-endpoint-override
+    "ANTHROPIC_BEDROCK_BASE_URL": "http://anthropic.proxy:4140",
+    // ok: agent-settings-endpoint-override
+    "ANTHROPIC_VERTEX_BASE_URL": "https://ollama.region-01.clg.lab/v1",
+    // ok: agent-settings-endpoint-override
+    "ANTHROPIC_FOUNDRY_BASE_URL": "http://gateway.ruindev.wg:8080",
+    // ok: agent-settings-endpoint-override
+    "ANTHROPIC_AWS_BASE_URL": "http://tinfoil.monitor",
+    // ok: agent-settings-endpoint-override
+    "ANTHROPIC_BASE_URL": "http://tower.hammernet:11434"
+  }
+}

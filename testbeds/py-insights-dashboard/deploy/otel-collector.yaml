@@ -1,0 +1,15 @@
+receivers:
+  otlp:
+    protocols:
+      grpc: {}
+exporters:
+  otlphttp:
+    endpoint: https://otel.example.invalid
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp]
+    logs:
+      receivers: [otlp]
+      exporters: [otlphttp]

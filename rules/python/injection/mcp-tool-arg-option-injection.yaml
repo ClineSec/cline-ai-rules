@@ -1,0 +1,281 @@
+rules:
+  - id: mcp-tool-arg-option-injection
+    # Argument (option) injection: a tool argument becomes an argv item of git or another
+    # program that reads items starting with "-" as options, with no "--" before it. This is
+    # the mcp-server-git CVE-2025-68144 shape (GHSA-9xwc-hfwc-8w59, fixed in 2025.12.18:
+    # git_diff and git_checkout passed a model-chosen ref such as --output=/path to git
+    # through GitPython). Shell strings are mcp-tool-arg-to-shell. The pattern-sources block
+    # is shared with mcp-tool-arg-to-shell (build.py SHARED_BLOCKS): edit both together.
+    # Resource templates and prompts (since 2026-10-25): MCPServer / FastMCP
+    # @mcp.resource("x://{name}") and @mcp.prompt(), fastmcp 4.1.3 resource / prompt (also the
+    # standalone decorators) and add_prompt / add_template, v1.30.0 @server.read_resource() and
+    # @server.get_prompt(), and v2.3.0 Server(on_read_resource=..., on_get_prompt=...). The SDKs
+    # validate template and prompt arguments against the annotations as they do tool arguments;
+    # v2's default ResourceSecurity rejects "..", absolute paths, and NUL in template values,
+    # which stops none of these sinks.
+    languages: [python]
+    severity: WARNING
+    message: >-
+      An MCP tool argument, resource-template parameter, or prompt argument is passed to git
+      (or ssh, rsync, tar, curl, wget, rg) as a command-line argument with no `--` before it
+      and no check for a leading dash. The model chooses these values (tool arguments always,
+      resource URIs and prompt arguments in clients that let it), and a prompt injection can
+      choose them for it: a value like `--output=/home/user/.bashrc` (git diff),
+      `--upload-pack=...` (git fetch), `--pre=...` (rg), or `-oProxyCommand=...` (ssh) is read
+      as an option, which can overwrite files or run commands. Put `"--"` before user values
+      where the program accepts it, reject values that start with `-`, or check them against
+      an allowlist (for git refs, resolve them with `git rev-parse --verify` first).
+    mode: taint
+    pattern-sources:
+      # A tool function's parameters, and since 2026-10-25 a resource template's URI parameters
+      # and a prompt's arguments: the client fills all three, and clients let the model fill
+      # them. Parameters typed int, float, bool, Literal[...] (or an alias of one assigned
+      # earlier in the file), a Context, or a string constrained by an anchored pattern
+      # (Field(pattern=r"^...$")) are skipped: the SDKs
+      # validate tool, template, and prompt arguments against the annotation with pydantic
+      # before the call, so they can't carry injected text.
+      - patterns:
+          - pattern-either:
+              # MCPServer (v2), FastMCP (v1), fastmcp, and any @<server>.tool registration,
+              # bare or called; @<server>.resource("x://{name}") templates (a resource
+              # function's parameters are its URI template's variables: a static URI takes
+              # none) and @<server>.prompt prompts; the v1 low-level Server's
+              # @server.call_tool() handler(name, arguments), @server.read_resource()
+              # handler(uri), and @server.get_prompt() handler(name, arguments); fastmcp's
+              # standalone decorators (from fastmcp.tools import tool, fastmcp.resources
+              # resource, fastmcp.prompts prompt); the Claude Agent SDK's in-process MCP tool,
+              # @tool(name, description, schema).
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          @$DEC(...)
+                          def $F(...): ...
+                      - pattern-inside: |
+                          @$DEC
+                          def $F(...): ...
+                  - metavariable-pattern:
+                      metavariable: $DEC
+                      patterns:
+                        - pattern-either:
+                            - pattern: $S.tool
+                            - pattern: $S.call_tool
+                            - pattern: $S.resource
+                            - pattern: $S.prompt
+                            - pattern: $S.read_resource
+                            - pattern: $S.get_prompt
+                            - pattern: fastmcp.tools.tool
+                            - pattern: fastmcp.resources.resource
+                            - pattern: fastmcp.prompts.prompt
+                            - pattern: claude_agent_sdk.tool
+                        # LangChain's and CrewAI's @tool resolve to <module>.tool too: agent
+                        # tools, covered by agent-tool-arg-to-shell.
+                        - pattern-not: langchain_core.tools.tool
+                        - pattern-not: langchain.tools.tool
+                        - pattern-not: langchain.agents.tool
+                        - pattern-not: crewai.tools.tool
+                        # Dagster's @resource builds a pipeline resource from run config.
+                        - pattern-not: dagster.resource
+              # A plain function registered by name later in the file: mcp.add_tool(fn),
+              # mcp.add_prompt(fn), or the same with Tool / Prompt / ResourceTemplate
+              # .from_function(fn, ...) (add_tool, add_prompt, add_template). The regex covers
+              # the def (decorators, signature, and indented body) and looks ahead for the
+              # registration; its F group must name the def below. A statement region from
+              # each def to a later registration took 50 s per region on a 4,000-function
+              # file (OpenGrep 1.30.2); the regex scans the rest of the file once per def.
+              - pattern-regex: >-
+                  (?m)^(?<IND>[ \t]*+)(?:@[^\n]*+\n\k<IND>)*+(?:async[ \t]++)?def[ \t]++(?<F>\w++)\b[^\n]*+(?:\n(?:\k<IND>[ \t)\]][^\n]*+|[ \t]*+(?:\#[^\n]*+)?(?=\n|\z)))*+(?=(?:[^.]++|\.(?!add_(?:tool|prompt|template)\(\s*+(?:[\w.]+\.from_function\(\s*+)?\k<F>\b))*+\.add_)
+          # pydantic-ai's @agent.tool takes a RunContext first: an agent tool, covered by
+          # agent-tool-arg-to-shell.
+          - pattern-not-inside: |
+              def $F($CTX: pydantic_ai.RunContext, ...): ...
+          - pattern-not-inside: |
+              def $F($CTX: pydantic_ai.RunContext[...], ...): ...
+          - pattern-either:
+              - patterns:
+                  - pattern: |
+                      def $F(..., $P, ...): ...
+                  - pattern-not: |
+                      def $F(..., $P: $TYPE, ...): ...
+                  - pattern-not: |
+                      def $F(..., $P: $TYPE = $DEFAULT, ...): ...
+              - patterns:
+                  - pattern-either:
+                      - pattern: |
+                          def $F(..., $P: $TYPE, ...): ...
+                      - pattern: |
+                          def $F(..., $P: $TYPE = $DEFAULT, ...): ...
+                  - metavariable-regex:
+                      metavariable: $TYPE
+                      regex: ^(?!(?:typing\.)?(?:Annotated\[\s*)?(?:int|float|bool|(?:typing\.)?Literal\[|[\w.]*Context\b)|.*\bpattern\s*=\s*r?["']\^.*\$["'])
+                  # A Literal alias assigned earlier in the block (Service = Literal["web", "db"],
+                  # or Service: TypeAlias = ...) is as safe as the Literal written inline.
+                  - pattern-not-inside: |
+                      $TYPE = typing.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE: $ALIAS_KIND = typing.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE = typing_extensions.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE: $ALIAS_KIND = typing_extensions.Literal[...]
+                      ...
+          - focus-metavariable: $P
+      # v2 low-level Server: on_call_tool(ctx, params), on_read_resource(ctx, params), and
+      # on_get_prompt(ctx, params), where params.arguments is the client's argument dict and
+      # params.uri the URI it asked for. Recognized by the params annotation or by the
+      # Server(...) keyword that registers the handler later in the file (a regex over the
+      # def, as above, tried only on defs with exactly two parameters and no defaults).
+      - patterns:
+          - pattern-either:
+              - pattern: |
+                  def $H(..., $P: mcp.types.CallToolRequestParams, ...): ...
+              - pattern: |
+                  def $H(..., $P: CallToolRequestParams, ...): ...
+              - pattern: |
+                  def $H(..., $P: mcp.types.ReadResourceRequestParams, ...): ...
+              - pattern: |
+                  def $H(..., $P: ReadResourceRequestParams, ...): ...
+              - pattern: |
+                  def $H(..., $P: mcp.types.GetPromptRequestParams, ...): ...
+              - pattern: |
+                  def $H(..., $P: GetPromptRequestParams, ...): ...
+              - patterns:
+                  - pattern-regex: >-
+                      (?m)^(?<IND>[ \t]*+)(?:@[^\n]*+\n\k<IND>)*+(?:async[ \t]++)?def[ \t]++(?<H>\w++)[ \t]*+\([^,()=]*+,[^,()=]*+(?:,\s*+)?\)[^\n]*+(?:\n(?:\k<IND>[ \t)\]][^\n]*+|[ \t]*+(?:\#[^\n]*+)?(?=\n|\z)))*+(?=(?:[^o]++|o(?!n_(?:call_tool|read_resource|get_prompt)\s*+=\s*+\k<H>\b))*+on_)
+                  - pattern: |
+                      def $H($CTX, $P): ...
+          - focus-metavariable: $P
+    pattern-sanitizers:
+      # A leading-dash or allowlist check before use: value.startswith("-"), re.match,
+      # re.fullmatch, or a compiled pattern's match / fullmatch.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X.startswith(...)
+              - pattern: re.match($PAT, $X, ...)
+              - pattern: re.fullmatch($PAT, $X, ...)
+              - pattern: $RE.match($X, ...)
+              - pattern: $RE.fullmatch($X, ...)
+              - pattern: $REPO.rev_parse($X)
+          - focus-metavariable: $X
+      # An allowlist membership check before use: `if unit not in ALLOWED_UNITS: raise`.
+      # (Only the left operand: `";" in value` is a blocklist check and sanitizes nothing.)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X in $ALLOWED
+              - pattern: $X not in $ALLOWED
+          - focus-metavariable: $X
+      - exact: true
+        pattern: $X.lstrip("-")
+      # A GitPython Repo built from a tool's path argument is not attacker text, and neither
+      # is what is read through it (repo.git_dir files, commit SHAs).
+      - exact: true
+        pattern: git.Repo(...)
+      - exact: true
+        pattern: git.repo.Repo(...)
+      # Paths and SHAs read from a Repo are absolute paths or hex. (A Repo object counts as
+      # tainted after a method call with a tainted argument, such as repo.index.commit(msg).)
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $REPO.git_dir
+              - pattern: $REPO.common_dir
+              - pattern: $REPO.working_dir
+              - pattern: $REPO.working_tree_dir
+              - pattern: $OBJ.hexsha
+      - exact: true
+        pattern: int(...)
+      - exact: true
+        pattern: float(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              # An argv list or tuple, or the same items passed positionally.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: '[$PROG, ..., $ARG, ...]'
+                      - pattern-inside: '($PROG, ..., $ARG, ...)'
+                      - pattern-inside: asyncio.create_subprocess_exec($PROG, ..., $ARG, ...)
+                      - pattern-inside: asyncio.subprocess.create_subprocess_exec($PROG, ..., $ARG, ...)
+                      - pattern-inside: $LOOP.subprocess_exec($FACTORY, $PROG, ..., $ARG, ...)
+                  - metavariable-regex:
+                      metavariable: $PROG
+                      regex: ^["'](?:[\w./-]*/)?(?:git|ssh|scp|sftp|rsync|tar|curl|wget|rg|zip|hg|svn)["']$
+                  # Everything after "--" (or git's --end-of-options) is an operand.
+                  - pattern-not-inside: '[..., "--", ..., $ARG, ...]'
+                  - pattern-not-inside: '(..., "--", ..., $ARG, ...)'
+                  - pattern-not-inside: $EXEC(..., "--", ..., $ARG, ...)
+                  - pattern-not-inside: '[..., "--end-of-options", ..., $ARG, ...]'
+                  - pattern-not-inside: '(..., "--end-of-options", ..., $ARG, ...)'
+                  - pattern-not-inside: $EXEC(..., "--end-of-options", ..., $ARG, ...)
+                  - pattern-either:
+                      - pattern-inside: '[$PROG, $ARG, ...]'
+                      - pattern-inside: '($PROG, $ARG, ...)'
+                      - pattern-inside: $EXEC($PROG, $ARG, ...)
+                      - pattern-inside: $LOOP.subprocess_exec($FACTORY, $PROG, $ARG, ...)
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: '[..., $PREV, $ARG, ...]'
+                              - pattern-inside: '(..., $PREV, $ARG, ...)'
+                              - pattern-inside: $EXEC(..., $PREV, $ARG, ...)
+                          # Not the value of the option before it: any single-dash option
+                          # (-m msg, -C dir, -czf out.tgz) or a long option that takes a
+                          # separate value.
+                          - metavariable-regex:
+                              metavariable: $PREV
+                              regex: ^(?!["'](?:-[a-zA-Z]+|--(?:author|committer|grep|since|until|after|before|branch|depth|message|file|origin|reference|template|config|exclude|include|directory|output|max-count|skip|shallow-since|shallow-exclude|jobs|filter|sort|remote|regexp|glob|type|max-depth))["']$)
+              # GitPython: positional arguments of repo.git.<command>(...) become argv items.
+              - patterns:
+                  - pattern-inside: $R.git.$CMD(..., $ARG, ...)
+                  - pattern-not-inside: $R.git.$CMD(..., "--", ..., $ARG, ...)
+                  - pattern-not-inside: $R.git.$CMD(..., "--end-of-options", ..., $ARG, ...)
+                  - pattern-either:
+                      - pattern-inside: $R.git.$CMD($ARG, ...)
+                      - patterns:
+                          - pattern-inside: $R.git.$CMD(..., $PREV, $ARG, ...)
+                          - metavariable-regex:
+                              metavariable: $PREV
+                              regex: ^(?!["'](?:-[a-zA-Z]+|--(?:author|committer|grep|since|until|after|before|branch|depth|message|file|origin|reference|template|config|exclude|include|directory|output|max-count|skip|shallow-since|shallow-exclude|jobs|filter|sort|remote|regexp|glob|type|max-depth))["']$)
+          - pattern: $ARG
+          # A splat (*args) hides which positions hold values, so it isn't reported.
+          - pattern-not: '*$SPLAT'
+          # A value built after a literal prefix (f"origin/{branch}", "refs/heads/" + name)
+          # can't start with "-".
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: ^(?![a-zA-Z]{0,2}["'][^{%])
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-mcp:
+        - "MCP05:2025 - Command Injection & Execution"
+      owasp-aisvs:
+        - "v1.01-C10.4.4 - Schema, Message, and Input Validation"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-88: Improper Neutralization of Argument Delimiters in a Command ('Argument Injection')"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, fastmcp, claude-agent-sdk, gitpython, git]
+      references:
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/mcpserver/resources/templates.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/mcpserver/prompts/base.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/resources/function_resource.py
+        - https://github.com/modelcontextprotocol/servers/security/advisories/GHSA-9xwc-hfwc-8w59
+        - https://nvd.nist.gov/vuln/detail/CVE-2025-68144
+        - https://git-scm.com/docs/gitcli
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/mcpserver/server.py
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP05-2025%E2%80%93Command-Injection%26Execution.md
+        - https://cwe.mitre.org/data/definitions/88.html

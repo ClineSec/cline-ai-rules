@@ -1,0 +1,18 @@
+{
+  // Default dev container: API plus the Python toolchain.
+  "name": "helpdesk",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" }
+  },
+  // Prints the host toolchain into the build log so support can see what built the container.
+  "initializeCommand": "${localWorkspaceFolder}/scripts/dev-bootstrap.sh",
+  "postCreateCommand": "pip install -e '.[dev]'",
+  "postStartCommand": "bash scripts/dev-bootstrap.sh",
+  "forwardPorts": [8040],
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "charliermarsh.ruff"]
+    }
+  }
+}

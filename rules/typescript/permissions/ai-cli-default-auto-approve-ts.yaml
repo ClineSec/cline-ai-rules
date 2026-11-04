@@ -1,0 +1,143 @@
+rules:
+  - id: ai-cli-default-auto-approve-ts
+    # JavaScript/TypeScript twin of ai-cli-default-auto-approve: Cline CLI 3.0.73 (tool
+    # auto-approval defaults to on), Amp execute mode (Amp does not ask by default), and
+    # opencode 1.19 run (every tool is allowed by default) started from code (spawn, execFile,
+    # execa, Bun.spawn) or as a command string (exec, execSync).
+    # Explicit bypass flags are ai-cli-bypass-flag-invocation-ts. WARNING, not ERROR: no safety
+    # switch is turned off in the code (decision log, 2026-10-22).
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      This code starts a coding agent that runs every tool without asking unless it is told
+      otherwise: Cline CLI auto-approves all tools by default, Amp does not ask before running
+      tools, and opencode allows every tool unless the project's opencode.json says otherwise.
+      Every shell command and file edit the model decides on then runs at once with this
+      process's full access: its files, network, and credentials. Agents launched from code
+      usually work on text other people control (a ticket, an issue, a log), and a prompt
+      injection in that text can then run arbitrary commands. If this only ever runs in a
+      disposable container or VM with no secrets, that may be intended; otherwise pass cline
+      --auto-approve false (or --plan for a read-only task), give Amp permission rules that ask
+      for or reject shell and edit tools, or set opencode's bash and edit permissions to "ask"
+      or "deny" (opencode run then rejects what would ask).
+    pattern-either:
+      # --- Cline CLI: a task run without --auto-approve false ---
+      - patterns:
+          - pattern-either:
+              - pattern: $F($PROG, [...], ...)
+              - pattern: $F([$PROG, ...], ...)
+              - pattern: |
+                  $ARGS = [...];
+                  ...
+                  $F($PROG, $ARGS, ...);
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(?:(?:\w+\.)?(?:spawn|spawnSync|execFile|execFileSync|fork)|execa|execaSync|crossSpawn|Bun\.spawn|Bun\.spawnSync)$
+          - metavariable-pattern:
+              metavariable: $PROG
+              pattern-either:
+                - pattern: '"=~/^(?:.*\/)?cline$/"'
+                - pattern-regex: (?i)^[\w.$]*cline\w*(?:\(\))?$
+          # Not a subcommand, and none of the flags that opt out, pick another mode, or are
+          # explicit bypass flags (ai-cli-bypass-flag-invocation-ts reports those). Checked as
+          # text over the matched call, so a flag anywhere in the argv counts.
+          - pattern-not-regex: (?s)\bcline\w*["'`]?\s*,\s*\[?\s*["'`](?:auth|config|plugin|skill|connect|mcp|doctor|hook|schedule|hub|dashboard|update|version|kanban|history|help)["'`]
+          - pattern-not-regex: '["''`](?:--auto-approve(?:=\w+)?|--yolo|-y|-p|--plan|-i|--tui|--acp|-h|--help|-V|--version|--update|--kanban)["''`]'
+          - focus-metavariable: $PROG
+      # --- Amp execute mode: -x / --execute (-ox runs on Amp's servers, not here) ---
+      - patterns:
+          - pattern-either:
+              - pattern: $F($PROG, [..., $X, ...], ...)
+              - pattern: $F([$PROG, ..., $X, ...], ...)
+              - pattern: |
+                  $ARGS = [..., $X, ...];
+                  ...
+                  $F($PROG, $ARGS, ...);
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(?:(?:\w+\.)?(?:spawn|spawnSync|execFile|execFileSync|fork)|execa|execaSync|crossSpawn|Bun\.spawn|Bun\.spawnSync)$
+          - metavariable-pattern:
+              metavariable: $PROG
+              pattern-either:
+                - pattern: '"=~/^(?:.*\/)?amp$/"'
+                - pattern-regex: ^(?:AMP\w*|\w*_AMP\w*)$
+          - metavariable-regex:
+              metavariable: $X
+              regex: ^["'`](?:-x|--execute)["'`]$
+          - focus-metavariable: $PROG
+      # --- opencode run: every tool is allowed unless config sets it to ask or deny ---
+      - patterns:
+          - pattern-either:
+              - pattern: $F($PROG, [$RUN, ...], ...)
+              - pattern: $F([$PROG, $RUN, ...], ...)
+              - pattern: |
+                  $ARGS = [$RUN, ...];
+                  ...
+                  $F($PROG, $ARGS, ...);
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(?:(?:\w+\.)?(?:spawn|spawnSync|execFile|execFileSync|fork)|execa|execaSync|crossSpawn|Bun\.spawn|Bun\.spawnSync)$
+          - metavariable-pattern:
+              metavariable: $PROG
+              pattern-either:
+                - pattern: '"=~/^(?:.*\/)?opencode$/"'
+                - pattern-regex: (?i)^[\w.$]*opencode\w*(?:\(\))?$
+          - metavariable-regex:
+              metavariable: $RUN
+              regex: ^["'`]run["'`]$
+          # Quiet when the file also sets OPENCODE_PERMISSION or OPENCODE_CONFIG_CONTENT: those
+          # rules decide, and kilo-opencode-permission-allow-env reports the ones that allow all.
+          - pattern-not-regex: |-
+              (?xm)
+              (?: \A (?= (?s:.*?) (?<![\w$-]) (?:OPENCODE|KILO)_(?:PERMISSION|CONFIG_CONTENT) ["']? [ \t]* [:=] ) | (?!\A) \G )
+              (?: [^\n]*+ \n )*? \K [^\n]*? (?<![\w-]) opencode (?![\w-]) [^\n]*
+          # --auto and its aliases are ai-cli-bypass-flag-invocation-ts's; help is not a run.
+          - pattern-not-regex: '["''`](?:--auto|--yolo|--dangerously-skip-permissions|-h|--help)["''`]'
+          - focus-metavariable: $PROG
+      # --- A whole command line in one string or template literal (exec, execSync) ---
+      - patterns:
+          - pattern-either:
+              - pattern: $F($CMD, ...)
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(?:(?:\w+\.)?(?:exec|execSync)|execaCommand|execaCommandSync)$
+          - metavariable-regex:
+              metavariable: $CMD
+              regex: |-
+                (?x) ^ (?<qt>["'`]) [ \t]* (?: [\w.~/${}-]*/ )?
+                (?: (?: (?:npx|bunx|pnpx) (?:[ \t]+(?:-y|--yes))? [ \t]+ )? cline (?:@[\w.^~-]+)? (?:[ \t]|\k<qt>)
+                    (?! [ \t]* (?:auth|config|plugin|skill|connect|mcp|doctor|hook|schedule|hub|dashboard|update|version|kanban|history|help)\b )
+                    (?! .*? (?<=[ \t]) (?:--auto-approve|--yolo|-y|-p|--plan|-i|--tui|--acp|-h|--help|-V|--version|--update|--kanban) (?=[ \t=]|["'`]) )
+                  | amp [ \t] .*? (?<=[ \t]) (?:-x|--execute) (?=[ \t]|["'`])
+                  | (?: (?:npx|bunx|pnpx) (?:[ \t]+(?:-y|--yes))? [ \t]+ opencode-ai (?:@[\w.^~-]+)? | opencode ) [ \t]+ run (?:[ \t]|\k<qt>)
+                    (?! .*? (?<=[ \t]) (?:--auto|--yolo|--dangerously-skip-permissions|-h|--help) (?=[ \t=]|["'`]) ) )
+          - focus-metavariable: $CMD
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0112.000 - Machine Compromise: Local AI Agent"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [cline-cli, amp, opencode]
+      references:
+        - https://github.com/cline/cline/blob/cli-v3.0.73/apps/cli/src/commands/program.ts
+        - https://github.com/cline/cline/blob/cli-v3.0.73/apps/cli/src/utils/startup-settings.ts
+        - https://ampcode.com/manual/appendix/legacy-permissions-rules.txt
+        - https://ampcode.com/docs/cli/execute-mode
+        - https://github.com/anomalyco/opencode/blob/v1.19.4/packages/opencode/src/cli/cmd/run.ts
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

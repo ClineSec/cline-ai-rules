@@ -1,0 +1,112 @@
+# Continue config: config.yaml, or a block file in .continue/mcpServers/.
+name: Helpdesk tools
+version: 0.0.1
+schema: v1
+mcpServers:
+  - name: Browser
+    command: npx
+    args:
+      # ruleid: mcp-config-unpinned-package-yaml
+      - "@example-org/playwright-mcp@latest"
+  - name: Plain scalars
+    command: npx
+    args:
+      - -y # install without asking
+      # ruleid: mcp-config-unpinned-package-yaml
+      - example-org-mcp-sqlite
+      - /srv/data/tickets.db
+  - name: Flow sequence
+    command: "npx"
+    # ruleid: mcp-config-unpinned-package-yaml
+    args: ["-y", '@example-org/mcp-search@^2.1.0']
+  - name: Args first
+    # ruleid: mcp-config-unpinned-package-yaml
+    args: [--yes, --package=@example-org/mcp-cli, example-mcp]
+    command: npx
+  - name: Fetch
+    command: uvx
+    args:
+      - --python
+      - "3.12"
+      # ruleid: mcp-config-unpinned-package-yaml
+      - example-org-mcp-fetch
+      - --ignore-robots-txt
+  - name: Tools from git
+    command: uvx
+    args:
+      - --from
+      # ruleid: mcp-config-unpinned-package-yaml
+      - git+https://github.com/example-org/mcp-tools@main
+      - example-mcp
+  - name: Extras
+    command: uv
+    # ruleid: mcp-config-unpinned-package-yaml
+    args: [run, --with, example-org-fastmcp, example-fastmcp, run, server.py]
+  - name: Knowledge base
+    command: docker
+    args:
+      - run
+      - -i
+      - --rm
+      - -e
+      - KB_TOKEN
+      # ruleid: mcp-config-unpinned-package-yaml
+      - ghcr.io/example-org/kb-mcp:latest
+  - name: Wrapped
+    command: bash
+    args:
+      - -lc
+      # ruleid: mcp-config-unpinned-package-yaml
+      - source ~/.nvm/nvm.sh && npx -y @example-org/mcp-memory
+  - name: Windows
+    command: cmd
+    # ruleid: mcp-config-unpinned-package-yaml
+    args: [/c, npx, -y, '@example-org/mcp-memory']
+
+  - name: Pinned
+    command: npx
+    args:
+      - -y
+      # ok: mcp-config-unpinned-package-yaml
+      - "@example-org/playwright-mcp@1.58.0"
+  - name: Pinned plain
+    command: uvx
+    args:
+      # ok: mcp-config-unpinned-package-yaml
+      - example-org-mcp-fetch==2026.4.7
+  - name: Git at a commit
+    command: npx
+    args:
+      - -y
+      # ok: mcp-config-unpinned-package-yaml
+      - example-org/mcp-server#3f2a9c1d
+  - name: Local server
+    command: uvx
+    # ok: mcp-config-unpinned-package-yaml
+    args: [--from, ., example-mcp]
+  - name: Project script
+    command: uv
+    args:
+      - run
+      # ok: mcp-config-unpinned-package-yaml
+      - server.py
+  - name: Docker pinned
+    command: docker
+    # ok: mcp-config-unpinned-package-yaml
+    args: [run, -i, --rm, "ghcr.io/example-org/kb-mcp:2.4.0"]
+  - name: Secret in env only
+    command: npx
+    args:
+      - -y
+      # ok: mcp-config-unpinned-package-yaml
+      - ${{ inputs.mcp_package }}
+  - name: Remote
+    type: streamable-http
+    # ok: mcp-config-unpinned-package-yaml
+    url: https://mcp.example.com/mcp
+models:
+  - name: Not an MCP server
+    provider: ollama
+    command: npx
+    # ok: mcp-config-unpinned-package-yaml
+    args: [example-org-model-helper]

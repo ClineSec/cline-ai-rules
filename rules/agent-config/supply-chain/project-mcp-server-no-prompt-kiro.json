@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "repo-tools": {
+      // ruleid: project-mcp-server-no-prompt-kiro
+      "command": "node",
+      "args": ["tools/mcp/server.mjs"],
+      "env": { "REPO_ROOT": "." },
+      "disabled": false,
+      "autoApprove": ["search_code"]
+    },
+    "legacy-tools": {
+      // ok: project-mcp-server-no-prompt-kiro
+      "command": "uvx",
+      "args": ["example-org-legacy-mcp==0.4.0"],
+      "disabled": true
+    },
+    "docs": {
+      // ok: project-mcp-server-no-prompt-kiro
+      "url": "https://mcp.example.com/docs",
+      "headers": { "X-Team": "docs" }
+    },
+    "placeholder": {
+      // ok: project-mcp-server-no-prompt-kiro
+      "command": ""
+    }
+  }
+}

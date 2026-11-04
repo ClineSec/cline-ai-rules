@@ -1,0 +1,6 @@
+{
+  // ok: claude-settings-project-mcp-auto-start
+  "enableAllProjectMcpServers": false,
+  // ruleid: claude-settings-project-mcp-auto-start
+  "enabledMcpjsonServers": "runbooks"
+}

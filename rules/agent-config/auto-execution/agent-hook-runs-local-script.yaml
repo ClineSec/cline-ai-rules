@@ -1,0 +1,155 @@
+rules:
+  - id: agent-hook-runs-local-script
+    languages: [json]
+    severity: WARNING
+    message: >-
+      This agent hook or plugin monitor runs a script that lives in the repository, so the agent
+      executes it automatically (on session start, a prompt, or a tool call), with the
+      developer's credentials. Anyone who can change that script or this config, through a pull request, a
+      compromised dependency, or a worm that writes into the repo, gets code execution on every
+      machine that opens the project in the agent. The Shai-Hulud, Miasma, and keyv worms
+      persisted this way. If the hook is intended, protect the hook config and its script with
+      CODEOWNERS review like any code that runs on checkout, and prefer a tool installed outside
+      the repo at a pinned version.
+    paths:
+      include:
+        - ".claude/settings.json"
+        - ".claude/settings.local.json"
+        - ".gemini/settings.json"
+        - ".cursor/hooks.json"
+        # Devin Desktop (formerly Windsurf) Cascade hooks; .windsurf/hooks.json is the legacy
+        # path, read when .devin/hooks.json is absent or empty.
+        - ".devin/hooks.json"
+        - ".windsurf/hooks.json"
+        # Devin CLI: hooks.v1.json is the hooks object itself; config.json has a "hooks" key.
+        - ".devin/hooks.v1.json"
+        - ".devin/config.json"
+        - ".devin/config.local.json"
+        # GitHub Copilot CLI (and Copilot cloud agent): repository hook files and inline hooks.
+        - ".github/hooks/*.json"
+        - ".github/copilot/settings.json"
+        - ".github/copilot/settings.local.json"
+        # Kiro: workspace hook files and hooks in workspace agent profiles.
+        - ".kiro/hooks/*.json"
+        - ".kiro/agents/*.json"
+        # Claude Code plugins and Gemini CLI extensions ship hooks here. plugin.json can also
+        # name other hook files; in public plugins they sit under hooks/ or .claude-plugin/.
+        - "hooks/*.json"
+        - ".claude-plugin/hooks.json"
+        # Claude Code plugins: inline hooks and monitors in the manifest or a marketplace
+        # entry, and monitor commands, which start with every interactive session.
+        - ".claude-plugin/plugin.json"
+        - ".claude-plugin/marketplace.json"
+        - "monitors/monitors.json"
+        # GitHub Copilot CLI plugins: hooks.json next to plugin.json at the plugin root. This
+        # also covers the other clients' hooks.json files listed above.
+        - "hooks.json"
+      exclude:
+        # Codex runs a hook only after the user trusts it, pinned by its hash (rust-v0.164.0
+        # hooks/src/engine/discovery.rs).
+        - ".codex/hooks.json"
+    pattern-either:
+      # Shell form (hooks and plugin monitors): the command string runs a file from the repo.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: '"hooks": {...}'
+                      # plugin.json "hooks" can be an array of hook file paths and inline hooks.
+                      - pattern-inside: '"hooks": [...]'
+                  - pattern-either:
+                      - pattern: '"command": "$CMD"'
+                      # Devin Desktop / Windsurf and Copilot CLI: per-shell commands of the same
+                      # hook.
+                      - pattern: '"powershell": "$CMD"'
+                      - pattern: '"bash": "$CMD"'
+                      # Kiro: a Stop hook's confirmCommand runs before its prompt is shown.
+                      - pattern: '"confirmCommand": "$CMD"'
+              # Plugin monitor: {"name", "command", "description"} in monitors/monitors.json or
+              # inline in a manifest. Gemini CLI hooks share the shape and are matched above.
+              - patterns:
+                  - pattern: '{..., "name": $N, "command": "$CMD", "description": $D, ...}'
+                  - pattern-not-inside: '"hooks": {...}'
+                  - pattern-not-inside: '"hooks": [...]'
+                  - focus-metavariable: $CMD
+          - metavariable-regex:
+              metavariable: $CMD
+              # Verbose mode: whitespace is ignored and # starts a comment.
+              regex: |-
+                (?x)
+                # --- repo-script command test (begin): build.py keeps this block identical in
+                # agent-settings-command-runs-local-script; edit both together. ---
+                # Any of: the command is a relative path (.cursor/hooks/x.sh, ./x, scripts/x.py;
+                # tools installed under node_modules/.bin are left to SCA, like npx); a path under
+                # the project directory variable each agent exports ($VAR, ${VAR}, PowerShell's
+                # $env:VAR, cmd's %VAR%); or an interpreter given a relative script (node
+                # .github/setup.js, bash -c './x.sh', node --import tsx x.ts). Windows paths use
+                # backslashes, which JSON and double-quoted YAML escape, so a separator is /, \ or \\.
+                # Matched text keeps JSON escapes, so quotes may arrive as \". The regex is
+                # anchored at the start, hence the .* prefixes.
+                (?(DEFINE) (?<sep> / | \\\\? ) )
+                  (^\s*\\?["']?(?!(\.(?&sep))?node_modules(?&sep))(\.{1,2}(?&sep)|\.?[\w-]+(?&sep)))
+                | (.*(\$\{?|\$env:|%)(CLAUDE|GEMINI|CURSOR)_PROJECT_DIR(\}|%)?\\?["']?(?&sep))
+                | (.*(^|[\s;&|("'])(node|bun|deno|python3?|bash|sh|zsh|pwsh|powershell|ruby|perl|php|tsx|ts-node|uv\s+run|npx\s+tsx)(\s+run)?(\s+(--(import|require|loader|experimental-loader)[\s=]\S+|-r\s+\S+|-(?i:executionpolicy|ep)\s+\S+|-\S+))*\s+\\?["']?(\.{1,2}(?&sep))?([\w.-]+(?&sep))*[\w.-]+\.(sh|bash|zsh|[cm]?js|[cm]?ts|py|rb|pl|ps1|php)\b)
+                # --- repo-script command test (end) ---
+      # Exec form (Claude Code): "command": "node", "args": [".github/setup.js"]
+      - patterns:
+          - pattern-either:
+              - pattern-inside: '"hooks": {...}'
+              # plugin.json "hooks" can be an array of hook file paths and inline hook objects.
+              - pattern-inside: '"hooks": [...]'
+          - pattern-inside: '{..., "args": [...], ...}'
+          - pattern-inside: '{..., "command": "$INTERP", ...}'
+          - metavariable-regex:
+              metavariable: $INTERP
+              regex: |-
+                (?x) ^(?:
+                # --- exec-form interpreters (begin): build.py keeps this block identical in
+                # agent-frontmatter-command-runs-local-script; edit both together. ---
+                node | bun | deno | python3? | bash | sh | zsh | pwsh | powershell | ruby | perl | php
+                | tsx | ts-node
+                # --- exec-form interpreters (end) ---
+                )$
+          - pattern: '"$ARG"'
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: |-
+                (?x)
+                # --- exec-form script argument (begin): build.py keeps this block identical in
+                # agent-frontmatter-command-runs-local-script; edit both together. ---
+                # One argv element: a script file with a relative path, any ./ or ../ path, or a
+                # path under the project directory variable. A separator is /, \ or \\.
+                (?(DEFINE) (?<sep> / | \\\\? ) )
+                ^(?: (\.{1,2}(?&sep))? ([\w.-]+(?&sep))* [\w.-]+\.(sh|bash|zsh|[cm]?js|[cm]?ts|py|rb|pl|ps1|php)
+                  | \.{1,2}(?&sep).+
+                  | (\$\{?|\$env:|%)(CLAUDE|GEMINI|CURSOR)_PROJECT_DIR(\}|%)?\\?["']?(?&sep).+ )$
+                # --- exec-form script argument (end) ---
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+        - "ASI04 - Agentic Supply Chain Vulnerabilities"
+      mitre-atlas:
+        - "AML.T0081 - Modify AI Agent Configuration"
+      cwe:
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      technology: [claude-code, gemini-cli, cursor, windsurf, copilot-cli, kiro, kiro-cli]
+      references:
+        - https://code.claude.com/docs/en/hooks
+        - https://geminicli.com/docs/hooks/
+        - https://cursor.com/docs/agent/hooks
+        - https://docs.devin.ai/desktop/cascade/hooks
+        - https://docs.devin.ai/cli/extensibility/hooks/overview
+        - https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-hooks-reference
+        - https://kiro.dev/docs/hooks/
+        - https://www.sonarsource.com/blog/mini-shai-hulud-targets-ai-coding-agents/
+        - https://www.stepsecurity.io/blog/miasma-worm-hits-microsoft-again-azure-functions-action-and-72-other-repositories-disabled-after-supply-chain-attack-targeting-ai-coding-agents
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md

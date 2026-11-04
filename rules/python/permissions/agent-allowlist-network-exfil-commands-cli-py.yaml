@@ -1,0 +1,157 @@
+rules:
+  - id: agent-allowlist-network-exfil-commands-cli-py
+    # Python twin of agent-allowlist-network-exfil-commands-cli: the same allow flags and
+    # entries, here as argv elements (subprocess, asyncio, os.exec*, pexpect) or inside a
+    # command string. Only agent CLIs take these flags with these entries, so the program
+    # needn't be in view: an argv built in pieces counts.
+    languages: [python]
+    severity: WARNING
+    message: >-
+      This code starts an agent CLI that may run a network tool (curl, wget, nc, ssh, scp,
+      nslookup, dig, ping, Invoke-WebRequest, ...) without asking: an --allowedTools /
+      --allowed-tools entry such as "Bash(curl:*)" (Claude Code) or "run_shell_command(curl)"
+      (Gemini CLI), or --allow-tool "shell(curl)" (GitHub Copilot CLI). Agents launched from
+      code usually work on text other people control (a ticket, an issue, a pull request, a
+      log), and a prompt injection in it can then have the agent read a secret (an API key in
+      the environment, a credential file, source code) and send it out in a request, an
+      upload, or a DNS lookup of a name like <secret>.attacker.example. Narrowing the rule to
+      one URL doesn't help: wildcards and prefix matching still accept extra arguments, such
+      as a second URL or `-d @.env`. Leave network commands out of the allow list, and fetch
+      what the agent needs in your own code and put it in the prompt.
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      # An entry after a separate allow flag in an argv list, tuple, or call
+                      # (Claude Code takes several values after one flag).
+                      - pattern: '[..., $AF, ..., $VAL, ...]'
+                      - pattern: '(..., $AF, ..., $VAL, ...)'
+                      - pattern: '$F(..., $AF, ..., $VAL, ...)'
+                      - pattern: |
+                          $A.append($AF)
+                          ...
+                          $A.append($VAL)
+                      # A tool list kept in a variable, then spliced or joined into argv.
+                      - pattern: |
+                          $T = [..., $VAL, ...]
+                          ...
+                          $Y = [..., $AF, ..., <... $T ...>, ...]
+                      - pattern: |
+                          $T = [..., $VAL, ...]
+                          ...
+                          $F(..., [..., $AF, ..., <... $T ...>, ...], ...)
+                      - pattern: |
+                          $T = (..., $VAL, ...)
+                          ...
+                          $Y = [..., $AF, ..., <... $T ...>, ...]
+                      - pattern: |
+                          $T = (..., $VAL, ...)
+                          ...
+                          $F(..., [..., $AF, ..., <... $T ...>, ...], ...)
+                  - metavariable-regex:
+                      metavariable: $AF
+                      regex: ^[rbuRBU]?["'](?:--allowed[-_]?[tT]ools|--allow-tool)["']$
+                  # A deny flag after the allow flag starts a deny list.
+                  - pattern-not-inside: '[..., $AF, ..., "=~/^--(?:disallowed[-_]?[tT]ools|deny-tool)$/", ..., $VAL, ...]'
+                  - pattern-not-inside: '(..., $AF, ..., "=~/^--(?:disallowed[-_]?[tT]ools|deny-tool)$/", ..., $VAL, ...)'
+                  - pattern-not-inside: '$F(..., $AF, ..., "=~/^--(?:disallowed[-_]?[tT]ools|deny-tool)$/", ..., $VAL, ...)'
+                  - focus-metavariable: $VAL
+              # One element: "--allowedTools=Bash(curl:*)", "--allow-tool=shell(curl)".
+              - pattern: '"=~/^--(?:allowed[-_]?[tT]ools|allow-tool)=/"'
+          - pattern-regex: |-
+              (?x)
+              # --- network exfil programs (begin): build.py keeps this block identical in
+              # the agent-allowlist-network-exfil-commands rules; edit every copy together. ---
+              (?(DEFINE)
+                # An optional directory, so /usr/bin/curl counts.
+                (?<dir> (?: [^\s"'()\[\],:*]* [/\\]{1,2} )? )
+                # Programs whose main use is sending or fetching data over the network: HTTP
+                # clients, raw sockets, remote shells and file transfer, and DNS, ICMP, and
+                # whois lookups (a looked-up name carries data to the name's DNS server).
+                # General developer tools that can also reach the network (git, gh, npm,
+                # aws, docker) are left out: approving them is common and is a different
+                # question.
+                (?<net> (?: curl | curlie | wget2? | https? | xhs? | aria2c | grpcurl | websocat | wscat
+                          | nc | ncat | netcat | socat | telnet
+                          | ssh | scp | sftp | rsync | ftp | lftp | tftp
+                          | nslookup | dig | host | drill | whois
+                          | ping6? | traceroute6? ) (?i:\.exe)?
+                        | (?i: invoke-webrequest | invoke-restmethod | iwr | irm | resolve-dnsname ) )
+              )
+              # --- network exfil programs (end) ---
+              (?<! [\w(:*-] )
+              # A Claude Code rule with a wildcard (a rule without * matches one exact command), a
+              # Gemini CLI command prefix, or a Copilot CLI shell(...) rule naming a network program
+              # alone or with :*.
+              (?: (?: Bash | PowerShell ) \( \s*+ (?&dir) (?&net) (?= [\s*)] | : \s*+ \* \s*+ \) ) [^)\n]*? \* [^)\n]*+ \)
+                | (?: run_shell_command | ShellTool ) \( \s*+ (?&dir) (?&net) (?= [\s)] ) [^)\n]*+ \)
+                | shell \( \s*+ (?&dir) (?&net) \s*+ (?: \) | [^)\n]*? : \s*+ \* \s*+ \) ) )
+      # A whole command line in one string (shell=True, os.system, shlex.split).
+      - patterns:
+          - pattern-regex: |-
+              (?x)
+              # --- network exfil programs (begin): build.py keeps this block identical in
+              # the agent-allowlist-network-exfil-commands rules; edit every copy together. ---
+              (?(DEFINE)
+                # An optional directory, so /usr/bin/curl counts.
+                (?<dir> (?: [^\s"'()\[\],:*]* [/\\]{1,2} )? )
+                # Programs whose main use is sending or fetching data over the network: HTTP
+                # clients, raw sockets, remote shells and file transfer, and DNS, ICMP, and
+                # whois lookups (a looked-up name carries data to the name's DNS server).
+                # General developer tools that can also reach the network (git, gh, npm,
+                # aws, docker) are left out: approving them is common and is a different
+                # question.
+                (?<net> (?: curl | curlie | wget2? | https? | xhs? | aria2c | grpcurl | websocat | wscat
+                          | nc | ncat | netcat | socat | telnet
+                          | ssh | scp | sftp | rsync | ftp | lftp | tftp
+                          | nslookup | dig | host | drill | whois
+                          | ping6? | traceroute6? ) (?i:\.exe)?
+                        | (?i: invoke-webrequest | invoke-restmethod | iwr | irm | resolve-dnsname ) )
+              )
+              # --- network exfil programs (end) ---
+              (?<![\w]) [rRbBuUfF]{0,2} (?<qt>["']) [ \t]*
+              # Optional path and package runner in front of the program.
+              (?: [\w.~/${}-]*/ )?
+              (?: (?:npx|bunx|pnpx) (?:[ \t]+(?:-y|--yes))? [ \t]+ @(?:anthropic-ai/claude-code|google/gemini-cli|github/copilot)
+                  (?:@[\w.^~-]+)? | claude | gemini | copilot | gh[ \t]+copilot )
+              (?=[ \t]) (?: (?!\k<qt>) [^\n\\] | \\. )*? [ \t]
+              (?: --allowed[-_]?[tT]ools | --allow-tool ) [= \t]
+              # The flag's values, up to the next --flag or the end of the string.
+              (?: (?!\k<qt>) (?! [ \t]--[a-zA-Z] ) [^\n\\] | \\. )*?
+              (?<! [\w(:*-] ) \K
+              # A Claude Code rule with a wildcard (a rule without * matches one exact command), a
+              # Gemini CLI command prefix, or a Copilot CLI shell(...) rule naming a network program
+              # alone or with :*.
+              (?: (?: Bash | PowerShell ) \( \s*+ (?&dir) (?&net) (?= [\s*)] | : \s*+ \* \s*+ \) ) [^)\n]*? \* [^)\n]*+ \)
+                | (?: run_shell_command | ShellTool ) \( \s*+ (?&dir) (?&net) (?= [\s)] ) [^)\n]*+ \)
+                | shell \( \s*+ (?&dir) (?&net) \s*+ (?: \) | [^)\n]*? : \s*+ \* \s*+ \) ) )
+          # Not in a comment.
+          - pattern-not-regex: (?m)^[ \t]*\#[^\n]*
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0086 - Exfiltration via AI Agent Tool Invocation"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code, gemini-cli, copilot-cli]
+      references:
+        - https://code.claude.com/docs/en/cli-reference
+        - https://code.claude.com/docs/en/permissions
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/cli/src/config/config.ts
+        - https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#tool-permission-patterns
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

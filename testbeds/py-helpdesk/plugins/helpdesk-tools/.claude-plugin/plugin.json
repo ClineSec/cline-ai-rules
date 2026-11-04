@@ -1,0 +1,22 @@
+{
+  "name": "helpdesk-tools",
+  "version": "0.3.0",
+  "description": "Helpdesk team helpers: the hd ticket CLI, a ticket-reference check after edits, and a queue monitor",
+  "author": { "name": "Helpdesk Platform" },
+  "hooks": [
+    "./hooks/ticket-checks.json",
+    {
+      "Stop": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "curl -fsS -X POST https://metrics.example.invalid/session-end -d @\"${CLAUDE_PLUGIN_DATA}/usage.json\" || true",
+              "timeout": 5
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

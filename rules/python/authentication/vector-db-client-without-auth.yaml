@@ -1,0 +1,229 @@
+rules:
+  - id: vector-db-client-without-auth
+    # A Chroma, Qdrant, Weaviate, or Milvus client pointed at a host outside the local machine
+    # and the private network, sending no credentials. The client works only if the server
+    # takes anonymous requests, so the collection is open to anyone who can reach that host.
+    # SDKs checked 2026-10-25 from package source:
+    # - chromadb 1.5.9: HttpClient / AsyncHttpClient(host="localhost", port, ssl, headers,
+    #   settings, ...); credentials go in headers (X-Chroma-Token, Authorization) or in
+    #   Settings(chroma_client_auth_provider=..., chroma_client_auth_credentials=...). Settings
+    #   is a pydantic BaseSettings, so CHROMA_CLIENT_AUTH_PROVIDER in the environment or .env
+    #   also counts and can't be seen here. Settings(chroma_server_host=...) is the older client
+    #   form. The open-source server has no built-in auth since 1.0.0 (frontend auth is the
+    #   no-op `()`), so a credential only helps behind a proxy or on Chroma Cloud
+    #   (CloudClient, which requires an API key).
+    # - qdrant-client 1.20.0: QdrantClient / AsyncQdrantClient(location, url, ..., api_key,
+    #   ..., host, path, ..., auth_token_provider, ..., headers); location=":memory:" and
+    #   path= are local; no environment variables are read.
+    # - weaviate-client 4.24.0: connect_to_custom(http_host, ...), connect_to_local(host=...),
+    #   use_async_with_custom / use_async_with_local, and WeaviateClient(connection_params=
+    #   ConnectionParams.from_url / from_params(...)) take auth_credentials /
+    #   auth_client_secret; headers usually carry vectorizer keys (X-OpenAI-Api-Key), so only
+    #   an Authorization header counts. 3.x weaviate.Client(url, auth_client_secret=...,
+    #   additional_headers=...) is matched for older code.
+    # - pymilvus 3.0.2: MilvusClient / AsyncMilvusClient(uri="http://localhost:19530", user,
+    #   password, db_name, token) and connections.connect(alias, user, password, db_name,
+    #   token, uri= / host= / address=); user:password@ in the URI also works; a URI ending in
+    #   .db is Milvus Lite, a local file.
+    # - Framework stores that build these clients from their own arguments: langchain-chroma
+    #   1.1.0 Chroma(host=, headers=, client_settings=) and llama-index-vector-stores-chroma
+    #   0.6.0 ChromaVectorStore(host=, headers=) build a chromadb.HttpClient; langchain-milvus
+    #   0.4.0 Milvus(connection_args={uri, token, user, password}) passes them to MilvusClient,
+    #   and llama-index-vector-stores-milvus 1.2.0 MilvusVectorStore(uri=, token=) does too;
+    #   the deprecated langchain-community 0.4.2 Milvus passes connection_args to
+    #   connections.connect.
+    #   langchain-qdrant 1.1.0 falls back to QDRANT_API_KEY from the environment, and
+    #   llama-index-vector-stores-qdrant 0.10.4 refuses a url without an api_key, so their
+    #   Qdrant stores are not matched.
+    # A host counts as remote when it is a dotted name or a public IP address: loopback,
+    # private and link-local addresses, single-label names (compose and Kubernetes service
+    # names), and names with an internal label (svc, cluster, internal, local, lan, corp, ...)
+    # are skipped, and so are the vendors' managed clouds, which always require a key. A host
+    # read from the environment can't be judged and is skipped.
+    languages: [python]
+    severity: WARNING
+    message: >-
+      This vector database client connects to a remote host without sending any credentials
+      (no API key, token, user and password, or auth header), so it only works if that server
+      accepts anonymous requests. Anyone who can reach the host can then do the same: read
+      every collection (embeddings can be inverted back to much of their source text), and
+      insert, change, or delete documents, which poisons what the RAG app retrieves. Turn on
+      the server's auth (a Qdrant `api_key`, Weaviate API-key or OIDC auth with anonymous
+      access off, Milvus `common.security.authorizationEnabled`, or an authenticating proxy in
+      front of Chroma, which has no built-in auth since 1.0) and pass the credential from a
+      secret store or the environment. If an authenticating proxy already guards this host
+      and the client gets its credential some other way, this finding is safe to ignore.
+    patterns:
+      - pattern-either:
+          # Chroma: the host as a keyword or the first argument; credentials in headers= or in
+          # a Settings(...) with a client auth provider. Settings in a variable can't be read.
+          - patterns:
+              - pattern-either:
+                  - pattern: chromadb.HttpClient(..., host="$H", ...)
+                  - pattern: chromadb.HttpClient("$H", ...)
+                  - pattern: chromadb.AsyncHttpClient(..., host="$H", ...)
+                  - pattern: chromadb.AsyncHttpClient("$H", ...)
+                  - pattern: chromadb.config.Settings(..., chroma_server_host="$H", ...)
+                  # LangChain and LlamaIndex stores that build the HttpClient themselves.
+                  - pattern: langchain_chroma.Chroma(..., host="$H", ...)
+                  - pattern: langchain_chroma.Chroma.$CM(..., host="$H", ...)
+                  - pattern: llama_index.vector_stores.chroma.ChromaVectorStore(..., host="$H", ...)
+                  - pattern: llama_index.vector_stores.chroma.ChromaVectorStore.from_params(..., host="$H", ...)
+              - pattern-not: $F(..., headers=$X, ...)
+              - pattern-not: $F(..., chroma_client_auth_provider=$X, ...)
+              - pattern-not: $F(..., settings=chromadb.config.Settings(..., chroma_client_auth_provider=$X, ...), ...)
+              - pattern-not: $F(..., client_settings=chromadb.config.Settings(..., chroma_client_auth_provider=$X, ...), ...)
+              - pattern-not-inside:
+                  patterns:
+                    - pattern-either:
+                        - pattern: $F(..., settings=$S, ...)
+                        - pattern: $F(..., client_settings=$S, ...)
+                    - metavariable-regex:
+                        metavariable: $S
+                        regex: ^(?![\w.]*Settings\()
+          # Qdrant: the URL or host as a keyword, or location (the first argument).
+          - patterns:
+              - pattern-either:
+                  - pattern: qdrant_client.QdrantClient(..., url="$H", ...)
+                  - pattern: qdrant_client.QdrantClient(..., host="$H", ...)
+                  - pattern: qdrant_client.QdrantClient(..., location="$H", ...)
+                  - pattern: qdrant_client.QdrantClient("$H", ...)
+                  - pattern: qdrant_client.AsyncQdrantClient(..., url="$H", ...)
+                  - pattern: qdrant_client.AsyncQdrantClient(..., host="$H", ...)
+                  - pattern: qdrant_client.AsyncQdrantClient(..., location="$H", ...)
+                  - pattern: qdrant_client.AsyncQdrantClient("$H", ...)
+              - pattern-not: $F(..., api_key=$X, ...)
+              - pattern-not: $F(..., auth_token_provider=$X, ...)
+              - pattern-not: $F(..., headers=$X, ...)
+          # Weaviate 4.x helpers and client, and the 3.x client.
+          - patterns:
+              - pattern-either:
+                  - pattern: weaviate.connect_to_custom(..., http_host="$H", ...)
+                  - pattern: weaviate.connect_to_custom("$H", ...)
+                  - pattern: weaviate.use_async_with_custom(..., http_host="$H", ...)
+                  - pattern: weaviate.use_async_with_custom("$H", ...)
+                  - pattern: weaviate.connect_to_local(..., host="$H", ...)
+                  - pattern: weaviate.connect_to_local("$H", ...)
+                  - pattern: weaviate.use_async_with_local(..., host="$H", ...)
+                  - pattern: weaviate.use_async_with_local("$H", ...)
+                  - pattern: weaviate.WeaviateClient(..., connection_params=$CP.from_url("$H", ...), ...)
+                  - pattern: weaviate.WeaviateClient(..., connection_params=$CP.from_params(..., http_host="$H", ...), ...)
+                  - pattern: weaviate.WeaviateAsyncClient(..., connection_params=$CP.from_url("$H", ...), ...)
+                  - pattern: weaviate.WeaviateAsyncClient(..., connection_params=$CP.from_params(..., http_host="$H", ...), ...)
+                  - pattern: weaviate.Client("$H", ...)
+                  - pattern: weaviate.Client(..., url="$H", ...)
+              - pattern-not: $F(..., auth_credentials=$X, ...)
+              - pattern-not: $F(..., auth_client_secret=$X, ...)
+              # Headers count only when they visibly carry an Authorization header, or can't
+              # be read (a variable).
+              - pattern-not-inside:
+                  patterns:
+                    - pattern-either:
+                        - pattern: $F(..., headers=$HD, ...)
+                        - pattern: $F(..., additional_headers=$HD, ...)
+                    - metavariable-regex:
+                        metavariable: $HD
+                        regex: (?is)^(?:(?!\{)|.*?["']authorization["']\s*:)
+          # Milvus: the URI as a keyword or the first argument of MilvusClient; host, uri, or
+          # address in connections.connect (whose first argument is the alias).
+          - patterns:
+              - pattern-either:
+                  - pattern: pymilvus.MilvusClient(..., uri="$H", ...)
+                  - pattern: pymilvus.MilvusClient("$H", ...)
+                  - pattern: pymilvus.AsyncMilvusClient(..., uri="$H", ...)
+                  - pattern: pymilvus.AsyncMilvusClient("$H", ...)
+                  - pattern: pymilvus.connections.connect(..., uri="$H", ...)
+                  - pattern: pymilvus.connections.connect(..., host="$H", ...)
+                  - pattern: pymilvus.connections.connect(..., address="$H", ...)
+                  # LangChain stores pass connection_args to MilvusClient (langchain-milvus)
+                  # or connections.connect (the deprecated langchain-community store, which
+                  # 0.4.2 keeps only at its submodule); the LlamaIndex store passes uri and
+                  # token to MilvusClient.
+                  - pattern: 'langchain_milvus.Milvus(..., connection_args={..., "uri": "$H", ...}, ...)'
+                  - pattern: 'langchain_milvus.Milvus.$CM(..., connection_args={..., "uri": "$H", ...}, ...)'
+                  - pattern: 'langchain_community.vectorstores.Milvus(..., connection_args={..., "uri": "$H", ...}, ...)'
+                  - pattern: 'langchain_community.vectorstores.Milvus(..., connection_args={..., "host": "$H", ...}, ...)'
+                  - pattern: 'langchain_community.vectorstores.Milvus.$CM(..., connection_args={..., "uri": "$H", ...}, ...)'
+                  - pattern: 'langchain_community.vectorstores.Milvus.$CM(..., connection_args={..., "host": "$H", ...}, ...)'
+                  - pattern: 'langchain_community.vectorstores.milvus.Milvus(..., connection_args={..., "uri": "$H", ...}, ...)'
+                  - pattern: 'langchain_community.vectorstores.milvus.Milvus(..., connection_args={..., "host": "$H", ...}, ...)'
+                  - pattern: 'langchain_community.vectorstores.milvus.Milvus.$CM(..., connection_args={..., "uri": "$H", ...}, ...)'
+                  - pattern: 'langchain_community.vectorstores.milvus.Milvus.$CM(..., connection_args={..., "host": "$H", ...}, ...)'
+                  - pattern: llama_index.vector_stores.milvus.MilvusVectorStore(..., uri="$H", ...)
+                  - pattern: llama_index.vector_stores.milvus.MilvusVectorStore("$H", ...)
+              - pattern-not: $F(..., token=$X, ...)
+              - pattern-not: $F(..., user=$X, ...)
+              - pattern-not: $F(..., password=$X, ...)
+              - pattern-not: '$F(..., connection_args={..., "token": $X, ...}, ...)'
+              - pattern-not: '$F(..., connection_args={..., "user": $X, ...}, ...)'
+              - pattern-not: '$F(..., connection_args={..., "password": $X, ...}, ...)'
+      # Options passed as **kwargs can't be read.
+      - pattern-not: $F(..., **$KW, ...)
+      - metavariable-regex:
+          metavariable: $H
+          regex: |-
+            (?xi)
+            # --- vector DB remote host (begin): build.py keeps this block identical in
+            # the vector-db-client-without-auth rules; edit every copy together. ---
+            (?(DEFINE)
+              (?<oct> 25[0-5] | 2[0-4]\d | 1\d\d | [1-9]?\d )
+              (?<lab> [a-z0-9] [a-z0-9-]*+ )
+              (?<tail> (?: : \d*+ )?+ (?: [/?\#] \S*+ )?+ \z ) )
+            # An optional scheme, and no user name or password in the URL (a credential).
+            \A (?: [a-z] [a-z0-9+.-]*+ :// )?+
+            (?! [^/?\#\s]*+ @ )
+            # A public IPv4 address: not unspecified, private, loopback, link-local, or shared
+            # (carrier-grade NAT, Tailscale).
+            (?: (?! (?: 0 | 10 | 127 ) \. | 169\.254\. | 192\.168\. | 172\.(?:1[6-9]|2\d|3[01])\.
+                  | 100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\. )
+                (?&oct) (?: \. (?&oct) ){3}
+              # A public IPv6 address: not loopback, unique-local, or link-local.
+              | \[ (?! ::1?\] | f[cd] | fe[89ab] ) [0-9a-f:.]++ \]
+              # A dotted host name with no internal-network label, outside the vendors'
+              # managed clouds (which always require a key), and not a Milvus Lite .db file.
+              | (?! [a-z0-9.-]*? (?<![a-z0-9-])
+                    (?: localhost | internal | intranet | local | localdomain | lan | svc | cluster
+                      | private | corp | home ) (?![a-z0-9-]) )
+                (?! [a-z0-9.-]*? (?<![a-z0-9-])
+                    (?: cloud\.qdrant\.io | weaviate\.cloud | weaviate\.network | semi\.network
+                      | zilliz(?:cloud)?\.com | trychroma\.com ) \.?+ (?![a-z0-9.-]) )
+                (?: (?&lab) \. )++ (?! db (?&tail) ) [a-z] [a-z0-9-]*+ \.?+ )
+            (?&tail)
+            # --- vector DB remote host (end) ---
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM09:2026 - Vector and Embedding Weaknesses"
+        - "LLM08:2025 - Vector and Embedding Weaknesses"
+      owasp-aisvs:
+        - "v1.01-C5.2.1 - AI Resource Authorization & Classification"
+      mitre-atlas:
+        - "AML.T0132 - Misconfigured or Publicly Exposed AI Services"
+        - "AML.T0085.000 - Data from AI Services: RAG Databases"
+      cwe:
+        - "CWE-306: Missing Authentication for Critical Function"
+      # The server may sit behind an authenticating proxy, or (Chroma only) the client may
+      # take its credential from CHROMA_CLIENT_AUTH_* in the environment.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [chromadb, qdrant, weaviate, milvus, langchain, llamaindex]
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM09_VectorAndEmbeddingWeaknesses.md
+        - https://github.com/OWASP/AISVS/blob/v1.01/1.01/en/0x10-C05-Access-Control-and-Identity.md
+        - https://cwe.mitre.org/data/definitions/306.html
+        - https://github.com/chroma-core/chroma/blob/1.5.9/chromadb/__init__.py
+        - https://github.com/chroma-core/chroma/blob/1.5.9/chromadb/config.py
+        - https://github.com/chroma-core/chroma/blob/1.5.9/rust/frontend/src/auth/mod.rs
+        - https://github.com/qdrant/qdrant-client/blob/v1.20.0/qdrant_client/qdrant_client.py
+        - https://github.com/weaviate/weaviate-python-client/blob/v4.24.0/weaviate/connect/helpers.py
+        - https://github.com/milvus-io/pymilvus/blob/v3.0.2/pymilvus/milvus_client/milvus_client.py
+        - https://github.com/milvus-io/pymilvus/blob/v3.0.2/pymilvus/orm/connections.py
+        - https://pypi.org/project/langchain-chroma/1.1.0/
+        - https://pypi.org/project/langchain-milvus/0.4.0/
+        - https://pypi.org/project/llama-index-vector-stores-chroma/0.6.0/
+        - https://pypi.org/project/llama-index-vector-stores-milvus/1.2.0/
+        - https://www.legitsecurity.com/blog/the-risks-lurking-in-publicly-exposed-genai-development-services
+        - https://www.upguard.com/blog/open-chroma-databases-ai-attack-surface

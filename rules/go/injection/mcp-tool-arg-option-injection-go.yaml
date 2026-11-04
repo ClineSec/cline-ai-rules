@@ -1,0 +1,316 @@
+rules:
+  - id: mcp-tool-arg-option-injection-go
+    # Argument (option) injection: a tool argument becomes an argv item of git or another
+    # program that reads items starting with "-" as options, with no "--" before it. This is
+    # the mcp-server-git CVE-2025-68144 shape (GHSA-9xwc-hfwc-8w59: a model-chosen ref such
+    # as --output=/path passed to git diff). os/exec runs no shell, so only the option
+    # reading matters; shell strings are mcp-tool-arg-to-shell-go. The pattern-sources,
+    # pattern-propagators, and the first two sanitizers are shared with mcp-tool-arg-to-shell-go
+    # and mcp-tool-arg-to-sql-go (build.py SHARED_BLOCKS "MCP tool sources (Go)"): edit them
+    # together.
+    # Resource templates and prompts (since 2026-10-25): mcp-go v1.3.0
+    # ResourceTemplateHandlerFunc / PromptHandlerFunc (mcp.ReadResourceRequest,
+    # mcp.GetPromptRequest) and go-sdk v1.8.0 ResourceHandler / PromptHandler
+    # (*mcp.ReadResourceRequest, *mcp.GetPromptRequest).
+    languages: [go]
+    severity: WARNING
+    message: >-
+      An MCP tool argument, resource-template parameter, or prompt argument is passed to git
+      (or ssh, rsync, tar, curl, wget, rg) as a command-line argument with no `--` before it
+      and no check for a leading dash. The model chooses these values (tool arguments always,
+      resource URIs and prompt arguments in clients that let it), and a prompt injection can
+      choose them for it: a value like `--output=/home/user/.bashrc` (git diff),
+      `--upload-pack=...` (git fetch), `--pre=...` (rg), or `-oProxyCommand=...` (ssh) is read
+      as an option, which can overwrite files or run commands. Put `"--"` before user values
+      where the program accepts it (`exec.Command("git", "diff", "--", target)`), reject
+      values with `strings.HasPrefix(v, "-")`, or check them against an allowlist (for git
+      refs, resolve them with `git rev-parse --verify --end-of-options` first).
+    mode: taint
+    options:
+      # Values of a numeric or boolean Go type (a typed handler's `Count int` field) can't
+      # start with a dash.
+      taint_assume_safe_numbers: true
+      taint_assume_safe_booleans: true
+    pattern-sources:
+      # A tool, resource, or prompt handler's request parameter, in any function, method, or
+      # function literal with one: mcp-go's mcp.CallToolRequest, mcp.ReadResourceRequest, and
+      # mcp.GetPromptRequest (values) and the go-sdk's *mcp.CallToolRequest,
+      # *mcp.ReadResourceRequest, and *mcp.GetPromptRequest. That covers handlers registered
+      # inline, as named functions or methods, through AddTools / ServerTool,
+      # AddResourceTemplate(s) / AddPrompt(s), and middleware. Everything read from it is the
+      # client's: GetString, RequireString, GetArguments, Params.Arguments, and a resource
+      # read's Params.URI (mcp-go also fills Params.Arguments with the template's variables).
+      # Resource and prompt parameters count since 2026-10-25: clients let the model fill
+      # them. A handler for a resource at a fixed URI gets only that URI.
+      - patterns:
+          - pattern-either:
+              - pattern: func $F(..., $REQ $T, ...) $RET {...}
+              - pattern: func(..., $REQ $T, ...) $RET {...}
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^\*?(?:\w+\.)?(?:CallToolRequest|ReadResourceRequest|GetPromptRequest)$
+          - focus-metavariable: $REQ
+      # The decoded arguments of a typed handler, the parameter after the request:
+      # mcp-go's mcp.NewTypedToolHandler / NewStructuredToolHandler func(ctx, req, args T)
+      # and the go-sdk's mcp.AddTool func(ctx, req, in In) (*CallToolResult, Out, error).
+      - patterns:
+          - pattern-either:
+              - pattern: func $F(..., $REQ $T, $ARGS $AT) $RET {...}
+              - pattern: func(..., $REQ $T, $ARGS $AT) $RET {...}
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^\*?(?:\w+\.)?CallToolRequest$
+          - focus-metavariable: $ARGS
+    pattern-propagators:
+      # Decoding the arguments into a struct: mcp-go's req.BindArguments(&args), and
+      # json.Unmarshal / a json.Decoder / mapstructure over req.Params.Arguments or
+      # req.GetArguments().
+      - pattern: $REQ.BindArguments(&$TO)
+        from: $REQ
+        to: $TO
+      - pattern: json.Unmarshal($FROM, &$TO)
+        from: $FROM
+        to: $TO
+      - pattern: $FROM.Decode(&$TO)
+        from: $FROM
+        to: $TO
+      - pattern: mapstructure.Decode($FROM, &$TO)
+        from: $FROM
+        to: $TO
+      - pattern: mapstructure.WeakDecode($FROM, &$TO)
+        from: $FROM
+        to: $TO
+      # Text written into a strings.Builder or bytes.Buffer.
+      - pattern: $TO.WriteString($FROM)
+        from: $FROM
+        to: $TO
+      - pattern: $TO.Write($FROM)
+        from: $FROM
+        to: $TO
+      - pattern: fmt.Fprintf(&$TO, $FMT, ..., $FROM, ...)
+        from: $FROM
+        to: $TO
+      - pattern: fmt.Fprint(&$TO, ..., $FROM, ...)
+        from: $FROM
+        to: $TO
+    pattern-sanitizers:
+      # Typed reads of the request are numbers or booleans, and the session, the HTTP
+      # headers, and the tool name are not arguments the model writes.
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $REQ.GetInt(...)
+              - pattern: $REQ.RequireInt(...)
+              - pattern: $REQ.GetFloat(...)
+              - pattern: $REQ.RequireFloat(...)
+              - pattern: $REQ.GetBool(...)
+              - pattern: $REQ.RequireBool(...)
+              - pattern: $REQ.GetIntSlice(...)
+              - pattern: $REQ.RequireIntSlice(...)
+              - pattern: $REQ.GetFloatSlice(...)
+              - pattern: $REQ.RequireFloatSlice(...)
+              - pattern: $REQ.GetBoolSlice(...)
+              - pattern: $REQ.RequireBoolSlice(...)
+              - pattern: $REQ.Session
+              - pattern: $REQ.Extra
+              - pattern: $REQ.Header
+              - pattern: $REQ.Params.Name
+      # A value used inside a `switch` arm whose labels are all literals, Go's usual
+      # membership check: `switch branch { case "main", "develop": ... }`, also with an init
+      # (`switch v := req.GetString("v", ""); v {`) or on the expression itself
+      # (`switch req.GetString("mode", "") { case "fast": ... }`). The `default:` arm, an arm
+      # with a variable label, and a tagless `switch { case cond: }` stay tainted. OpenGrep
+      # doesn't scope a `switch $X { case $L: ... }` pattern to one arm, so the arm is found
+      # by its text (gofmt indentation: the arm runs until the next line at the `case`
+      # indent) and the subject is compared with str().
+      - patterns:
+          - pattern-regex: >-
+              (?m)^(?<SWI>[ \t]*)switch[ \t]+(?|(?<SUBJ>\w+)[ \t]*:=[^;\n]*;[ \t]*\k<SUBJ>|(?<SUBJ>[^\n{;]+?))[ \t]*\{[ \t]*\n(?:(?!\k<SWI>\})[^\n]*\n)*?\k<SWI>case[ \t]+(?:"[^"\n]*"|`[^`\n]*`|'[^'\n]+'|-?\d[\w.]*)(?:[ \t]*,[ \t]*(?:"[^"\n]*"|`[^`\n]*`|'[^'\n]+'|-?\d[\w.]*))*[ \t]*:[^\n]*\n\K(?:\k<SWI>[ \t]+[^\n]*\n|[ \t]*\n)*
+          - pattern: $E
+          - metavariable-comparison:
+              comparison: str($E) == str($SUBJ)
+      # A leading-dash or allowlist check before use: strings.HasPrefix(v, "-"), or any
+      # regexp match (a pattern that only fixes the first character is enough here).
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: strings.HasPrefix($X, ...)
+              - pattern: $RE.MatchString($X)
+              - pattern: regexp.MatchString($PAT, $X)
+          - focus-metavariable: $X
+      # An allowlist membership check before use: slices.Contains(allowed, v),
+      # `if _, ok := allowed[v]; !ok`, or a lookup in a map[string]bool.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: slices.Contains($LIST, $X)
+              - pattern: '_, $OK := ($M : map[$K]$V)[$X]'
+              - pattern: '($M : map[$K]bool)[$X]'
+          - focus-metavariable: $X
+      # A value looked up in a typed table by a model-chosen key. Maps of `any` (the
+      # arguments themselves) and literal keys (`args["ref"]`) stay tainted.
+      - exact: true
+        patterns:
+          - pattern: '($M : map[$K]$V)[$X]'
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^(?!any$|interface\s*\{\s*\}$)
+          - metavariable-regex:
+              metavariable: $X
+              regex: ^(?!["`])
+      # Leading dashes stripped (TrimLeft removes every one; TrimPrefix(v, "-") leaves "-x"
+      # from "--x", so it doesn't count), an absolute path, or a number.
+      - exact: true
+        pattern-either:
+          - pattern: strings.TrimLeft($X, "-")
+          - pattern: filepath.Abs(...)
+          - pattern: strconv.Atoi(...)
+          - pattern: strconv.ParseInt(...)
+          - pattern: strconv.ParseUint(...)
+          - pattern: strconv.ParseFloat(...)
+          - pattern: strconv.Itoa(...)
+          - pattern: strconv.FormatInt(...)
+          - pattern: strconv.FormatUint(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              # exec.Command("git", ..., value), exec.CommandContext(ctx, "git", ...), or a
+              # whole argv in a []string literal (syscall.Exec, os.StartProcess,
+              # exec.Command(argv[0], argv[1:]...)).
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: exec.Command($PROG, ..., $ARG, ...)
+                      - pattern-inside: exec.CommandContext($CTX, $PROG, ..., $ARG, ...)
+                      - pattern-inside: '[]string{$PROG, ..., $ARG, ...}'
+                  - metavariable-pattern:
+                      metavariable: $PROG
+                      pattern: '"=~/^(?:.*[/])?(?:git|ssh|scp|sftp|rsync|tar|curl|wget|rg|zip|hg|svn)$/"'
+                  # Everything after "--" (or git's --end-of-options) is an operand.
+                  - pattern-not-inside: exec.Command($PROG, ..., "--", ..., $ARG, ...)
+                  - pattern-not-inside: exec.CommandContext($CTX, $PROG, ..., "--", ..., $ARG, ...)
+                  - pattern-not-inside: '[]string{$PROG, ..., "--", ..., $ARG, ...}'
+                  - pattern-not-inside: exec.Command($PROG, ..., "--end-of-options", ..., $ARG, ...)
+                  - pattern-not-inside: exec.CommandContext($CTX, $PROG, ..., "--end-of-options", ..., $ARG, ...)
+                  - pattern-not-inside: '[]string{$PROG, ..., "--end-of-options", ..., $ARG, ...}'
+                  - pattern-either:
+                      - pattern-inside: exec.Command($PROG, $ARG, ...)
+                      - pattern-inside: exec.CommandContext($CTX, $PROG, $ARG, ...)
+                      - pattern-inside: '[]string{$PROG, $ARG, ...}'
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: exec.Command($PROG, ..., $PREV, $ARG, ...)
+                              - pattern-inside: exec.CommandContext($CTX, $PROG, ..., $PREV, $ARG, ...)
+                              - pattern-inside: '[]string{$PROG, ..., $PREV, $ARG, ...}'
+                          # Not the value of the option before it: any single-dash option
+                          # (-m msg, -C dir, -czf out.tgz) or a long option that takes a
+                          # separate value.
+                          - metavariable-regex:
+                              metavariable: $PREV
+                              regex: ^(?!["`](?:-[a-zA-Z]+|--(?:author|committer|grep|since|until|after|before|branch|depth|message|file|origin|reference|template|config|exclude|include|directory|output|max-count|skip|shallow-since|shallow-exclude|jobs|filter|sort|remote|regexp|glob|type|max-depth))["`]$)
+              # The argv built in a slice first and spread into the call, the usual Go
+              # shape: args := []string{"log", ...}; args = append(args, ref);
+              # exec.Command("git", args...). The slice's first item is the subcommand, so
+              # a model-chosen one counts too.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $ARGS := $INIT
+                          ...
+                          exec.Command($PROG, $ARGS...)
+                      - pattern-inside: |
+                          $ARGS := $INIT
+                          ...
+                          exec.CommandContext($CTX, $PROG, $ARGS...)
+                      - pattern-inside: |
+                          var $ARGS $TYPE
+                          ...
+                          exec.Command($PROG, $ARGS...)
+                      - pattern-inside: |
+                          var $ARGS $TYPE
+                          ...
+                          exec.CommandContext($CTX, $PROG, $ARGS...)
+                  - metavariable-pattern:
+                      metavariable: $PROG
+                      pattern: '"=~/^(?:.*[/])?(?:git|ssh|scp|sftp|rsync|tar|curl|wget|rg|zip|hg|svn)$/"'
+                  - pattern-either:
+                      - patterns:
+                          - pattern-inside: $ARGS := []string{..., $ARG, ...}
+                          - pattern-not-inside: '[]string{..., "--", ..., $ARG, ...}'
+                          - pattern-not-inside: '[]string{..., "--end-of-options", ..., $ARG, ...}'
+                          - pattern-either:
+                              - pattern-inside: '[]string{$ARG, ...}'
+                              - patterns:
+                                  - pattern-inside: '[]string{..., $PREV, $ARG, ...}'
+                                  - metavariable-regex:
+                                      metavariable: $PREV
+                                      regex: ^(?!["`](?:-[a-zA-Z]+|--(?:author|committer|grep|since|until|after|before|branch|depth|message|file|origin|reference|template|config|exclude|include|directory|output|max-count|skip|shallow-since|shallow-exclude|jobs|filter|sort|remote|regexp|glob|type|max-depth))["`]$)
+                      - patterns:
+                          - pattern-inside: $ARGS = append($ARGS, ..., $ARG, ...)
+                          - pattern-not-inside: append($ARGS, ..., "--", ..., $ARG, ...)
+                          - pattern-not-inside: append($ARGS, ..., "--end-of-options", ..., $ARG, ...)
+                          # A "--" already in the slice: in its literal, or appended before.
+                          - pattern-not-inside: |
+                              $ARGS := []string{..., "--", ...}
+                              ...
+                          - pattern-not-inside: |
+                              $ARGS := []string{..., "--end-of-options", ...}
+                              ...
+                          - pattern-not-inside: |
+                              $ARGS = append($ARGS, ..., "--", ...)
+                              ...
+                          - pattern-not-inside: |
+                              $ARGS = append($ARGS, ..., "--end-of-options", ...)
+                              ...
+                          - pattern-either:
+                              - pattern-inside: append($ARGS, $ARG, ...)
+                              - patterns:
+                                  - pattern-inside: append($ARGS, ..., $PREV, $ARG, ...)
+                                  - metavariable-regex:
+                                      metavariable: $PREV
+                                      regex: ^(?!["`](?:-[a-zA-Z]+|--(?:author|committer|grep|since|until|after|before|branch|depth|message|file|origin|reference|template|config|exclude|include|directory|output|max-count|skip|shallow-since|shallow-exclude|jobs|filter|sort|remote|regexp|glob|type|max-depth))["`]$)
+          - pattern: $ARG
+          # A spread (args...) hides which positions hold values, so it isn't reported.
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: ^(?![\s\S]*\.\.\.$)
+          # A value built after a literal prefix ("origin/"+branch, fmt.Sprintf("refs/heads/%s",
+          # b), "--format="+f) can't start with "-".
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: ^(?!(?:fmt\.Sprintf\(\s*)?["`][^%"`])
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-mcp:
+        - "MCP05:2025 - Command Injection & Execution"
+      owasp-aisvs:
+        - "v1.01-C10.4.4 - Schema, Message, and Input Validation"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-88: Improper Neutralization of Argument Delimiters in a Command ('Argument Injection')"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, mcp-go, go-sdk, os-exec, git]
+      # SDK shapes checked 2026-10-24 against the tagged sources below.
+      references:
+        - https://github.com/mark3labs/mcp-go/blob/v1.3.0/mcp/prompts.go
+        - https://github.com/mark3labs/mcp-go/blob/v1.3.0/mcp/types.go
+        - https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/resource.go
+        - https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/prompt.go
+        - https://github.com/modelcontextprotocol/servers/security/advisories/GHSA-9xwc-hfwc-8w59
+        - https://nvd.nist.gov/vuln/detail/CVE-2025-68144
+        - https://git-scm.com/docs/gitcli
+        - https://github.com/mark3labs/mcp-go/blob/v1.3.0/mcp/tools.go
+        - https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/tool.go
+        - https://pkg.go.dev/os/exec
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP05-2025%E2%80%93Command-Injection%26Execution.md
+        - https://cwe.mitre.org/data/definitions/88.html

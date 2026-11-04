@@ -1,0 +1,18 @@
+# Fixture for gha-ai-agent-open-to-non-writers: discussions. claude-code-action does not run
+# on them; codex-action does.
+name: discussion-agent
+on: [discussion, discussion_comment]
+jobs:
+  answer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # ok: gha-ai-agent-open-to-non-writers
+          allowed_non_write_users: "*"
+      - uses: openai/codex-action@v1
+        with:
+          # ruleid: gha-ai-agent-open-to-non-writers
+          allow-users: "*"
+          prompt: "Answer discussion #${{ github.event.discussion.number }} and add an example to docs/."

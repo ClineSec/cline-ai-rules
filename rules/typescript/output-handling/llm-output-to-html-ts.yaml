@@ -1,0 +1,488 @@
+rules:
+  - id: llm-output-to-html-ts
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Model output is rendered as HTML here. Completions are untrusted input: anyone who can
+      influence the prompt, directly or through a web page, document, or tool result the model
+      reads, can make it emit `<img src=x onerror=...>` or a `javascript:` link, which runs in
+      your page with the user's session (XSS, account takeover, data exfiltration). Render
+      model text as text (JSX `{text}`, `textContent`), or pass any HTML, including the output
+      of a markdown converter, through DOMPurify (`DOMPurify.sanitize`) first; with
+      react-markdown, drop `rehype-raw` or add `rehype-sanitize` after it, and keep markdown-it's
+      default `html: false`. To preview generated pages, use an iframe with `sandbox` and
+      without `allow-same-origin`. Send model text from a server as JSON or text/plain, not
+      as an HTML response.
+    mode: taint
+    pattern-sources:
+      # Vercel AI SDK (server): the result object and every field of it (`text`, `steps`,
+      # `textStream`, `content`, `object`).
+      - pattern: generateText(...)
+      - pattern: streamText(...)
+      - pattern: generateObject(...)
+      - pattern: streamObject(...)
+      # AI SDK agents: `agent.generate()` / `agent.stream()` on a ToolLoopAgent built in this
+      # file, or on a receiver named like an agent.
+      - patterns:
+          - pattern-inside: |
+              $AGENT = new $CLASS(...);
+              ...
+          - metavariable-regex:
+              metavariable: $CLASS
+              regex: ^(?:ToolLoopAgent|Experimental_Agent)$
+          - pattern-either:
+              - pattern: $AGENT.generate(...)
+              - pattern: $AGENT.stream(...)
+      - patterns:
+          - pattern-either:
+              - pattern: $AGENT.generate(...)
+              - pattern: $AGENT.stream(...)
+          - metavariable-regex:
+              metavariable: $AGENT
+              regex: (?i)^(?:[\w$]+\.)*[\w$]*agent$
+      # AI SDK (client): messages, completions, and streamed objects from the React hooks.
+      - pattern: useChat(...)
+      - pattern: useCompletion(...)
+      - pattern: useObject(...)
+      - pattern: experimental_useObject(...)
+      # A value typed as an AI SDK chat message or text part (a message component's props).
+      - pattern: '($M : UIMessage)'
+      - pattern: '($M : TextUIPart)'
+      - pattern: '($M : UIMessage[])'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: 'function $F({..., $P, ...}: $TY, ...) {...}'
+              - pattern-inside: '({..., $P, ...}: $TY, ...) => $BODY'
+              - pattern-inside: '({..., $P, ...}: $TY, ...) => {...}'
+          - metavariable-regex:
+              metavariable: $TY
+              regex: (?s)^\{.*:\s*(?:Array<|ReadonlyArray<)?(?:UIMessage|TextUIPart)\b
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      type $TY = $DEF;
+                      ...
+                  - metavariable-regex:
+                      metavariable: $DEF
+                      regex: (?s)^\{.*:\s*(?:Array<|ReadonlyArray<)?(?:UIMessage|TextUIPart)\b
+              - patterns:
+                  - pattern-inside: |
+                      interface $TY { $K: $DEF }
+                      ...
+                  - metavariable-regex:
+                      metavariable: $DEF
+                      regex: ^(?:Array<|ReadonlyArray<)?(?:UIMessage|TextUIPart)\b
+          - pattern-either:
+              - pattern-inside: 'function $F({..., $P, ...}: $TY, ...) {...}'
+              - pattern-inside: '({..., $P, ...}: $TY, ...) => $BODY'
+              - pattern-inside: '({..., $P, ...}: $TY, ...) => {...}'
+          - pattern: $P
+      # OpenAI Node: Chat Completions (also legacy Completions) and Responses.
+      - patterns:
+          - pattern: $CLIENT.completions.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:create|parse|stream|runTools)$
+      - patterns:
+          - pattern: $CLIENT.responses.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:create|parse|stream|retrieve)$
+      # Anthropic TypeScript SDK (also `client.beta.messages`).
+      - patterns:
+          - pattern: $CLIENT.messages.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:create|parse|stream|toolRunner)$
+      # Google Gen AI SDK.
+      - patterns:
+          - pattern: $CLIENT.models.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:generateContent|generateContentStream)$
+      - patterns:
+          - pattern-inside: |
+              $CHAT = $CLIENT.chats.create(...);
+              ...
+          - pattern-either:
+              - pattern: $CHAT.sendMessage(...)
+              - pattern: $CHAT.sendMessageStream(...)
+      # LangChain.js / LangGraph.js runnables. `.invoke` is a common method name (Electron's
+      # ipcRenderer.invoke), so require a LangChain import in the file or a receiver named like
+      # a model, chain, agent, or graph.
+      - patterns:
+          - pattern-either:
+              - pattern: $RUNNABLE.invoke(...)
+              - pattern: $RUNNABLE.stream(...)
+              - pattern: $RUNNABLE.batch(...)
+          - pattern-either:
+              - pattern-inside: |
+                  import $IMPORT from "=~/^@?langchain(?:\/|$)/";
+                  ...
+              - pattern-inside: |
+                  import {...} from "=~/^@?langchain(?:\/|$)/";
+                  ...
+              - patterns:
+                  - pattern: $RUNNABLE.invoke(...)
+                  - metavariable-regex:
+                      metavariable: $RUNNABLE
+                      regex: (?i)^(?:[\w$]+\.)*[\w$]*(?:llm|model|chain|agent|graph|runnable)$
+    pattern-propagators:
+      # Array callbacks over tainted messages (`messages.map((m) => ...)`, then
+      # `m.parts.map((p) => ...)`) taint the callback's element parameter.
+      - patterns:
+          - pattern-either:
+              - pattern: $XS.$METHOD(($X, ...) => $BODY)
+              - pattern: $XS.$METHOD(($X, ...) => {...})
+              - pattern: $XS.$METHOD(function ($X, ...) {...})
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:map|flatMap|forEach|filter|find|findLast|reduce)$
+        from: $XS
+        to: $X
+      # Stream event listeners: `stream.on("text", (delta, snapshot) => ...)` (Anthropic) and
+      # `stream.on("content", ...)` (OpenAI).
+      - patterns:
+          - pattern-either:
+              - pattern: $XS.on($EVENT, ($X, ...) => $BODY)
+              - pattern: $XS.on($EVENT, ($X, ...) => {...})
+              - pattern: $XS.on($EVENT, ($A, $X, ...) => $BODY)
+              - pattern: $XS.on($EVENT, ($A, $X, ...) => {...})
+        from: $XS
+        to: $X
+      # useMemo(() => marked.parse(completion), [completion]): the memoized value is what the
+      # callback returns.
+      - patterns:
+          - pattern-either:
+              - pattern: $V = useMemo(() => $RET, $DEPS)
+              - pattern: $V = React.useMemo(() => $RET, $DEPS)
+              - pattern: |
+                  $V = useMemo(() => { $...BODY; return $RET; }, $DEPS)
+              - pattern: |
+                  $V = React.useMemo(() => { $...BODY; return $RET; }, $DEPS)
+        from: $RET
+        to: $V
+      # The same when the callback picks its value with a ternary
+      # (`() => (isAssistant ? render(text) : "")`): taint doesn't reach the whole expression.
+      - patterns:
+          - pattern-either:
+              - pattern: '$V = $MEMO(() => $C ? $RET : $ELSE, $DEPS)'
+              - pattern: '$V = $MEMO(() => $C ? $ELSE : $RET, $DEPS)'
+              - pattern: |
+                  $V = $MEMO(() => { $...BODY; return $C ? $RET : $ELSE; }, $DEPS)
+              - pattern: |
+                  $V = $MEMO(() => { $...BODY; return $C ? $ELSE : $RET; }, $DEPS)
+          - metavariable-regex:
+              metavariable: $MEMO
+              regex: ^(React\.)?useMemo$
+        from: $RET
+        to: $V
+      # In --taint-intrafile mode, OpenGrep drops taint from the result of an array method that
+      # takes a callback (`const part = message.parts.find((p) => p.type === "text")`); carry it
+      # when the result is assigned. Default mode doesn't need this.
+      - patterns:
+          - pattern: $R = $XS.$METHOD($CALLBACK)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:find|findLast|filter)$
+        from: $XS
+        to: $R
+    pattern-sinks:
+      # React: `dangerouslySetInnerHTML={{ __html: x }}`, including a markup object built
+      # first. The `__html` key exists only for this prop.
+      - patterns:
+          - pattern: '{..., __html: $HTML, ...}'
+          - focus-metavariable: $HTML
+      # DOM HTML sinks.
+      - patterns:
+          - pattern-either:
+              - pattern: $EL.innerHTML = $HTML
+              - pattern: $EL.innerHTML += $HTML
+              - pattern: $EL.outerHTML = $HTML
+              - pattern: $EL.outerHTML += $HTML
+              - pattern: $EL.insertAdjacentHTML($POS, $HTML)
+              - pattern: $EL.setHTMLUnsafe($HTML, ...)
+              - pattern: $RANGE.createContextualFragment($HTML)
+              - pattern: document.write(..., $HTML, ...)
+              - pattern: document.writeln(..., $HTML, ...)
+              - pattern: $WIN.document.write(..., $HTML, ...)
+              - pattern: $WIN.document.writeln(..., $HTML, ...)
+              - pattern: $FRAME.contentDocument.write(..., $HTML, ...)
+              - pattern: $FRAME.contentDocument.writeln(..., $HTML, ...)
+          - focus-metavariable: $HTML
+      # An iframe whose document is model-generated HTML, unless it is sandboxed without
+      # `allow-same-origin` (the usual way to preview generated pages safely).
+      - patterns:
+          - pattern: <iframe srcDoc={$HTML} />
+          - pattern-not: <iframe srcDoc={$HTML} sandbox="=~/^(?!.*allow-same-origin)/" />
+          - focus-metavariable: $HTML
+      - patterns:
+          - pattern: $FRAME.srcdoc = $HTML
+          - pattern-not-inside: |
+              $FRAME.sandbox = "=~/^(?!.*allow-same-origin)/";
+              ...
+          - pattern-not-inside: |
+              $FRAME.setAttribute("sandbox", "=~/^(?!.*allow-same-origin)/");
+              ...
+          - focus-metavariable: $HTML
+      # `.html(x)`: jQuery, Cheerio, and d3 set innerHTML; Hono's `c.html(x)` sends a text/html
+      # response.
+      - patterns:
+          - pattern: $OBJ.html($HTML, ...)
+          - focus-metavariable: $HTML
+      # jQuery parses a string argument as HTML in its insertion methods and in `$(html)`. The
+      # native DOM methods of the same names (`el.append(text)`) insert text, so the receiver
+      # must be a jQuery object: a `$(...)` / `jQuery(...)` chain or a `$name` variable.
+      - patterns:
+          - pattern: $JQ.$INSERT($HTML, ...)
+          - metavariable-regex:
+              metavariable: $INSERT
+              regex: ^(append|prepend|after|before|replaceWith|wrap|wrapAll|wrapInner)$
+          - metavariable-regex:
+              metavariable: $JQ
+              regex: ^(?:(?:\$|jQuery)\s*\(|(?:[\w$]+\.)*\$\w+$)
+          - focus-metavariable: $HTML
+      - patterns:
+          - pattern-either:
+              - pattern: $($HTML)
+              - pattern: jQuery($HTML)
+              - pattern: $.parseHTML($HTML, ...)
+          - focus-metavariable: $HTML
+      # Express `res.send(string)` defaults the content type to text/html. A content type set
+      # earlier (`res.type("text")`, `res.set("Content-Type", "text/plain")`) wins, and objects
+      # and arrays are sent as JSON. Next.js pages-router API responses don't default to HTML.
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.send($HTML)
+              - pattern: $RES.$M1(...).send($HTML)
+              - pattern: $RES.$M1(...).$M2(...).send($HTML)
+          - metavariable-regex:
+              metavariable: $RES
+              regex: ^(res|response)$
+          - metavariable-regex:
+              metavariable: $HTML
+              regex: (?s)^(?![\[{])(?![\w$.]*\.(?:object|steps|choices|usage|toolCalls)$)
+          - pattern-not-regex: (?i)\.(?:type|contentType)\(\s*["'`](?![^"'`]*html)
+          - pattern-not-regex: (?i)\.(?:set|header|setHeader)\(\s*["'`]content-type["'`]\s*,\s*["'`](?![^"'`]*html)
+          - pattern-not-inside: |
+              $RES.type("=~/^(?![\s\S]*html)/");
+              ...
+          - pattern-not-inside: |
+              $RES.contentType("=~/^(?![\s\S]*html)/");
+              ...
+          - pattern-not-inside: |
+              $RES.$SET("=~/(?i)^content-type$/", "=~/^(?![\s\S]*html)/");
+              ...
+          - pattern-not-inside: 'function $F($REQ, $RES: NextApiResponse, ...) {...}'
+          - pattern-not-inside: '($REQ, $RES: NextApiResponse, ...) => {...}'
+          # The raw SDK result object, which Express sends as JSON.
+          - pattern-not-inside: |
+              $HTML = await generateText(...);
+              ...
+          - pattern-not-inside: |
+              $HTML = await generateObject(...);
+              ...
+          - pattern-not-inside: |
+              $HTML = await $C.completions.create(...);
+              ...
+          - pattern-not-inside: |
+              $HTML = await $C.responses.create(...);
+              ...
+          - pattern-not-inside: |
+              $HTML = await $C.messages.create(...);
+              ...
+          - pattern-not-inside: |
+              $HTML = await $C.models.generateContent(...);
+              ...
+          - pattern-not-inside: |
+              $HTML = await $AGENT.generate(...);
+              ...
+          - focus-metavariable: $HTML
+      # Node / Express `res.write(x)` and `res.end(x)` after an explicit text/html content type.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $RES.$SET("=~/(?i)^content-type$/", "=~/(?i)text\/html/");
+                  ...
+              - pattern-inside: |
+                  $RES.type("=~/(?i)html/");
+                  ...
+              - pattern-inside: |
+                  $RES.contentType("=~/(?i)html/");
+                  ...
+              - patterns:
+                  - pattern-inside: |
+                      $RES.writeHead($STATUS, ..., $HEADERS);
+                      ...
+                  - metavariable-regex:
+                      metavariable: $HEADERS
+                      regex: (?is).*content-type["'`]?\s*[:,]\s*["'`]\s*text/html
+          - pattern-either:
+              - pattern: $RES.write($HTML, ...)
+              - pattern: $RES.end($HTML, ...)
+          - focus-metavariable: $HTML
+      # A Fetch `Response` (Next.js route handlers, Hono, workers) with a text/html content
+      # type. A string body alone defaults to text/plain.
+      - patterns:
+          - pattern: new $RESPONSE($HTML, $INIT)
+          - metavariable-regex:
+              metavariable: $RESPONSE
+              regex: ^(Response|NextResponse)$
+          - metavariable-regex:
+              metavariable: $INIT
+              regex: (?is).*content-type["'`]?\s*[:,]\s*["'`]\s*text/html
+          - focus-metavariable: $HTML
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $HEADERS = $HDEF;
+                      ...
+                  - metavariable-regex:
+                      metavariable: $HDEF
+                      regex: (?is).*content-type["'`]?\s*[:,]\s*["'`]\s*text/html
+              - pattern-inside: |
+                  $HEADERS.$SET("=~/(?i)^content-type$/", "=~/(?i)text\/html/");
+                  ...
+          - pattern-either:
+              - pattern: 'new $RESPONSE($HTML, {..., headers: $HEADERS, ...})'
+              - pattern: new $RESPONSE($HTML, $HEADERS)
+          - metavariable-regex:
+              metavariable: $RESPONSE
+              regex: ^(Response|NextResponse)$
+          - focus-metavariable: $HTML
+      # react-markdown (or any component taking `rehypePlugins`) with rehype-raw, which turns
+      # raw HTML in the markdown into real elements, and no rehype-sanitize or skipHtml.
+      - patterns:
+          - pattern-either:
+              - pattern: <$MD rehypePlugins={$PLUGINS}>...{$HTML}...</$MD>
+              - pattern: <$MD rehypePlugins={$PLUGINS} children={$HTML} />
+          - pattern-not: <$MD skipHtml rehypePlugins={$PLUGINS}>...</$MD>
+          - pattern-not: <$MD skipHtml rehypePlugins={$PLUGINS} />
+          - metavariable-regex:
+              metavariable: $PLUGINS
+              regex: (?s)^(?!.*\brehypeSanitize\b).*\brehypeRaw\b
+          - focus-metavariable: $HTML
+      # ... with the plugin list in a variable.
+      - patterns:
+          - pattern-inside: |
+              $PLUGINS = $LIST;
+              ...
+          - pattern-either:
+              - pattern: <$MD rehypePlugins={$PLUGINS}>...{$HTML}...</$MD>
+              - pattern: <$MD rehypePlugins={$PLUGINS} children={$HTML} />
+          - pattern-not: <$MD skipHtml rehypePlugins={$PLUGINS}>...</$MD>
+          - pattern-not: <$MD skipHtml rehypePlugins={$PLUGINS} />
+          - metavariable-regex:
+              metavariable: $LIST
+              regex: (?s)^(?!.*\brehypeSanitize\b).*\brehypeRaw\b
+          - focus-metavariable: $HTML
+    pattern-sanitizers:
+      # DOMPurify / isomorphic-dompurify (`DOMPurify.sanitize`, `purify.sanitize`, a named
+      # `sanitize` import), sanitize-html, and escape helpers named for what they do.
+      # sanitize-html with `allowedTags: false` or `allowVulnerableTags: true` lets script
+      # through, so it doesn't count.
+      - patterns:
+          - pattern: $SANITIZE(...)
+          - pattern-not: '$SANITIZE($X, {..., allowedTags: false, ...})'
+          - pattern-not: '$SANITIZE($X, {..., allowVulnerableTags: true, ...})'
+          - metavariable-regex:
+              metavariable: $SANITIZE
+              regex: (?i)^(?:[\w$]+\.)*(?![\w$]*un(?:escape|sanitiz|purif))[\w$]*(?:sanitiz|purif|escape|encode(?!d))[\w$]*$
+      # markdown-it escapes raw HTML unless it was built with `html: true` or the
+      # "commonmark" preset, or switched on later with `.set({ html: true })`.
+      - patterns:
+          - pattern-either:
+              - pattern: $MDIT.render(...)
+              - pattern: $MDIT.renderInline(...)
+          - pattern-not-inside: |
+              $MDIT = <... {..., html: true, ...} ...>;
+              ...
+          - pattern-not-inside: |
+              $MDIT = <... "commonmark" ...>;
+              ...
+          - pattern-not-inside: |
+              $MDIT.set({..., html: true, ...});
+              ...
+      # marked with a postprocess hook that sanitizes (`new Marked({ hooks })`, `marked.use`).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $MARKED = new $CLASS(..., {..., hooks: $HOOKS, ...}, ...);
+                  ...
+              - pattern-inside: |
+                  $MARKED.use(..., {..., hooks: $HOOKS, ...}, ...);
+                  ...
+          - metavariable-regex:
+              metavariable: $HOOKS
+              regex: (?is).*(sanitiz|purif)
+          - pattern-either:
+              - pattern: $MARKED.parse(...)
+              - pattern: $MARKED.parseInline(...)
+              - pattern: $MARKED(...)
+      # A unified pipeline with rehype-sanitize in it.
+      - patterns:
+          - pattern-either:
+              - pattern: $PROC.process(...)
+              - pattern: $PROC.processSync(...)
+          - metavariable-pattern:
+              metavariable: $PROC
+              pattern: <... rehypeSanitize ...>
+      - patterns:
+          - pattern-inside: |
+              $PROC = <... rehypeSanitize ...>;
+              ...
+          - pattern-either:
+              - pattern: $PROC.process(...)
+              - pattern: $PROC.processSync(...)
+      # jQuery's `.text(x)` setter inserts text and returns the jQuery object.
+      - patterns:
+          - pattern: $JQ.text(...)
+          - metavariable-regex:
+              metavariable: $JQ
+              regex: ^(?:(?:\$|jQuery)\s*\(|(?:[\w$]+\.)*\$\w+$)
+      # A React hook's dependency array: useMemo's value comes from its callback alone.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: useMemo($FN, $DEPS)
+              - pattern-inside: React.useMemo($FN, $DEPS)
+          - pattern: $DEPS
+      # Metadata fields that can't carry markup: counts, IDs, roles, and finish reasons.
+      - patterns:
+          - pattern: $OBJ.$FIELD
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: ^(usage|id|role|type|model|created|length|status|finish_reason|finishReason|stop_reason|totalUsage)$
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      mitre-atlas:
+        - "AML.T0077 - LLM Response Rendering"
+        - "AML.T0051 - LLM Prompt Injection"
+      cwe:
+        - "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [vercel-ai-sdk, openai, anthropic, google-genai, langchain, react, express, hono, jquery]
+      # API shapes checked 2026-10-22 against ai 7.0.150, @ai-sdk/react 4.0.154, openai 7.42.0,
+      # @anthropic-ai/sdk 1.1.0, @google/genai 2.30.0, marked 18.1.1, markdown-it 15.0.3,
+      # react-markdown 10.1.0, rehype-sanitize 6.0.0, dompurify 3.4.17, sanitize-html 2.18.1,
+      # express 5.3.0 (res.send: string -> text/html unless a type is set), hono 4.13.13 (c.html),
+      # next 16.4.2 (pages API send sets no HTML default), and the Fetch standard (string body ->
+      # text/plain).
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md
+        - https://cwe.mitre.org/data/definitions/79.html
+        - https://ai-sdk.dev/docs/ai-sdk-ui/chatbot
+        - https://github.com/remarkjs/react-markdown#security
+        - https://github.com/markdown-it/markdown-it/blob/master/docs/safety.md
+        - https://github.com/cure53/DOMPurify
+        - https://expressjs.com/en/5x/api.html#res.send
+        - https://fetch.spec.whatwg.org/#concept-bodyinit-extract

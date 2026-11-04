@@ -1,0 +1,55 @@
+# Every tunnel host has a first label longer than DNS allows; every IP is a documentation address.
+model = "gpt-5.5"
+
+[mcp_servers.productivity]
+# ruleid: mcp-config-ephemeral-remote-host-toml
+url = "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.trycloudflare.com/mcp"
+
+[mcp_servers.status]
+# ruleid: mcp-config-ephemeral-remote-host-toml
+url = 'http://status.example.com/mcp'
+
+[mcp_servers.bridge]
+command = "npx"
+# ruleid: mcp-config-ephemeral-remote-host-toml
+args = ["-y", "mcp-remote@0.1.29", "http://kb.example.net/mcp", "--allow-http"]
+
+[mcp_servers.proxy]
+command = "mcp-proxy"
+args = [
+  # ruleid: mcp-config-ephemeral-remote-host-toml
+  "http://198.51.100.7:8080/sse",
+]
+
+[mcp_servers.wiki]
+command = "uvx"
+args = ["example-org-wiki-mcp==1.0.0"]
+# ruleid: mcp-config-ephemeral-remote-host-toml
+env = { WIKI_API_URL = "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.loca.lt/api", LOG_LEVEL = "info" }
+
+[mcp_servers.wiki.env]
+# ok: mcp-config-ephemeral-remote-host-toml
+WIKI_PROXY = "http://proxy.example.com:3128"
+
+[mcp_servers.vendor]
+# ok: mcp-config-ephemeral-remote-host-toml
+url = "https://mcp.example.com/mcp"
+# A commented-out line is not configuration.
+# ok: mcp-config-ephemeral-remote-host-toml
+# url = "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.trycloudflare.com/mcp"
+
+[mcp_servers.local]
+# ok: mcp-config-ephemeral-remote-host-toml
+url = "http://localhost:8787/mcp"
+
+[mcp_servers]
+# ruleid: mcp-config-ephemeral-remote-host-toml
+socket = { url = "http://203.0.113.24:8080/mcp" }
+gateway.command = "npx"
+# ruleid: mcp-config-ephemeral-remote-host-toml
+gateway.args = ["-y", "supergateway@3.4.0", "--sse", "http://search.example.org/sse"]
+
+[model_providers.lab]
+name = "Lab models"
+# ok: mcp-config-ephemeral-remote-host-toml
+base_url = "http://203.0.113.9:11434/v1"

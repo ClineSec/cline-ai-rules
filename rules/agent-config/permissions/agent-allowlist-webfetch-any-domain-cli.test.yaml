@@ -1,0 +1,69 @@
+name: docs-sync
+on:
+  workflow_dispatch:
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync the API notes
+        run: |
+          # claude -p "x" --allowedTools "WebFetch"
+          # ruleid: agent-allowlist-webfetch-any-domain-cli
+          claude -p "Update docs/api.md from the vendor changelog" --allowedTools "Read,Edit,WebFetch" \
+            --disallowedTools "Bash(curl:*)" \
+            --max-turns 8
+      - name: Narrow fetch
+        # ok: agent-allowlist-webfetch-any-domain-cli
+        run: claude -p "Check the SDK docs" --allowedTools "Read" "WebFetch(domain:docs.example.com)"
+      - name: Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          # ruleid: agent-allowlist-webfetch-any-domain-cli
+          claude_args: --max-turns 10 --allowedTools "Read" "Grep" "WebFetch(domain:*.com)"
+          settings: |
+            {
+              "permissions": {
+                "allow": [
+                  "Read",
+                  // ruleid: agent-allowlist-webfetch-any-domain-cli
+                  "WebFetch"
+                ],
+                // ok: agent-allowlist-webfetch-any-domain-cli
+                "deny": ["WebFetch"]
+              }
+            }
+      - name: Review (old action)
+        uses: anthropics/claude-code-action@v0
+        with:
+          allowed_tools: |
+            Read
+            # ruleid: agent-allowlist-webfetch-any-domain-cli
+            WebFetch
+          # ok: agent-allowlist-webfetch-any-domain-cli
+          disallowed_tools: "WebFetch"
+      - name: Gemini
+        uses: google-github-actions/run-gemini-cli@v0
+        with:
+          settings: |
+            {
+              "general": {
+                // ruleid: agent-allowlist-webfetch-any-domain-cli
+                "defaultApprovalMode": "auto_edit"
+              },
+              "tools": {
+                "allowed": [
+                  "read_file",
+                  // ruleid: agent-allowlist-webfetch-any-domain-cli
+                  "web_fetch"
+                ],
+                // ok: agent-allowlist-webfetch-any-domain-cli
+                "core": ["web_fetch"]
+              }
+            }
+      - name: Gemini digest
+        # ruleid: agent-allowlist-webfetch-any-domain-cli
+        run: gemini -p "Summarize the release" --approval-mode auto_edit
+      - name: Prose
+        # ok: agent-allowlist-webfetch-any-domain-cli
+        run: echo "WebFetch stays out of the allow list"

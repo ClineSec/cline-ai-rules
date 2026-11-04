@@ -1,0 +1,169 @@
+# Fixture for gha-ai-agent-checkout-pr-head: pull_request_target.
+name: pr-agents
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+jobs:
+  # Read-only tools, but Claude Code still runs the checkout's hooks and MCP servers.
+  claude-review:
+    runs-on: ubuntu-latest
+    steps:
+      # ruleid: gha-ai-agent-checkout-pr-head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: anthropics/claude-code-action@v1
+        with:
+          prompt: "Review this pull request."
+          claude_args: --allowedTools "Read" "Grep"
+
+  claude-user-settings-only:
+    runs-on: ubuntu-latest
+    steps:
+      # ok: gha-ai-agent-checkout-pr-head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: anthropics/claude-code-action@v1
+        with:
+          prompt: "Review this pull request."
+          claude_args: --setting-sources user --allowedTools "Read" "Grep"
+
+  claude-cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ruleid: gha-ai-agent-checkout-pr-head
+      - run: gh pr checkout ${{ github.event.pull_request.number }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: claude -p "Summarize the change" --output-format json > review.json
+
+  claude-cli-user-settings:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ok: gha-ai-agent-checkout-pr-head
+      - run: git fetch origin pull/${{ github.event.pull_request.number }}/head && git checkout FETCH_HEAD
+      - run: claude -p "Summarize the change" --setting-sources user
+
+  codex-read-only:
+    runs-on: ubuntu-latest
+    steps:
+      # ok: gha-ai-agent-checkout-pr-head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - uses: openai/codex-action@v1
+        with:
+          prompt: "Review the diff."
+          permission-profile: ":read-only"
+
+  codex-fork:
+    runs-on: ubuntu-latest
+    steps:
+      # ruleid: gha-ai-agent-checkout-pr-head
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+      - uses: openai/codex-action@v1
+        with:
+          prompt: "Fix the lint errors."
+
+  gemini-action-read-only:
+    runs-on: ubuntu-latest
+    steps:
+      # ok: gha-ai-agent-checkout-pr-head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: google-github-actions/run-gemini-cli@v0
+        with:
+          prompt: "Summarize the change."
+          settings: '{"tools": {"core": ["read_file", "grep_search"]}}'
+
+  gemini-cli:
+    runs-on: ubuntu-latest
+    steps:
+      # ruleid: gha-ai-agent-checkout-pr-head
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+      - run: npx -y @google/gemini-cli@0.65.0 --approval-mode auto_edit -p "Update the docs"
+      # ok: gha-ai-agent-checkout-pr-head
+      - run: gemini -p "Summarize the change"
+
+  gemini-cli-read-only:
+    runs-on: ubuntu-latest
+    steps:
+      # ok: gha-ai-agent-checkout-pr-head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: gemini -p "Summarize the change"
+
+  # The PR is data in a subdirectory; the agent runs on the base branch.
+  subdir:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ok: gha-ai-agent-checkout-pr-head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr-head
+      - uses: anthropics/claude-code-action@v1
+        with:
+          prompt: "Review the files in pr-head/ as data."
+
+  # gha-ai-agent-trusts-untrusted-checkout reports the switch in this job.
+  trust-switch:
+    runs-on: ubuntu-latest
+    env:
+      GEMINI_CLI_TRUST_WORKSPACE: "true"
+    steps:
+      # ok: gha-ai-agent-checkout-pr-head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: claude -p "Review" && gemini --yolo -p "Fix the tests"
+
+  trust-switch-unquoted:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP: true
+    steps:
+      # ok: gha-ai-agent-checkout-pr-head
+      - run: gh pr checkout ${{ github.event.pull_request.number }}
+      - run: copilot -p "Review" --allow-tool 'write'
+
+  same-repo:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      # ok: gha-ai-agent-checkout-pr-head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: claude -p "Review"
+
+  no-agent:
+    runs-on: ubuntu-latest
+    steps:
+      # ok: gha-ai-agent-checkout-pr-head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: npm ci && npm test
+      - run: echo "claude -p would review this"
+
+  # opencode run allows every tool by default, with or without --auto.
+  opencode-cli:
+    runs-on: ubuntu-latest
+    steps:
+      # ruleid: gha-ai-agent-checkout-pr-head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: opencode run "Review this pull request"

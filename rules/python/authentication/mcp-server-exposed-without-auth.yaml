@@ -1,0 +1,369 @@
+rules:
+  - id: mcp-server-exposed-without-auth
+    # Sources: MCP Python SDK v2.3.0 (MCPServer has no host on the constructor; run(),
+    # run_sse_async(), run_streamable_http_async(), sse_app() and streamable_http_app() take
+    # host="127.0.0.1"; the low-level Server.streamable_http_app() takes host= and
+    # token_verifier=), v1.30.0 (FastMCP(host="127.0.0.1"), then mcp.settings.host; run() has
+    # no host), and PrefectHQ fastmcp 4.1.3 (run(), run_async() and run_http_async() take
+    # host=, defaulting to settings.host "127.0.0.1"; http_app() has no host).
+    # A server counts as protected only where the SDK enforces auth: MCPServer and FastMCP
+    # raise unless auth= comes with token_verifier= or auth_server_provider=, so any of the
+    # three on the constructor means every request needs a bearer token; fastmcp enforces
+    # FastMCP(auth=) or a later server.auth = ...; the low-level app factory enforces
+    # token_verifier=. FASTMCP_HOST doesn't matter for 1.x from 1.12.3 (the constructor always
+    # passes host, which wins over the environment); 1.2.0 to 1.12.2 and fastmcp read it. A
+    # value set in this file before fastmcp is imported is read (last branch); one from the
+    # process environment can't be seen here. mcp-server-bind-all-interfaces-config (and its
+    # -compose, -docker-run, -fastmcp-json, and -py variants) report it where it is set.
+    # fastmcp versions checked for the environment branch: v2.0.0 and v2.7.1 (ServerSettings,
+    # FASTMCP_SERVER_ prefix, read in the constructor), v2.8.0 and v2.13.3 (module-level
+    # Settings() with FASTMCP_ and FASTMCP_SERVER_ prefixes; the constructor copies its
+    # values), v2.14.0, v3.0.0, and v4.1.4 (FASTMCP_ only; run_http_async uses
+    # fastmcp.settings.host); MCP SDK v1.12.2 and v1.12.3 server.py.
+    # Settings passed as a dict literal assigned in this file (**HTTP_SETTINGS) are read.
+    # Localhost servers whose Host check is off are reported by
+    # mcp-http-transport-without-host-validation.
+    languages: [python]
+    severity: WARNING
+    message: >-
+      This MCP server listens on every network interface and has no authentication, so anyone
+      who can reach the port can list and call its tools, read its resources, and do whatever
+      those tools can do on this host. The SDK's Host-header check doesn't help: a
+      non-localhost host turns it off, and a client that isn't a browser can send any Host
+      header it likes. Bind to 127.0.0.1 (the SDK default) for local use. For a remote server,
+      require auth in the server (`token_verifier=` with `auth=AuthSettings(...)` on
+      MCPServer or FastMCP, `auth=` on fastmcp), or put it behind an authenticating proxy and
+      say so in a `# nosemgrep` comment.
+    pattern-either:
+      - patterns:
+          # Where the server is bound. The SDK server classes are named in full so imports and
+          # aliases resolve (from fastmcp import FastMCP as F matches fastmcp.FastMCP).
+          - pattern-either:
+              # MCP SDK 1.x (and fastmcp 2.x): host on the constructor.
+              - patterns:
+                  - pattern-either:
+                      - pattern: mcp.server.mcpserver.MCPServer(..., host=$HOSTV, ...)
+                      - pattern: mcp.server.mcpserver.server.MCPServer(..., host=$HOSTV, ...)
+                      - pattern: mcp.server.MCPServer(..., host=$HOSTV, ...)
+                      - pattern: mcp.server.fastmcp.FastMCP(..., host=$HOSTV, ...)
+                      - pattern: mcp.server.fastmcp.server.FastMCP(..., host=$HOSTV, ...)
+                      - pattern: mcp.server.FastMCP(..., host=$HOSTV, ...)
+                      - pattern: mcp.server.lowlevel.Server(..., host=$HOSTV, ...)
+                      - pattern: mcp.server.lowlevel.server.Server(..., host=$HOSTV, ...)
+                      - pattern: mcp.server.Server(..., host=$HOSTV, ...)
+                      - pattern: fastmcp.FastMCP(..., host=$HOSTV, ...)
+                      - pattern: fastmcp.server.FastMCP(..., host=$HOSTV, ...)
+                      - pattern: fastmcp.server.server.FastMCP(..., host=$HOSTV, ...)
+                  - pattern-not: $CLS(..., auth=$A, ...)
+                  - pattern-not: $CLS(..., token_verifier=$A, ...)
+                  - pattern-not: $CLS(..., auth_server_provider=$A, ...)
+              # The same constructors given a settings dict: FastMCP("x", **HTTP_SETTINGS).
+              - patterns:
+                  - pattern-either:
+                      - pattern: mcp.server.fastmcp.FastMCP(..., **$KW, ...)
+                      - pattern: mcp.server.fastmcp.server.FastMCP(..., **$KW, ...)
+                      - pattern: mcp.server.FastMCP(..., **$KW, ...)
+                      - pattern: fastmcp.FastMCP(..., **$KW, ...)
+                      - pattern: fastmcp.server.FastMCP(..., **$KW, ...)
+                      - pattern: fastmcp.server.server.FastMCP(..., **$KW, ...)
+                  - pattern-not: $CLS(..., auth=$A, ...)
+                  - pattern-not: $CLS(..., token_verifier=$A, ...)
+                  - pattern-not: $CLS(..., auth_server_provider=$A, ...)
+              # A server built in this file without auth, then started or served.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $S = mcp.server.mcpserver.MCPServer(...)
+                          ...
+                      - pattern-inside: |
+                          $S = mcp.server.mcpserver.server.MCPServer(...)
+                          ...
+                      - pattern-inside: |
+                          $S = mcp.server.MCPServer(...)
+                          ...
+                      - pattern-inside: |
+                          $S = mcp.server.fastmcp.FastMCP(...)
+                          ...
+                      - pattern-inside: |
+                          $S = mcp.server.fastmcp.server.FastMCP(...)
+                          ...
+                      - pattern-inside: |
+                          $S = mcp.server.FastMCP(...)
+                          ...
+                      - pattern-inside: |
+                          $S = mcp.server.lowlevel.Server(...)
+                          ...
+                      - pattern-inside: |
+                          $S = mcp.server.lowlevel.server.Server(...)
+                          ...
+                      - pattern-inside: |
+                          $S = mcp.server.Server(...)
+                          ...
+                      - pattern-inside: |
+                          $S = fastmcp.FastMCP(...)
+                          ...
+                      - pattern-inside: |
+                          $S = fastmcp.server.FastMCP(...)
+                          ...
+                      - pattern-inside: |
+                          $S = fastmcp.server.server.FastMCP(...)
+                          ...
+                  - pattern-not-inside: |
+                      $S = $CLS(..., auth=$A, ...)
+                      ...
+                  - pattern-not-inside: |
+                      $S = $CLS(..., token_verifier=$A, ...)
+                      ...
+                  - pattern-not-inside: |
+                      $S = $CLS(..., auth_server_provider=$A, ...)
+                      ...
+                  # fastmcp: auth assigned after construction.
+                  - pattern-not-inside: |
+                      $S.auth = $A
+                      ...
+                  - pattern-either:
+                      # run() and friends, or an app factory given the host.
+                      - patterns:
+                          - pattern-either:
+                              - pattern: $S.$RUN(..., host=$HOSTV, ...)
+                              - pattern: $S.$RUN(..., **$KW, ...)
+                          - pattern-not: $S.$RUN(..., token_verifier=$T, ...)
+                          # An app factory served by uvicorn: uvicorn's host decides the bind.
+                          - pattern-not-inside: uvicorn.$U(..., host=$UH, ...)
+                          - metavariable-regex:
+                              metavariable: $RUN
+                              regex: ^(run|run_async|run_http_async|run_sse_async|run_streamable_http_async|streamable_http_app|sse_app)$
+                      # 1.x: the settings object FastMCP reads when it starts.
+                      - pattern: $S.settings.host = $HOSTV
+                      # The server's ASGI app served by uvicorn, directly, through a variable,
+                      # or mounted in a Starlette or FastAPI app with no middleware.
+                      - patterns:
+                          - pattern-either:
+                              - pattern: uvicorn.$U($S.$APPF(...), ..., host=$HOSTV, ...)
+                              - pattern: uvicorn.$U($S.$APPF(...), ..., **$KW, ...)
+                              - patterns:
+                                  - pattern-either:
+                                      - pattern-inside: |
+                                          $APP = $S.$APPF(...)
+                                          ...
+                                      - pattern-inside: |
+                                          $APP = starlette.applications.Starlette(..., routes=[..., starlette.routing.Mount($P, app=$S.$APPF(...), ...), ...], ...)
+                                          ...
+                                      - pattern-inside: |
+                                          $APP = starlette.applications.Starlette(..., routes=[..., starlette.routing.Mount($P, $S.$APPF(...), ...), ...], ...)
+                                          ...
+                                      - pattern-inside: |
+                                          $APP = fastapi.FastAPI(...)
+                                          ...
+                                          $APP.mount($P, $S.$APPF(...), ...)
+                                          ...
+                                  # Middleware on the app may be the auth layer.
+                                  - pattern-not-inside: |
+                                      $APP = $K(..., middleware=$MW, ...)
+                                      ...
+                                  - pattern-not-inside: |
+                                      $APP.add_middleware(...)
+                                      ...
+                                  - pattern-not-inside: |
+                                      @$APP.middleware(...)
+                                      def $MWF(...): ...
+                                      ...
+                                  - pattern-not-inside: |
+                                      $APP = $S.$APPF(..., token_verifier=$T, ...)
+                                      ...
+                                  - pattern-either:
+                                      - pattern: uvicorn.$U($APP, ..., host=$HOSTV, ...)
+                                      - pattern: uvicorn.$U($APP, ..., **$KW, ...)
+                          - pattern-not: uvicorn.$U($S.$APPF(..., token_verifier=$T, ...), ...)
+                          - pattern-not: uvicorn.$U($S.$APPF(..., middleware=$MW, ...), ...)
+                          - metavariable-regex:
+                              metavariable: $U
+                              regex: ^(run|Config)$
+                          - metavariable-regex:
+                              metavariable: $APPF
+                              regex: ^(streamable_http_app|sse_app|http_app)$
+          # Where the all-interfaces address comes from: the argument itself (also through a module
+          # constant), an environment lookup assigned earlier (HOST = os.environ.get("HOST",
+          # "0.0.0.0"); any assignment would be too slow on large files), an argparse
+          # --host default, or a parameter default. Each branch re-matches the bind and binds $H.
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: $C(..., host=$H, ...)
+                      - pattern: $X.settings.host = $H
+                  # An app factory's own host inside uvicorn.run(...) isn't the bind.
+                  - pattern-not-inside: uvicorn.$U2(..., $C(..., host=$H, ...), ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $HV = os.environ.get($K, $H)
+                          ...
+                      - pattern-inside: |
+                          $HV = os.getenv($K, $H)
+                          ...
+                      - pattern-inside: |
+                          $HV = os.environ.get($K) or $H
+                          ...
+                      - pattern-inside: |
+                          $HV = os.getenv($K) or $H
+                          ...
+                  - pattern-either:
+                      - pattern: $C(..., host=$HV, ...)
+                      - pattern: $X.settings.host = $HV
+              - patterns:
+                  - pattern-inside: |
+                      $PARSER.add_argument("=~/^--(host|bind|listen)$/", ..., default=$H, ...)
+                      ...
+                  - pattern-either:
+                      - pattern: $C(..., host=$ARGS.$OPT, ...)
+                      - pattern: $X.settings.host = $ARGS.$OPT
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          def $F(..., $HP=$H, ...):
+                              ...
+                      - pattern-inside: |
+                          def $F(..., $HP: $TY = $H, ...):
+                              ...
+                  - pattern-either:
+                      - pattern: $C(..., host=$HP, ...)
+                      - pattern: $X.settings.host = $HP
+              # A settings dict assigned earlier: HTTP_SETTINGS = {"host": ..., "port": ...}, then
+              # FastMCP("x", **HTTP_SETTINGS). Auth keys in the dict count as protection.
+              - patterns:
+                  - pattern-inside: |
+                      $KWD = {..., "host": $H, ...}
+                      ...
+                  - pattern-not-inside: |
+                      $KWD = {..., "auth": $A, ...}
+                      ...
+                  - pattern-not-inside: |
+                      $KWD = {..., "token_verifier": $A, ...}
+                      ...
+                  - pattern-not-inside: |
+                      $KWD = {..., "auth_server_provider": $A, ...}
+                      ...
+                  - pattern: $C(..., **$KWD, ...)
+          # Every-interface addresses, also inside an environment lookup's default. A comparison
+          # against one isn't a bind.
+          - metavariable-pattern:
+              metavariable: $H
+              patterns:
+                - pattern: '"=~/^(0\.0\.0\.0|::|\[::\])$/"'
+                - pattern-not-inside: $X == $Y
+                - pattern-not-inside: $X != $Y
+      # Standalone fastmcp bound to every interface through FASTMCP_HOST set in this file. fastmcp
+      # reads it into fastmcp.settings once, when fastmcp is first imported (2.8.0 to 4.1.4;
+      # pydantic-settings reads os.environ, which os.putenv doesn't update), and run() falls
+      # back to settings.host when no host= is passed. So it counts only when set before the
+      # fastmcp import; set later, it changes nothing. FASTMCP_SERVER_HOST (read only through
+      # 2.13) and the MCP SDK's FastMCP (reads FASTMCP_HOST only through 1.12.2; from 1.12.3 the
+      # constructor's host wins) are left out. The finding lands on the run call.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  os.environ["FASTMCP_HOST"] = $H
+                  ...
+                  import fastmcp
+                  ...
+              - pattern-inside: |
+                  os.environ.setdefault("FASTMCP_HOST", $H)
+                  ...
+                  import fastmcp
+                  ...
+              - pattern-inside: |
+                  os.environ.update(..., FASTMCP_HOST=$H, ...)
+                  ...
+                  import fastmcp
+                  ...
+              - pattern-inside: |
+                  os.environ.update({..., "FASTMCP_HOST": $H, ...}, ...)
+                  ...
+                  import fastmcp
+                  ...
+          - pattern-not-inside: |
+              import fastmcp
+              ...
+              os.environ["FASTMCP_HOST"] = $H
+              ...
+          - pattern-not-inside: |
+              import fastmcp
+              ...
+              os.environ.setdefault("FASTMCP_HOST", $H)
+              ...
+          - pattern-not-inside: |
+              import fastmcp
+              ...
+              os.environ.update(..., FASTMCP_HOST=$H, ...)
+              ...
+          - pattern-not-inside: |
+              import fastmcp
+              ...
+              os.environ.update({..., "FASTMCP_HOST": $H, ...}, ...)
+              ...
+          - metavariable-pattern:
+              metavariable: $H
+              pattern: '"=~/^(0\.0\.0\.0|::|\[::\])$/"'
+          - pattern-either:
+              - pattern-inside: |
+                  $S = fastmcp.FastMCP(...)
+                  ...
+              - pattern-inside: |
+                  $S = fastmcp.server.FastMCP(...)
+                  ...
+              - pattern-inside: |
+                  $S = fastmcp.server.server.FastMCP(...)
+                  ...
+          - pattern-not-inside: |
+              $S = $CLS(..., auth=$A, ...)
+              ...
+          - pattern-not-inside: |
+              $S.auth = $A
+              ...
+          # fastmcp 2.x can also take its auth provider from FASTMCP_SERVER_AUTH.
+          - pattern-not-regex: (?s)\A(?=.*?\bFASTMCP_SERVER_AUTH\b).*
+          # Served over HTTP by fastmcp itself, with the host left to the settings. An app
+          # served by uvicorn takes uvicorn's host (the branches above read that).
+          - pattern-either:
+              - pattern: $S.run("=~/^(http|sse|streamable-http)$/", ...)
+              - pattern: $S.run(..., transport="=~/^(http|sse|streamable-http)$/", ...)
+              - pattern: $S.run_async("=~/^(http|sse|streamable-http)$/", ...)
+              - pattern: $S.run_async(..., transport="=~/^(http|sse|streamable-http)$/", ...)
+              - pattern: $S.run_http_async(...)
+          - pattern-not: $S.$M(..., host=$HX, ...)
+          - pattern-not: $S.$M(..., **$KW)
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI03 - Identity and Privilege Abuse"
+      owasp-mcp:
+        - "MCP07:2025 - Insufficient Authentication & Authorization"
+        - "MCP09:2025 - Shadow MCP Servers"
+      owasp-aisvs:
+        - "v1.01-C10.2.1 - Authentication & Authorization"
+        - "v1.01-C10.3.1 - Secure Transport"
+      mitre-atlas:
+        - "AML.T0132 - Misconfigured or Publicly Exposed AI Services"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-306: Missing Authentication for Critical Function"
+        - "CWE-1327: Binding to an Unrestricted IP Address"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, fastmcp, uvicorn, starlette, fastapi]
+      references:
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/mcpserver/server.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/lowlevel/server.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v1.30.0/src/mcp/server/fastmcp/server.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/server/mixins/transport.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/settings.py
+        - https://github.com/modelcontextprotocol/python-sdk/security/advisories/GHSA-9h52-p55h-vw2f
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP07-2025%E2%80%93Insufficient-Authentication%26Authorization.md
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP09-2025%E2%80%93Shadow-MCP-Servers.md
+        - https://cwe.mitre.org/data/definitions/1327.html

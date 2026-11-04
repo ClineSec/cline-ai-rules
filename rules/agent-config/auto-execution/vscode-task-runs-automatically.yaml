@@ -1,0 +1,70 @@
+rules:
+  - id: vscode-task-runs-automatically
+    # Regex, not JSON: OpenGrep's JSON parser skips *.code-workspace files (unknown extension),
+    # and workspace files define tasks too. tasks.json is JSONC, so commented-out lines are skipped.
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This VS Code task runs automatically, along with every task in its "dependsOn" list:
+      "folderOpen" runs it when the folder is opened, and "worktreeCreated" runs it when an agent
+      session creates a worktree, without asking (VS Code 1.142). Once a developer has allowed automatic tasks, any trusted workspace runs folderOpen
+      tasks without a prompt, and editors that ship with Workspace Trust off run them on open.
+      Anyone who can change this file, through a pull request, a compromised dependency, or a
+      worm that writes into the repo, gets code execution with the developer's credentials on
+      every machine that opens the project. The Shai-Hulud, Miasma, and keyv worms planted
+      folderOpen tasks next to agent hooks. Remove "runOn" and run the task by hand or from a
+      documented setup step; if it must stay, protect .vscode/ and workspace files with CODEOWNERS
+      review like any code that runs on checkout.
+    paths:
+      include:
+        - ".vscode/tasks.json"
+        - "*.code-workspace"
+    pattern-regex: |-
+      (?xm)
+      (?(DEFINE)
+        # One character of a key or value: a letter or its JSON \uXXXX escape.
+        (?<u> [A-Za-z] | \\u00[0-9A-Fa-f]{2} )
+        # A JSON string, so comment markers inside one (globs like "**/*.ts") are skipped.
+        (?<str> " [^"\\]*+ (?: \\. [^"\\]*+ )*+ " )
+        # Up to 250 tokens of what can follow a match: strings, whole-line // comments, runs of
+        # other text, and lone / or * that don't start or end a block comment.
+        (?<run> (?> (?&str) | (?<=\n)[\x20\t]*+//[^\n]*+ | [^"/*\n]++ | \n | (?!/\*|\*/)[/*] ){0,250}+ )
+      )
+      # Not a line comment. Possessive, so the indent can't backtrack past the check, while a
+      # // inside an earlier string on the line (a URL) still matches.
+      ^[\x20\t]*+ (?!//) [^\n]*?
+      # The key, or an escaped 5-letter key: VS Code decodes escapes before reading it.
+      " (?: runOn | (?=[^"\n]*\\u) (?&u){5} ) " \s*:\s*
+      # VS Code lowercases the value. An escaped value of 10 or 15 letters (folderOpen,
+      # worktreeCreated) is obfuscation whatever it decodes to. The value may sit on the next line.
+      " (?: (?i: folderOpen | worktreeCreated ) | (?=[^"\n]*\\u) (?&u){10} (?:(?&u){5})? ) "
+      # Not inside a /* */ comment: the next comment delimiter after the match must not be */.
+      # The scan is capped at 16 x 250 tokens (a few hundred lines): an unbounded one hits PCRE's
+      # match limit on large files and drops every finding in the file, so padding would hide the
+      # task. Past the cap the finding is kept. (A single {0,4000} is too large to compile.)
+      (?! (?&run){16}+ \*/ )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      mitre-atlas:
+        - "AML.T0011 - User Execution"
+      cwe:
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      technology: [vscode, cursor]
+      references:
+        - https://code.visualstudio.com/docs/debugtest/tasks#_run-behavior
+        - https://github.com/microsoft/vscode/blob/1.142.0/src/vs/workbench/contrib/tasks/browser/runAutomaticTasks.ts
+        - https://github.com/microsoft/vscode/blob/1.142.0/src/vs/sessions/contrib/chat/browser/worktreeCreatedTaskDispatcher.ts
+        - https://www.oasis.security/blog/cursor-security-flaw
+        - https://www.sonarsource.com/blog/mini-shai-hulud-targets-ai-coding-agents/
+        - https://www.stepsecurity.io/blog/miasma-worm-hits-microsoft-again-azure-functions-action-and-72-other-repositories-disabled-after-supply-chain-attack-targeting-ai-coding-agents
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md

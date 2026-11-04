@@ -1,0 +1,161 @@
+rules:
+  - id: agent-allowlist-webfetch-any-domain-cli
+    # Regex: CI workflows, shell scripts, Makefiles, and package.json scripts that start an
+    # agent CLI, or a GitHub Action that wraps one.
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This agent run lets the agent fetch any web address without asking: --allowedTools /
+      --allowed-tools entries such as WebFetch or WebFetch(domain:*) (Claude Code) or
+      web_fetch (Gemini CLI, which ignores web_fetch(...) arguments), --allow-tool url or
+      --allow-all-urls (GitHub Copilot CLI), Gemini's --approval-mode auto_edit, which approves
+      web_fetch along with file edits, also in headless runs, the older claude-code-action
+      allowed_tools input, and the same entries in an action's settings JSON. Agents in CI
+      and scripts usually work on text other people control (an issue, a pull request, a
+      log), and a prompt injection in it can then have the agent read a secret (a CI token,
+      an API key in the environment, source code) and send it out in the address of a
+      request to a server the attacker runs, such as https://attacker.example/?d=<secret>.
+      Allow only the hosts the agent needs (WebFetch(domain:docs.example.com),
+      --allow-url docs.example.com), or put the fetched page in the prompt yourself; for
+      Gemini CLI, keep the default approval mode and web_fetch out of the allow list.
+    paths:
+      include:
+        - ".github/workflows/*.yml"
+        - ".github/workflows/*.yaml"
+        - ".gitlab-ci.yml"
+        - ".circleci/config.yml"
+        - "azure-pipelines.yml"
+        - "bitbucket-pipelines.yml"
+        - "Jenkinsfile"
+        - "*.sh"
+        - "*.bash"
+        - "*.zsh"
+        - "Makefile"
+        - "GNUmakefile"
+        - "*.mk"
+        - "justfile"
+        - "Justfile"
+        - "package.json"
+      # Dockerfiles, compose files, and dev containers are left out, as in
+      # ai-cli-bypass-flag-invocation.
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              # The value of an --allowedTools / --allowed-tools / --allowed_tools flag on a line
+              # that isn't a # comment, up to the next --flag or the end of the command (lines
+              # joined with \ continue it). Quoted and parenthesized values are taken whole.
+              # --disallowedTools doesn't match.
+              - pattern-regex: |-
+                  (?xm)
+                  ^[\x20\t]*+ (?!\#) [^\n]*? (?<![\w-]) \K --allowed[-_]?[tT]ools (?: = | [\x20\t]++ )
+                  (?: " [^"\n]*+ " | ' [^'\n]*+ ' | \( [^)\n]*+ \) | [^\n"'(\\-] | \\ (?!\r?\n) | \\\r?\n | -(?!-[a-zA-Z]) )*+
+              # claude-code-action v0's allowed_tools input, on its line or as a block scalar.
+              - pattern-regex: |-
+                  (?xm)
+                  ^ (?<ind>[\x20\t]*+) allowed_tools [\x20\t]*+ : [^\n]*+
+                  (?: \n (?: \k<ind> [\x20\t]++ [^\n]*+ | [\x20\t]*+ (?=\n) ) )*+
+              # An allow list in an action's settings JSON (claude-code-action and run-gemini-cli
+              # take a settings input): Claude Code permissions.allow, Gemini CLI tools.allowed.
+              - patterns:
+                  - pattern-regex: |-
+                      (?xm)
+                      ^ (?<sind>[\x20\t]*+) settings [\x20\t]*+ : [^\n]*+
+                      (?: \n (?: \k<sind> [\x20\t]++ [^\n]*+ | [\x20\t]*+ (?=\n) ) )*+
+                  - pattern-regex: '"(?:allow|allowed|allowedTools)"\s*+:\s*+\[[^\]]*+\]'
+          # A bare WebFetch (or WebFetch()) or a domain: rule for any host (Claude Code), or a
+          # web_fetch entry with or without arguments (Gemini CLI).
+          - pattern-regex: |-
+              (?x)
+              # --- web fetch any host (begin): build.py keeps this block identical in the
+              # agent-allowlist-webfetch-any-domain rules; edit every copy together. ---
+              (?(DEFINE)
+                # A DNS label as written, and one with a * in it. In Claude Code and Cursor rules a *
+                # other than a leading *. matches text within one label.
+                (?<wflit> [A-Za-z0-9_-]++ )
+                (?<wfwild> [A-Za-z0-9_-]*+ \* [A-Za-z0-9_*-]*+ )
+                # Where a host pattern ends: a port, path, closing bracket, quote, separator, or the end.
+                (?<wfend> (?= [:/)"'`\s,;\]}] | $ ) )
+                # Top-level names that public DNS never answers (.local is mDNS; the private names of
+                # scripts/gen_mcp_remote_host.py plus the RFC 2606 / 6761 reserved names), so a wildcard
+                # under one can't reach an attacker's server.
+                (?<wfpriv> (?i: local | localhost | internal | lan | home | corp | intranet | private
+                  | consul | proxy | lab | wg | monitor | hammernet | test | invalid | example | onion
+                  | arpa ) (?&wfend) )
+                # Country-code second levels that anyone can register under (co.uk, com.au).
+                (?<wfcc2> (?i: co | com | net | org | ne | or ) \. [A-Za-z]{2} )
+                # Tunnels and free app and page hosts, where anyone can get a subdomain and read its
+                # request logs (scripts/gen_mcp_remote_host.py's services plus free static page hosts).
+                (?<wfshared> (?i: trycloudflare\.com | ngrok-free\.(?:app|dev|pizza) | ngrok\.(?:app|dev|io|pizza)
+                  | loca\.lt | localtunnel\.me | lhr\.life | lhr\.rocks | serveo\.net | pinggy(?:-free)?\.link
+                  | tunnelmole\.net | bore\.pub | loclx\.io | devtunnels\.ms | app\.github\.dev
+                  | oast\.(?:pro|live|site|online|fun|me) | oastify\.com | burpcollaborator\.net
+                  | onrender\.com | fly\.dev | herokuapp\.com | vercel\.app | netlify\.app | railway\.app
+                  | workers\.dev | deno\.dev | deno\.net | replit\.app | koyeb\.app | hf\.space | modal\.run
+                  | github\.io | gitlab\.io | pages\.dev | web\.app | firebaseapp\.com | glitch\.me | surge\.sh
+                  # Tailscale Funnel publishes any tailnet's node under ts.net.
+                  | ts\.net ) )
+                # A host pattern that matches hosts anyone can own: every host (*, *.*), a wildcard in the
+                # registrable label (*.com, *example.com, docs.*.com, *.co.uk), or any subdomain of a tunnel
+                # or free hosting domain (*.trycloudflare.com, *.up.railway.app). A wildcard under a domain
+                # someone owns (*.example.com, api-*.example.com, example.*) or a private name (*.local) is
+                # scoped.
+                (?<anyhost>
+                    (?= \.*+ \* ) [*.]++ (?&wfend)
+                  | (?: (?: (?&wflit) | (?&wfwild) ) \. )*? (?&wfwild) \. (?! (?&wfpriv) )
+                    (?: (?&wfcc2) | (?&wflit) ) \.?+ (?&wfend)
+                  | \* \. (?: (?&wflit) \. )*? (?&wfshared) \.?+ (?&wfend) )
+              )
+              # --- web fetch any host (end) ---
+              (?<! [\w(:*.-] )
+              (?: WebFetch (?: \( \s*+ \) | \( domain: (?&anyhost) \) )? | web_fetch (?: \( [^)\n]*+ \) )? )
+              (?! [\w(.-] )
+      # Copilot CLI: --allow-tool url (no argument) approves every URL.
+      - patterns:
+          - pattern-regex: |-
+              (?xm)
+              ^[\x20\t]*+ (?!\#) [^\n]*? (?<![\w-]) \K --allow-tool (?: = | [\x20\t]++ )
+              (?: " [^"\n]*+ " | ' [^'\n]*+ ' | \( [^)\n]*+ \) | [^\n"'(\\-] | \\ (?!\r?\n) | \\\r?\n | -(?!-[a-zA-Z]) )*+
+          - pattern-regex: (?<![\w(:*.-])url(?![\w(.:-])
+      # Copilot CLI --allow-all-urls, and Gemini CLI --approval-mode auto_edit (web_fetch is
+      # allowed for every URL in auto_edit, policies/write.toml), not on a # comment line.
+      - pattern-regex: |-
+          (?xm)
+          ^[\x20\t]*+ (?!\#) [^\n]*? (?<![\w-]) \K
+          (?: --allow-all-urls (?: =true )? | --approval-mode (?: = | [\x20\t]++ ) ["']?+ auto_edit ["']?+ ) (?! [\w-] )
+      # A run-gemini-cli settings input that sets the auto_edit approval mode.
+      - patterns:
+          - pattern-regex: |-
+              (?xm)
+              ^ (?<sind>[\x20\t]*+) settings [\x20\t]*+ : [^\n]*+
+              (?: \n (?: \k<sind> [\x20\t]++ [^\n]*+ | [\x20\t]*+ (?=\n) ) )*+
+          - pattern-regex: '"defaultApprovalMode"\s*+:\s*+"auto_edit"'
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0086 - Exfiltration via AI Agent Tool Invocation"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code, gemini-cli, copilot-cli, github-actions]
+      references:
+        - https://code.claude.com/docs/en/cli-reference
+        - https://code.claude.com/docs/en/permissions#webfetch
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/policy/config.ts
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/policy/policies/write.toml
+        - https://github.com/anthropics/claude-code-action/blob/v0.0.63/action.yml
+        - https://github.com/google-github-actions/run-gemini-cli/blob/v0.1.22/action.yml
+        - https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#tool-permission-patterns
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

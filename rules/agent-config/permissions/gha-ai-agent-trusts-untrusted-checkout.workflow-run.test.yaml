@@ -1,0 +1,30 @@
+# Fixture for gha-ai-agent-trusts-untrusted-checkout: workflow_run, issue_comment, and a
+# workflow-level env entry.
+name: explain-ci-failure
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+  issue_comment:
+    types: [created]
+env:
+  # ruleid: gha-ai-agent-trusts-untrusted-checkout
+  GEMINI_CLI_TRUST_WORKSPACE: 'true'
+jobs:
+  explain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - run: npx -y @google/gemini-cli@0.65.0 -p "Explain the failure in ci.log"
+  pr-command:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+      # ruleid: gha-ai-agent-trusts-untrusted-checkout
+      - run: npx -y @google/gemini-cli@0.65.0 --skip-trust -p "Answer the maintainer's question"
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      - run: gemini -p "Answer the maintainer's question" --approval-mode default

@@ -1,0 +1,138 @@
+[
+  {
+    "hooks": {
+      "SessionStart": [
+        {
+          "hooks": [
+            // ruleid: agent-hook-runs-local-script
+            { "type": "command", "command": "node .github/setup.js" },
+            // ruleid: agent-hook-runs-local-script
+            { "type": "command", "command": "node .claude/setup.mjs" },
+            // ruleid: agent-hook-runs-local-script
+            { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-start.sh" },
+            // ruleid: agent-hook-runs-local-script
+            { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/tools/bootstrap" },
+            // ruleid: agent-hook-runs-local-script
+            { "type": "command", "command": "bash -c './scripts/warm-cache.sh'" },
+            // ruleid: agent-hook-runs-local-script
+            { "type": "command", "command": "uv run scripts/sync_env.py" },
+            // ruleid: agent-hook-runs-local-script
+            { "type": "command", "command": "cd \"$HOME/src/app\" && node tools/prime.cjs" },
+            // ruleid: agent-hook-runs-local-script
+            { "type": "command", "command": "pwsh -NoProfile -File .\\.claude\\hooks\\session-start.ps1" },
+            // ruleid: agent-hook-runs-local-script
+            { "type": "command", "command": "powershell -File \"$env:CLAUDE_PROJECT_DIR\\tools\\bootstrap.ps1\"" },
+            // ruleid: agent-hook-runs-local-script
+            { "type": "command", "command": "node --import tsx .claude/hooks/prime.ts" },
+            // ok: agent-hook-runs-local-script
+            { "type": "command", "command": "pwsh -File C:\\Tools\\hooks\\notify.ps1" },
+            // ok: agent-hook-runs-local-script
+            { "type": "command", "command": ".\\node_modules\\.bin\\eslint.cmd --fix" },
+            // ok: agent-hook-runs-local-script
+            { "type": "command", "command": "echo session started" },
+            // ok: agent-hook-runs-local-script
+            { "type": "command", "command": "~/.claude/hooks/notify.sh" },
+            // ok: agent-hook-runs-local-script
+            { "type": "command", "command": "/usr/local/bin/team-audit-log" }
+          ]
+        }
+      ],
+      "PostToolUse": [
+        {
+          "matcher": "Write|Edit",
+          "hooks": [
+            // ruleid: agent-hook-runs-local-script
+            { "type": "command", "command": ".claude/hooks/format.sh", "timeout": 30 },
+            {
+              "type": "command",
+              "command": "node",
+              // ruleid: agent-hook-runs-local-script
+              "args": [".github/lint-hook.js", "--fix"]
+            },
+            {
+              "type": "command",
+              "command": "npx",
+              // ok: agent-hook-runs-local-script
+              "args": ["prettier@3.6.2", "--write", "src/index.ts"]
+            },
+            // ok: agent-hook-runs-local-script
+            { "type": "command", "command": "npx prettier@3.6.2 --write ." },
+            // ok: agent-hook-runs-local-script
+            { "type": "command", "command": "ruff format --config .github/ruff.toml" },
+            // ok: agent-hook-runs-local-script
+            { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}\"/scripts/format.js" },
+            // ok: agent-hook-runs-local-script
+            { "type": "http", "url": "http://localhost:8080/hooks/post-tool-use" }
+          ]
+        }
+      ]
+    },
+    // ok: agent-hook-runs-local-script
+    "statusLine": { "type": "command", "command": "~/.claude/statusline.sh" },
+    "env": {
+      // ok: agent-hook-runs-local-script
+      "command": "node .github/setup.js"
+    }
+  },
+  {
+    "version": 1,
+    "hooks": {
+      "sessionStart": [
+        // ruleid: agent-hook-runs-local-script
+        { "command": "python3 -u .cursor/hooks/prime_context.py" }
+      ],
+      "afterFileEdit": [
+        // ok: agent-hook-runs-local-script
+        { "command": "./node_modules/.bin/eslint --fix" },
+        // ok: agent-hook-runs-local-script
+        { "type": "prompt", "prompt": "Check that the edit kept tests passing." }
+      ]
+    }
+  },
+  {
+    "hooks": {
+      "BeforeTool": [
+        {
+          "matcher": "write_file|replace",
+          "hooks": [
+            // ruleid: agent-hook-runs-local-script
+            { "name": "secret-check", "type": "command", "command": "$GEMINI_PROJECT_DIR/.gemini/hooks/secrets.sh", "timeout": 5000 },
+            // ok: agent-hook-runs-local-script
+            { "name": "ext-check", "type": "command", "command": "${extensionPath}/hooks/check.sh" }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "example-plugin",
+    "hooks": [
+      "./config/extra-hooks.json",
+      {
+        "PostToolUse": [
+          {
+            "matcher": "Write|Edit",
+            "hooks": [
+              // ruleid: agent-hook-runs-local-script
+              { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/tools/lint-hook.sh" },
+              // ok: agent-hook-runs-local-script
+              { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/format.sh" }
+            ]
+          }
+        ]
+      }
+    ],
+    "experimental": {
+      "monitors": [
+        // ruleid: agent-hook-runs-local-script
+        { "name": "queue", "command": "python3 scripts/watch_queue.py", "description": "Queue events" }
+      ]
+    }
+  },
+  [
+    // ruleid: agent-hook-runs-local-script
+    { "name": "deploys", "command": "./scripts/watch-deploys.sh", "description": "Deploy status", "when": "always" },
+    // ok: agent-hook-runs-local-script
+    { "name": "errors", "command": "tail -F ./logs/error.log", "description": "Application error log" }
+  ]
+]

@@ -1,0 +1,26 @@
+# Every platform host has a first label longer than DNS allows.
+name: Fixture servers
+version: 0.0.1
+schema: v1
+mcpServers:
+  - name: Productivity suite
+    type: streamable-http
+    # ruleid: mcp-config-paas-remote-host-yaml
+    url: https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.onrender.com/mcp
+  - name: Worker
+    command: npx
+    args:
+      - -y
+      - mcp-remote@0.1.29
+      # ruleid: mcp-config-paas-remote-host-yaml
+      - https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.workers.dev/sse
+  - name: Billing
+    command: uvx
+    args: ["example-org-billing-mcp==1.2.0"]
+    env:
+      # ok: mcp-config-paas-remote-host-yaml
+      BILLING_API_URL: https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.herokuapp.com
+  - name: Vendor
+    type: streamable-http
+    # ok: mcp-config-paas-remote-host-yaml
+    url: https://mcp.example.com/mcp

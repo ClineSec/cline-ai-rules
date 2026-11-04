@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/ClaimsCopilot/ClaimsCopilot.csproj" />
+  <Project Path="tests/ClaimsCopilot.Tests/ClaimsCopilot.Tests.csproj" />
+</Solution>

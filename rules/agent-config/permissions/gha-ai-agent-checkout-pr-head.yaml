@@ -1,0 +1,523 @@
+rules:
+  - id: gha-ai-agent-checkout-pr-head
+    # A job that checks out a pull request's code (or the branch behind a workflow_run) into
+    # the workspace root, on a trigger that runs with the base repository's secrets
+    # (pull_request_target, workflow_run, issue_comment), and then runs a coding agent there.
+    #
+    # Claude Code loads the checkout's own configuration with no trust switch: a `claude -p`
+    # run (and the Agent SDK) never shows the workspace-trust dialog, and still runs hooks
+    # from .claude/settings.json, applies its env block and apiKeyHelper, and connects every
+    # .mcp.json server (code.claude.com/docs/en/permissions, "What runs before you trust a
+    # folder", fetched 2026-10-22). claude-code-action v1.0.258 loads user, project, and
+    # local settings unless claude_args passes --setting-sources, and sets
+    # enableAllProjectMcpServers. So any Claude Code agent is reported, whatever its tools,
+    # unless it is limited to --setting-sources user.
+    #
+    # Other agents are reported when they can run commands or edit files: the PR's files,
+    # including AGENTS.md / GEMINI.md and code comments, are then instructions an outsider
+    # wrote to an agent that holds the job's token and secrets.
+    #
+    # A job with a workspace-trust switch (GEMINI_CLI_TRUST_WORKSPACE, --skip-trust,
+    # --dangerously-bypass-hook-trust, --trust-folder, Copilot prompt-mode env, cursor-agent
+    # --trust / --approve-mcps, claude ultrareview's --trust-workspace and
+    # CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK) is left to
+    # gha-ai-agent-trusts-untrusted-checkout, which reports the switch: dropping it is the
+    # narrower fix there.
+    languages: [yaml]
+    severity: ERROR
+    message: >-
+      This job checks out code from a pull request (or the branch behind a workflow_run) on a
+      trigger that runs with the base repository's secrets and token, and runs a coding agent
+      in that checkout. Whoever opened the pull request controls what the agent reads there:
+      Claude Code runs the checkout's hooks, MCP servers, and settings env in headless runs,
+      and any agent that can run commands or edit files takes the checkout's AGENTS.md, docs,
+      and code comments as instructions. Run the agent on the base branch and check the pull
+      request out into a subdirectory as data (actions/checkout with path:), pass
+      --setting-sources user to Claude Code, give the agent read-only tools, or move the job
+      to a pull_request trigger with no secrets.
+    paths:
+      include:
+        - ".github/workflows/*.yml"
+        - ".github/workflows/*.yaml"
+    patterns:
+      - pattern-inside: |
+          $ONKEY: $ON
+          ...
+          jobs: $_
+      - metavariable-regex:
+          metavariable: $ONKEY
+          regex: ^["']?on["']?$
+      - metavariable-regex:
+          metavariable: $ON
+          regex: (?s).*?(?<![\w-])(?:pull_request_target|workflow_run|issue_comment)(?![\w-])
+      - pattern-inside: |
+          $JOB:
+            ...
+            steps: $STEPS
+            ...
+      # ---------------------------------------------------------------------------------------
+      # 1. The finding: the step that puts the pull request's code in the workspace root. An
+      #    actions/checkout of the PR head, merge ref, or fork repository with no path:, or
+      #    gh pr checkout / git fetch of a pull ref in a run: step.
+      # ---------------------------------------------------------------------------------------
+      - pattern-either:
+          - patterns:
+              - pattern-inside: |
+                  uses: $CO
+                  ...
+                  with:
+                    ...
+                    $REFKEY: $REF
+                    ...
+              - pattern-not-inside: |
+                  uses: $CO
+                  ...
+                  with:
+                    ...
+                    path: $P
+                    ...
+              - pattern: 'uses: $CO'
+              - metavariable-regex:
+                  metavariable: $CO
+                  regex: ^["']?actions/checkout@
+              - metavariable-regex:
+                  metavariable: $REFKEY
+                  regex: ^(?:ref|repository)$
+              - metavariable-regex:
+                  metavariable: $REF
+                  regex: (?s).*?(?:github\.event\.pull_request\.(?:head\.(?:sha|ref|repo\.full_name)|merge_commit_sha)|github\.head_ref|github\.event\.workflow_run\.head_(?:sha|branch|repository\.full_name)|refs/pull/)
+          - patterns:
+              - pattern: 'run: $REF'
+              - metavariable-regex:
+                  metavariable: $REF
+                  regex: (?s).*?(?<![\w-])(?:gh\s+pr\s+checkout|git\s+(?:fetch|pull)\s[^\n]*?(?<![\w-])(?:refs/)?pull/)
+      # ---------------------------------------------------------------------------------------
+      # 2. The same job runs a coding agent that loads the checkout's config or can act.
+      # ---------------------------------------------------------------------------------------
+      - metavariable-pattern:
+          metavariable: $STEPS
+          pattern-either:
+            # Claude Code: claude-code-action, claude-code-base-action, or the claude CLI,
+            # whatever its tools, unless it reads only user settings.
+            - patterns:
+                - pattern: 'uses: $AG'
+                - metavariable-regex:
+                    metavariable: $AG
+                    regex: ^["']?anthropics/claude-code-(?:base-)?action@
+                - pattern-either:
+                    - patterns:
+                        - pattern: 'uses: $AG'
+                        - pattern-not-inside: |
+                            uses: $AG
+                            ...
+                            with:
+                              ...
+                              claude_args: $SS
+                              ...
+                    - patterns:
+                        - pattern-inside: |
+                            uses: $AG
+                            ...
+                            with:
+                              ...
+                              claude_args: $SS
+                              ...
+                        - metavariable-regex:
+                            metavariable: $SS
+                            regex: (?s)^(?!.*(?<![\w-])--setting-sources(?:=|\s+)\\?["']?user\\?["']?(?![\w,-]))
+            - patterns:
+                - pattern: 'run: $CMD'
+                - metavariable-regex:
+                    metavariable: $CMD
+                    regex: (?m)\A(?s:.*?)(?:^[ \t]*+|(?<=[;&|(`])[ \t]*+|(?<![\w-])(?:then|do|else)[ \t]++)(?:[A-Za-z_]\w*+=\S*+[ \t]++|(?:sudo|env|exec|nohup|time|timeout)[ \t]++)*+["']?+(?:[\w.~${}-]*+/)*+(?:claude|(?:npx|bunx|pnpx)[ \t]++(?:(?:-y|--yes)[ \t]++)?@anthropic-ai/claude-code(?:@[\w.^~*-]+)?)(?=[\s;&|"'`)]|$)
+                - metavariable-regex:
+                    metavariable: $CMD
+                    regex: (?s)^(?!.*(?<![\w-])--setting-sources(?:=|\s+)\\?["']?user\\?["']?(?![\w,-]))
+            # openai/codex-action v1.13 unless it is read-only.
+            - patterns:
+                - pattern: 'uses: $AG'
+                - metavariable-regex:
+                    metavariable: $AG
+                    regex: ^["']?openai/codex-action@
+                - pattern-not-inside: |
+                    uses: $AG
+                    ...
+                    with:
+                      ...
+                      sandbox: read-only
+                      ...
+                - pattern-not-inside: |
+                    uses: $AG
+                    ...
+                    with:
+                      ...
+                      permission-profile: ":read-only"
+                      ...
+                - pattern-not-inside: |
+                    uses: $AG
+                    ...
+                    with:
+                      ...
+                      safety-strategy: read-only
+                      ...
+            # google-github-actions/run-gemini-cli v0.1.22 (always --yolo) unless its "core"
+            # tool list is read-only. Same test as gha-ai-agent-untrusted-trigger.
+            - patterns:
+                - pattern: 'uses: $AG'
+                - metavariable-regex:
+                    metavariable: $AG
+                    regex: ^["']?google-github-actions/run-gemini-cli@
+                - pattern-either:
+                    - patterns:
+                        - pattern: 'uses: $AG'
+                        - pattern-not-inside: |
+                            uses: $AG
+                            ...
+                            with:
+                              ...
+                              settings: $S
+                              ...
+                    - patterns:
+                        - pattern-inside: |
+                            uses: $AG
+                            ...
+                            with:
+                              ...
+                              settings: $S
+                              ...
+                        - metavariable-regex:
+                            metavariable: $S
+                            regex: |-
+                              (?xs)
+                              # --- run-gemini-cli acting test (begin): build.py keeps this block identical in
+                              # gha-ai-agent-untrusted-trigger; edit both together. ---
+                              (?(DEFINE)
+                                (?<ro> (?: echo | cat | ls | head | tail | wc | grep | pwd
+                                         | git \s++ (?:diff|log|show|status|blame)
+                                         | gh \s++ [\w-]++ \s++ (?:view|list|diff|status|checks) ) (?![\w-]) )
+                              )
+                              ^ (?: (?! .*? \\?"(?:core|coreTools)\\?" \s*+ : )
+                                  | .*? \\?"(?:core|coreTools)\\?" \s*+ : \s*+ \[ [^\]]*? \\?"
+                                    (?: run_shell_command (?: \\?" | \( \s*+ (?! (?&ro) ) )
+                                      | ShellTool | write_file | replace | WriteFileTool | EditTool ) )
+                              # --- run-gemini-cli acting test (end) ---
+            # Agent CLIs with a switch that lets them run commands or edit files, with the
+            # regex gha-ai-agent-untrusted-trigger uses (build.py checks the two match).
+            - patterns:
+                - pattern: 'run: $CMD'
+                # A run: script (or a job's steps) that starts an agent CLI in command position
+                # with a switch that lets it act. Quoted strings are skipped while looking for
+                # the switch, so a prompt that mentions a flag doesn't count.
+                - metavariable-regex:
+                    metavariable: $CMD
+                    regex: |-
+                      (?xm)
+                      # --- gha agent-CLI acting regex (begin): build.py keeps this block identical in
+                      # gha-ai-agent-untrusted-trigger; edit both together. ---
+                      (?(DEFINE)
+                        (?<q> " (?:[^"\\\n] | \\.)*+ " | ' [^'\n]*+ ' )
+                        # The rest of one command: words, quoted strings, \-newline continuations.
+                        (?<g> (?: (?&q) | \\\r?\n | (?&fold) | \\[^\r\n] | [^\n"'\#;&|\\] )*? )
+                        # A folded scalar (run: >-) or a multi-line quoted one continues a command
+                        # on the next line; a line that starts with a flag or a quote can only be such
+                        # a continuation, since it would not be a command of its own.
+                        (?<fold> \r?\n [ \t]*+ (?= -{1,2}[A-Za-z] | ["'] ) )
+                        (?<end> (?= \\?["'`)\s;&|] | $ ) )
+                        (?<ws> [ \t]++ | [ \t]*+ \\\r?\n [ \t]*+ | [ \t]*+ (?&fold) )
+                        (?<v> (?:=|(?&ws)) \\?["']? )
+                        (?<pkgv> (?: @[\w.^~*-]+ )? )
+                        (?<runner> (?: npx | bunx | pnpx | pnpm (?&ws) dlx | yarn (?&ws) dlx | npm (?&ws) exec )
+                          (?: (?&ws) (?: -y | --yes | -- ) )*+ (?&ws) )
+                        # Command position: line start (after a YAML "- " or "run:" when a job's
+                        # steps are scanned), after ; & | ( `, or then/do/else; then NAME=value
+                        # assignments, wrappers, and a path to the binary.
+                        (?<pos> (?: ^ [ \t]*+ (?: - [ \t]++ )? (?: run [ \t]*+ : [ \t]*+ ["']? )?
+                                  | (?<=[;&|(`]) [ \t]*+
+                                  | (?<![\w-]) (?:then|do|else) [ \t]++ )
+                                (?: [A-Za-z_]\w*+ = (?: (?&q) | [^\s"'\#;&|]*+ ) [ \t]++
+                                  | (?: sudo | env | exec | nohup | time | timeout )
+                                    (?: [ \t]++ (?: -[^\s;&|]++ | \d+[smhd]? | [A-Za-z_]\w*=[^\s;&|]*+ ) )*+ [ \t]++ )*+
+                                ["']?+ (?: [\w.~${}-]*+ / )*+ )
+                        (?<ro> (?: gh \s++ [\w-]++ \s++ (?:view|list|diff|status|checks)
+                                 | git \s++ (?:diff|log|show|status|blame)
+                                 | cat | ls | head | tail | wc | grep | rg | echo | pwd ) (?![\w-]) )
+                        # Claude Code tools that act: Bash bare or with a wildcard (not a
+                        # read-only command), and the edit tools.
+                        (?<cctool> (?<![\w(]) (?: Bash (?![\w(])
+                                                | Bash \( \s*+ (?: \*?+ \s*+ \) | (?! (?&ro) ) [^)]*? \* [^)]*+ \) )
+                                                | (?:Multi)?Edit | Write | NotebookEdit ) (?!\w) )
+                        # The values after a list flag, up to the next --flag.
+                        (?<list> (?: \\\r?\n | \r?\n [ \t]*+ (?=["']) | (?! [ \t]-- ) [^\n;&|] )*? )
+                      )
+                      \A (?s:.*?) (?&pos)
+                      (?:
+                        # Claude Code 2.1.308: allowed Bash or edit tools, an auto-approving
+                        # permission mode, or the bypass flag.
+                        (?: claude | (?&runner) @anthropic-ai/claude-code (?&pkgv) ) (?&end) (?&g) (?<=\s)
+                        (?: --dangerously-skip-permissions (?&end)
+                          | --permission-mode (?&v) (?:acceptEdits|auto|bypassPermissions) (?&end)
+                          | --allowed-?[Tt]ools (?&v) (?&list) (?&cctool) )
+                        # Codex 0.163: plain codex exec is read-only; these write or drop the sandbox.
+                      | (?: codex | (?&runner) @openai/codex (?&pkgv) ) (?&end) (?&g) (?<=\s)
+                        (?: --full-auto | --approve-for-me | --not-so-yolo | --yolo | --dangerously-bypass-approvals-and-sandbox
+                          | (?:-s|--sandbox) (?&v) (?:workspace-write|danger-full-access)
+                          | (?:-c|--config) (?&v) sandbox_mode [ \t]*=[ \t]* \\?["']? (?:workspace-write|danger-full-access) ) (?&end)
+                        # Gemini CLI 0.65 and Qwen Code 0.26: yolo or auto_edit approval, or an
+                        # allowed shell command that is not read-only, or the write tools.
+                      | (?: gemini | qwen | (?&runner) (?:@google/gemini-cli|@qwen-code/qwen-code) (?&pkgv) ) (?&end) (?&g) (?<=\s)
+                        (?: (?: --yolo (?:=true)? | -y | --approval-mode (?&v) (?:yolo|auto_edit) ) (?&end)
+                          | --allowed-tools (?&v) (?&list) (?<![\w(])
+                            (?: run_shell_command (?!\() | run_shell_command \( \s*+ (?! (?&ro) ) | write_file | replace ) )
+                        # GitHub Copilot CLI 1.0.102.
+                      | (?: copilot | gh (?&ws) copilot | (?&runner) @github/copilot (?&pkgv) ) (?&end) (?&g) (?<=\s)
+                        (?: (?: --allow-all-tools | --allow-all | --yolo ) (?&end)
+                          | --allow-tool (?&v) (?: shell (?!\() | shell \( \s*+ (?! (?&ro) ) | write ) )
+                        # Cursor CLI: --force / -f / --yolo.
+                      | cursor-agent (?&end) (?&g) (?<=\s) (?: --force | -f | --yolo ) (?&end)
+                        # Cline CLI 3.0.73 auto-approves every tool for a task run (a quoted or
+                        # $VAR prompt) unless --auto-approve false or plan mode is passed.
+                      | (?: cline | (?&runner) (?:cline|@cline/cli) (?&pkgv) ) (?&end)
+                        (?! (?&g) (?<=\s) (?: --plan | -p | --auto-approve (?&v) false | -i | --tui | --acp ) (?&end) )
+                        (?= (?&g) (?<=\s) \\?+ (?: ["'] | \$ ) )
+                        # Amp execute mode does not ask before running tools.
+                      | amp (?&end) (?&g) (?<=\s) (?: -x | --execute ) (?&end)
+                        # goose run: goose's default mode is autonomous.
+                      | goose (?&ws) run (?&end)
+                        # opencode 1.19 run (and github run): every tool is allowed unless config
+                        # sets it to ask or deny, so a run acts with or without --auto.
+                      | (?: opencode | (?&runner) opencode-ai (?&pkgv) ) (?: (?&ws) github )? (?&ws) run (?&end)
+                        # Kiro CLI and Amazon Q Developer CLI.
+                      | (?: kiro-cli | q (?&ws) chat ) (?&end) (?&g) (?<=\s) --trust-all-tools (?&end)
+                      )
+                      # --- gha agent-CLI acting regex (end) ---
+      # ---------------------------------------------------------------------------------------
+      # 3. Not a job gha-ai-agent-trusts-untrusted-checkout reports: no trust switch in the
+      #    job's steps, its env, or the workflow-level env. The env entries are literal
+      #    pattern-not-inside filters, for quoted and bare true (YAML reads them as different
+      #    values); a re-binding pattern-either with a regex on the env block cost more on
+      #    large workflows. CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK takes any of Claude
+      #    Code's on values (1, true, yes, on, in any casing), too many spellings for literal
+      #    filters, so its job and workflow env entries get the two pattern-eithers below: the
+      #    job passes when the variable is absent, or set to a value that is not on.
+      # ---------------------------------------------------------------------------------------
+      - metavariable-regex:
+          metavariable: $STEPS
+          regex: (?s)^(?!.*(?:(?<![\w-])(?:GEMINI_CLI_TRUST_WORKSPACE|GITHUB_COPILOT_PROMPT_MODE_(?:REPO_HOOKS|WORKSPACE_MCP|EXTENSIONS))[ \t]*[:=][ \t]*\\?["']?(?i:true)|(?<![\w-])CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK[ \t]*[:=][ \t]*\\?["']?(?i:1|true|yes|on)(?![\w.])|(?<![\w-])--(?:skip-trust|dangerously-bypass-hook-trust|trust-folder|trust-workspace|trust|approve-mcps)(?![\w-])))
+      - pattern-not-inside: |
+          $JOB:
+            ...
+            env:
+              ...
+              GEMINI_CLI_TRUST_WORKSPACE: "true"
+              ...
+            ...
+      - pattern-not-inside: |
+          $JOB:
+            ...
+            env:
+              ...
+              GEMINI_CLI_TRUST_WORKSPACE: true
+              ...
+            ...
+      - pattern-not-inside: |
+          $JOB:
+            ...
+            env:
+              ...
+              GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS: "true"
+              ...
+            ...
+      - pattern-not-inside: |
+          $JOB:
+            ...
+            env:
+              ...
+              GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS: true
+              ...
+            ...
+      - pattern-not-inside: |
+          $JOB:
+            ...
+            env:
+              ...
+              GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP: "true"
+              ...
+            ...
+      - pattern-not-inside: |
+          $JOB:
+            ...
+            env:
+              ...
+              GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP: true
+              ...
+            ...
+      - pattern-not-inside: |
+          $JOB:
+            ...
+            env:
+              ...
+              GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS: "true"
+              ...
+            ...
+      - pattern-not-inside: |
+          $JOB:
+            ...
+            env:
+              ...
+              GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS: true
+              ...
+            ...
+      - pattern-not-inside: |
+          env:
+            ...
+            GEMINI_CLI_TRUST_WORKSPACE: "true"
+            ...
+          ...
+          jobs: $_
+      - pattern-not-inside: |
+          env:
+            ...
+            GEMINI_CLI_TRUST_WORKSPACE: true
+            ...
+          ...
+          jobs: $_
+      - pattern-not-inside: |
+          env:
+            ...
+            GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS: "true"
+            ...
+          ...
+          jobs: $_
+      - pattern-not-inside: |
+          env:
+            ...
+            GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS: true
+            ...
+          ...
+          jobs: $_
+      - pattern-not-inside: |
+          env:
+            ...
+            GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP: "true"
+            ...
+          ...
+          jobs: $_
+      - pattern-not-inside: |
+          env:
+            ...
+            GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP: true
+            ...
+          ...
+          jobs: $_
+      - pattern-not-inside: |
+          env:
+            ...
+            GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS: "true"
+            ...
+          ...
+          jobs: $_
+      - pattern-not-inside: |
+          env:
+            ...
+            GITHUB_COPILOT_PROMPT_MODE_EXTENSIONS: true
+            ...
+          ...
+          jobs: $_
+      - pattern-either:
+          - patterns:
+              - pattern-either: [{pattern: 'uses: $CO'}, {pattern: 'run: $REF'}]
+              - pattern-not-inside: |
+                  $JOB:
+                    ...
+                    env:
+                      ...
+                      CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK: $UJ
+                      ...
+                    ...
+          - patterns:
+              - pattern-either: [{pattern: 'uses: $CO'}, {pattern: 'run: $REF'}]
+              - pattern-inside: |
+                  $JOB:
+                    ...
+                    env:
+                      ...
+                      CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK: $UJ
+                      ...
+                    ...
+              - metavariable-regex:
+                  metavariable: $UJ
+                  regex: (?s)^(?!["']?(?i:1|true|yes|on)["']?$)
+      - pattern-either:
+          - patterns:
+              - pattern-either: [{pattern: 'uses: $CO'}, {pattern: 'run: $REF'}]
+              - pattern-not-inside: |
+                  env:
+                    ...
+                    CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK: $UW
+                    ...
+                  ...
+                  jobs: $_
+          - patterns:
+              - pattern-either: [{pattern: 'uses: $CO'}, {pattern: 'run: $REF'}]
+              - pattern-inside: |
+                  env:
+                    ...
+                    CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK: $UW
+                    ...
+                  ...
+                  jobs: $_
+              - metavariable-regex:
+                  metavariable: $UW
+                  regex: (?s)^(?!["']?(?i:1|true|yes|on)["']?$)
+      # 4. A same-repository guard (if: on head.repo or workflow_run.head_repository) keeps
+      #    forks out.
+      - pattern-either:
+          - patterns:
+              - pattern-either: [{pattern: 'uses: $CO'}, {pattern: 'run: $REF'}]
+              - pattern-not-inside: |
+                  if: $C
+                  ...
+          - patterns:
+              - pattern-either: [{pattern: 'uses: $CO'}, {pattern: 'run: $REF'}]
+              - pattern-inside: |
+                  if: $C
+                  ...
+              - metavariable-regex:
+                  metavariable: $C
+                  regex: (?s)^(?!.*(?:head\.repo|head_repository)\.(?:full_name|fork))
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+        - "LLM01:2026 - Prompt Injection"
+        - "LLM01:2025 - Prompt Injection"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+        - "ASI04 - Agentic Supply Chain Vulnerabilities"
+        - "ASI01 - Agent Goal Hijack"
+      owasp-aisvs:
+        - "v1.01-AC.11.2 - AI Code-Review & Assistant Bot Hardening"
+        - "v1.01-AC.11.7 - AI Code-Review & Assistant Bot Hardening"
+      mitre-atlas:
+        - "AML.T0081 - Modify AI Agent Configuration"
+        - "AML.T0051.001 - LLM Prompt Injection: Indirect"
+      cwe:
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+      # Step order is not checked (a checkout after the agent step still fires), an agent
+      # pointed at a subdirectory with working-directory: is not followed, and a trust-switch
+      # spelling anywhere in the job hands it to the trust rule even when that rule does not
+      # match it.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [github-actions, claude-code, codex, gemini-cli, copilot-cli, cursor-cli, cline-cli, amp, goose, opencode, kiro-cli]
+      references:
+        - https://code.claude.com/docs/en/permissions#what-runs-before-you-trust-a-folder
+        - https://github.com/anthropics/claude-code-action/blob/v1.0.258/base-action/src/parse-sdk-options.ts
+        - https://github.com/anthropics/claude-code-action/blob/v1.0.258/base-action/src/setup-claude-code-settings.ts
+        - https://github.com/openai/codex-action/blob/v1.13/docs/security.md
+        - https://github.com/google-github-actions/run-gemini-cli/blob/v0.1.22/action.yml
+        - https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/

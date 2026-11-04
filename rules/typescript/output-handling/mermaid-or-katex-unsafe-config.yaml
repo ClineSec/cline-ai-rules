@@ -1,0 +1,176 @@
+rules:
+  - id: mermaid-or-katex-unsafe-config
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      This Mermaid or KaTeX setting lets the diagram or formula source put script in your
+      page. Chat UIs render Mermaid and math straight from model answers, so anyone who can
+      steer the model (through a web page, document, ticket, or tool result it reads) writes
+      that source. Mermaid's `securityLevel: "loose"` skips the DOMPurify pass over the
+      finished SVG and leaves `click` links and callbacks unchecked, so
+      `click A href "javascript:..."` runs script when a user clicks the node; a `secure` list
+      without `securityLevel` lets a `%%{init: ...}%%` directive inside the diagram switch to
+      loose on its own. KaTeX's `trust: true`, or a trust function that allows `\href`, `\url`,
+      or `\includegraphics` without checking the URL, renders `\href{javascript:...}` links,
+      `\htmlStyle` overlays, and remote images that load as soon as the answer appears. Keep
+      Mermaid at its default `strict` (or `sandbox`, which renders into a sandboxed iframe),
+      wire diagram clicks in your own code instead of loose mode, and keep `securityLevel` in
+      any `secure` list you set. Leave KaTeX's `trust` off, or allow only the commands you
+      need and check `context.protocol` against `https` and `_relative`. If this renderer only
+      ever shows text your team wrote, the risk is low.
+    pattern-either:
+      # Mermaid `securityLevel: "loose"` as a property or an assignment. Covers
+      # mermaid.initialize / mermaidAPI.initialize / init, Streamdown's `mermaid={{ config }}`
+      # prop and createMermaidPlugin({ config }), rehype-mermaid and mermaid-isomorphic
+      # `mermaidConfig`, and site config objects (Docusaurus, VitePress). A string constant, an
+      # enum member named Loose, and a ternary that can pick either also match.
+      - patterns:
+          - pattern-either:
+              - pattern: '{..., securityLevel: $V, ...}'
+              - pattern: $O.securityLevel = $V
+          # No metavariable-regex or -comparison inside this block: with one, OpenGrep 1.30.2
+          # aborts the whole file ("Invalid_argument: String.sub") on a value that starts with
+          # a parenthesized receiver, such as `(prefs ?? DEFAULTS).securityLevel`. So the enum
+          # member is spelled out instead of matched as $E.$M with a regex on $M.
+          - metavariable-pattern:
+              metavariable: $V
+              patterns:
+                - pattern-either:
+                    - pattern: '"loose"'
+                    - pattern: $E.loose
+                    - pattern: $E.Loose
+                    - pattern: $E.LOOSE
+                # Not a value inside a call, list, or comparison (a zod enum, a level check).
+                - pattern-not-inside: $F(...)
+                - pattern-not-inside: '[...]'
+                - pattern-not-inside: $A === $B
+                - pattern-not-inside: $A !== $B
+                # `"loose" as const` binds $V with and without the cast; keep one.
+                - pattern-not-inside: $X as $T
+          - focus-metavariable: $V
+      # Mermaid's `secure` keys can only be set through initialize(); directives in the diagram
+      # text can change anything else. A `secure` list without securityLevel (an empty one
+      # included) lets `%%{init: {"securityLevel": "loose"}}%%` in model output switch the
+      # level. A list built with a spread may include it, so it is left alone. The value must
+      # be the bare list: `[...] as string[]` binds twice.
+      - patterns:
+          - pattern-regex: (?s)\A(?=.*?["'][^"'\n]*mermaid).*
+          - pattern: '{..., secure: $ARR, ...}'
+          - metavariable-regex:
+              metavariable: $ARR
+              regex: ^\[(?![\s\S]*(?:securityLevel|\.\.\.))[^\]]*\]$
+          - focus-metavariable: $ARR
+      # KaTeX `trust`, in a file that names KaTeX in a string (an import of katex,
+      # katex/contrib/auto-render, rehype-katex, markdown-it-texmath's katex engine, the
+      # @vscode and @mdit markdown-it KaTeX plugins, or marked-katex-extension, which all pass
+      # their options to KaTeX). Flagged: `trust: true` (or a constant holding true); a
+      # function that always returns true; and a function that never reads the URL or its
+      # protocol and either names \href, \url, or \includegraphics (allowing them), checks
+      # the command against a list in this file that holds one, or is a blocklist written as
+      # one negated expression (`ctx.command !== "\\includegraphics"`).
+      # Arrow functions and literals bind as `trust: $T`.
+      - patterns:
+          - pattern-regex: (?s)\A(?=.*?["'][^"'\n]*katex).*
+          - pattern: '{..., trust: $T, ...}'
+          - metavariable-regex:
+              metavariable: $T
+              regex: >-
+                ^(?:true|(?:async\s*)?(?:\([^)]*\)|[\w$]+)\s*(?::[^=]*)?=>\s*(?:true|\{\s*return\s+true\s*;?\s*\}))$|^(?=(?:async\s*)?(?:\(|[\w$]+\s*=>))(?![\s\S]*protocol)(?![\s\S]*(?<!\\)\burl\b)(?:[\s\S]*\\\\(?:href|url|includegraphics)\b|(?:async\s*)?(?:\([^)]*\)|[\w$]+)\s*(?::[^=]*)?=>\s*(?!\{)[^\n]*?(?:!==?|(?<![!=])!(?![!=])))
+          - focus-metavariable: $T
+      - patterns:
+          - pattern-regex: (?s)\A(?=.*?["'][^"'\n]*katex).*
+          - pattern: '{..., trust: $T, ...}'
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^[\w$]+$
+          - metavariable-pattern:
+              metavariable: $T
+              pattern: 'true'
+          - focus-metavariable: $T
+      - patterns:
+          - pattern-regex: (?s)\A(?=.*?["'][^"'\n]*katex).*
+          - pattern-either:
+              - pattern-inside: |
+                  const $LIST = [..., "=~/^\\\\(?:href|url|includegraphics)$/", ...];
+                  ...
+              - pattern-inside: |
+                  const $LIST = new Set([..., "=~/^\\\\(?:href|url|includegraphics)$/", ...]);
+                  ...
+          - pattern: '{..., trust: $T, ...}'
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^(?=(?:async\s*)?(?:\(|[\w$]+\s*=>))(?![\s\S]*protocol)(?![\s\S]*(?<!\\)\burl\b)(?![\s\S]*(?:!==?|(?<![!=])!(?![!=])))
+          - metavariable-pattern:
+              metavariable: $T
+              pattern: $LIST
+          - focus-metavariable: $T
+      # `trust: function () {...}` and `trust() {...}` parse as methods: bind the body, and
+      # put the finding on the `trust` key.
+      - patterns:
+          - pattern-regex: (?s)\A(?=.*?["'][^"'\n]*katex).*
+          - pattern-inside: '{..., trust($...P) { $...BODY }, ...}'
+          - metavariable-regex:
+              metavariable: $...BODY
+              regex: ^return\s+true\s*;?$|^(?![\s\S]*protocol)(?![\s\S]*(?<!\\)\burl\b)[\s\S]*\\\\(?:href|url|includegraphics)\b
+          - pattern-regex: (?<![\w$.])trust(?=\s*(?::\s*(?:async\s+)?function\b|\())
+      - patterns:
+          - pattern-regex: (?s)\A(?=.*?["'][^"'\n]*katex).*
+          - pattern-either:
+              - pattern-inside: |
+                  const $LIST = [..., "=~/^\\\\(?:href|url|includegraphics)$/", ...];
+                  ...
+              - pattern-inside: |
+                  const $LIST = new Set([..., "=~/^\\\\(?:href|url|includegraphics)$/", ...]);
+                  ...
+          - pattern-inside: '{..., trust($...P) { $...BODY }, ...}'
+          - metavariable-regex:
+              metavariable: $...BODY
+              regex: ^(?![\s\S]*protocol)(?![\s\S]*(?<!\\)\burl\b)(?![\s\S]*(?:!==?|(?<![!=])!(?![!=])))
+          - metavariable-pattern:
+              metavariable: $...BODY
+              pattern: $LIST
+          - pattern-regex: (?<![\w$.])trust(?=\s*(?::\s*(?:async\s+)?function\b|\())
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      mitre-atlas:
+        - "AML.T0077 - LLM Response Rendering"
+        - "AML.T0051 - LLM Prompt Injection"
+      cwe:
+        - "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mermaid, katex, streamdown, react-markdown, unified, rehype-katex, rehype-mermaid, markdown-it, marked]
+      # Checked 2026-10-23 against the published packages. mermaid 12.2.0: securityLevel is
+      # strict | loose | antiscript | sandbox, default strict; only loose skips DOMPurify on the
+      # rendered SVG (mermaidAPI render), skips sanitizeUrl on click links (utils formatUrl), and
+      # binds `click X callback` to window functions (setClickFun); antiscript and strict
+      # DOMPurify labels and the SVG; sandbox renders into an iframe with sandbox="allow-popups
+      # allow-top-navigation-by-user-activation". Default `secure` is [secure, securityLevel,
+      # startOnLoad, maxTextSize, suppressErrorRendering, maxEdges]; directive and setConfig
+      # values pass through sanitize(), which deletes those keys, so `%%{init}%%` can't set
+      # securityLevel unless the site's list drops it. katex 0.19.0: trust is boolean or
+      # function, default false; it gates \href, \url, \includegraphics, \htmlClass, \htmlId,
+      # \htmlStyle, \htmlData (Settings.isTrusted), and KaTeX itself filters no URL scheme.
+      # Option pass-through checked in rehype-katex 7.0.1, @vscode/markdown-it-katex 1.1.2,
+      # markdown-it-texmath 1.0.0 (katexOptions), @mdit/plugin-katex 1.1.4,
+      # marked-katex-extension 5.1.13, streamdown 2.7.1 (mermaid.config prop),
+      # @streamdown/mermaid 1.0.3 (createMermaidPlugin config, default strict),
+      # @streamdown/math 1.0.3 (no trust option), rehype-mermaid 3.0.0 and mermaid-isomorphic
+      # 3.1.0 (mermaidConfig into mermaid.initialize). react-katex 3.1.0 and react-latex-next
+      # 3.0.0 take no trust option.
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md
+        - https://cwe.mitre.org/data/definitions/79.html
+        - https://mermaid.js.org/config/usage.html#securitylevel
+        - https://mermaid.js.org/config/directives.html
+        - https://katex.org/docs/options.html
+        - https://katex.org/docs/security.html
+        - https://github.com/advisories/GHSA-v8qj-hxv7-mgvv
+        - https://github.com/advisories/GHSA-wvh5-6vjm-23qh
+        - https://github.com/advisories/GHSA-xpjq-3w4w-w5wr

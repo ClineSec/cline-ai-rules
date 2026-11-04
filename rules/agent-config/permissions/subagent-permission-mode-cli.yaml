@@ -1,0 +1,163 @@
+rules:
+  - id: subagent-permission-mode-cli
+    # Regex over command lines in CI files, shell scripts, Makefiles, and package.json scripts,
+    # with the command-position groups of ai-cli-bypass-flag-invocation. Python and JS/TS
+    # launches are -cli-py and -cli-ts.
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This command starts Claude Code with a subagent, passed as JSON to --agents, whose
+      permissionMode is acceptEdits or auto. When the session runs in Manual (`default`) or
+      `dontAsk` mode, which is how `claude -p` starts when no --permission-mode is given,
+      Claude Code runs that subagent in the mode its definition names: acceptEdits approves
+      file edits and rm, mv, cp, and sed in the working directory without asking, and auto
+      lets a classifier approve shell commands and network requests. Whatever the model
+      delegates to it then skips the limits the session's --permission-mode and
+      --allowedTools were meant to set, and a prompt injection in the issue, pull request, or
+      log the job reads can change files or run commands with the job's credentials. Leave
+      permissionMode out of the definition so the subagent inherits the session's mode, give
+      the subagent a tools list without Edit, Write, or Bash, or allow the specific commands
+      it needs with --allowedTools (Bash(npm test)).
+    # Claude Code 2.1.310 CLI reference (--agents takes the JSON object, or with -p a file path
+    # from v2.1.281) and sub-agents docs (CLI-defined subagents take permissionMode; under a
+    # default or dontAsk session it applies, bypassPermissions never since v2.1.267), read
+    # 2026-10-25. A file path (--agents ./agents.json) and a value built at run time
+    # ($(cat ...), jq) can't be read here. Settings JSON (--settings, defaultMode) is not an
+    # agent definition and stays quiet.
+    paths:
+      include:
+        - ".github/workflows/*.yml"
+        - ".github/workflows/*.yaml"
+        - ".gitlab-ci.yml"
+        - ".circleci/config.yml"
+        - "azure-pipelines.yml"
+        - "bitbucket-pipelines.yml"
+        - "Jenkinsfile"
+        - "*.sh"
+        - "*.bash"
+        - "*.zsh"
+        - "Makefile"
+        - "GNUmakefile"
+        - "*.mk"
+        - "justfile"
+        - "Justfile"
+        - "package.json"
+    pattern-regex: |-
+      (?xm)
+      (?(DEFINE)
+        # --- shared command-position groups (begin): build.py keeps this block identical in
+        # ai-cli-bypass-flag-invocation and ai-cli-default-auto-approve; edit all three together. ---
+        # A quoted string, consumed whole so text inside it (a prompt, an echo message) is
+        # never read as a program or a flag. \" escapes inside "..." are skipped.
+        (?<q> " (?: [^"\\\n]++ | \\. )*+ " | ' [^'\n]*+ ' )
+        # A quote with no partner later on the line (an apostrophe in a plain YAML scalar).
+        (?<lone> " (?![^"\n]*") | ' (?![^'\n]*') )
+        # The rest of one command: words, quoted strings, \-newline continuations, and
+        # redirections like 2>&1. It stops at a newline, a comment, and ; & | separators.
+        # Each step is atomic and takes a whole word, so a long line costs one step per word,
+        # not per character: per-character steps hit PCRE's match limit on a line of about
+        # 25 KB, and OpenGrep then drops every finding in the file.
+        (?<g> (?> (?&q) | (?&lone) | \\\r?\n | \\[^\r\n] | \d?[<>]&\d? | [^\s"'\#;&|\\<>]++
+          | [^\n"'\#;&|\\] )*? )
+        # Everything before the program on its line, which may span earlier commands. A # that
+        # follows whitespace starts a comment and ends the search. A quoted string is stepped
+        # into only where it holds a command: a YAML or JSON value (run: "...", package.json
+        # scripts), an assignment (CMD="...", alias x='...'), or the argument of sh -c, eval,
+        # and Jenkins' sh '...'. Other strings (echo, grep, prompts) are skipped whole.
+        (?<pre> (?> (?<= : | :\s | = | -c\s | -lc\s | -ec\s | \beval\s | \bsh\s | \bbash\s | \bzsh\s ) ["']
+          | (?&q) | (?&lone) | \\[^\r\n] | (?<=\S)\#
+          # A run of plain words in one atomic step (a program never starts inside one, for
+          # the same match limit); it stops before a shell keyword, which a program can follow.
+          | (?: (?! (?:then|do|else|if|elif|while|until) [ \t] ) [^\s"'\#\\;&|(`{]++ [ \t]*+ )++
+          | [^\n"'\#\\] )*? )
+        # The program is in command position: at the start of the line (after indentation, a
+        # YAML list dash, a key such as run: or script:, a NAME = assignment, or a Makefile
+        # recipe's @ - + prefix), after ; & | ( ` { or a shell keyword (then, do, else, if,
+        # elif, while, until, maybe with !), or at the start of a
+        # quoted string stepped into above.
+        # Prose that mentions a CLI (a prompt: | block, a message) is not in command position.
+        # NAME=value assignments and wrappers like sudo, env, timeout, nohup, exec and xargs
+        # may come before the program. A program run by docker run or ssh is not followed.
+        (?<cmd>
+          (?: ^ (?: \t [@+-]{1,2}
+                  | [ \t]*+ (?: - [ \t]++ )?
+                    # A shell case arm's label (cline) or a|b)), consumed whole so the label
+                    # itself is never read as the program.
+                    (?: \(? [^\s()|;&"'$]++ (?: \| [^\s()|;&"'$]++ )*+ \) [ \t]++ )?+
+                    (?: [\w.-]++ [ \t]*+ : [ \t]++ | [\w.-]++ [ \t]*+ [:?+!]?= [ \t]*+ )? )
+            | (?<=[;&|(`{]) [ \t]*+
+            | (?<![\w-]) (?:then|do|else|if|elif|while|until) [ \t]++ (?: ! [ \t]++ )?
+            | (?<= : ["'] | :\s["'] | =["'] | c\s["'] | \beval\s["'] | \bsh\s["'] | \bbash\s["'] | \bzsh\s["'] ) )
+          (?: [A-Za-z_]\w*+ = (?: (?&q) | [^\s"'\#;&|]*+ ) [ \t]++
+            | (?: sudo | env | exec | nohup | time | command | timeout | xargs | nice | setsid | stdbuf )
+              (?: [ \t]++ (?: -u [ \t]++ [^\s;&|]++ | -[^\s=;&|]++ (?:=[^\s;&|]*+)? | \d+[smhd]? | [A-Za-z_]\w*=[^\s;&|]*+ ) )*+
+              [ \t]++ )*
+          # A path to the binary, maybe quoted: ./node_modules/.bin/claude, "$HOME/bin/codex".
+          ["']?+ (?: [\w.~${}-]*+ / )*+
+        )
+        (?<ws> [ \t]++ | [ \t]*+ \\\r?\n [ \t]*+ )
+        (?<v> (?:=|(?&ws)) \\?["']? )
+        (?<end> (?= \\?["'`)\s;&|] | $ ) )
+        # A package runner in front of a package name: npx -y @anthropic-ai/claude-code.
+        (?<runner> (?: npx | bunx | pnpx | pnpm (?&ws) dlx | yarn (?&ws) dlx | npm (?&ws) exec )
+          (?: (?&ws) (?: -y | --yes | -q | --quiet | -- ) )*+ (?&ws) )
+        (?<pkgv> (?: @[\w.^~*-]+ )? )
+        # --- shared command-position groups (end) ---
+        # A variable that names the tool: $(CLAUDE), ${CODEX_BIN}, $GEMINI.
+        (?<claude> claude | (?&runner) @anthropic-ai/claude-code (?&pkgv)
+          | \$ (?: \( (?i:\w*claude\w*) \) | \{ (?i:\w*claude\w*) \} | (?i:\w*claude\w*) ) )
+        # permissionMode set to a mode that loosens a Manual or dontAsk session, as JSON text,
+        # maybe with \" escapes (inside a double-quoted shell string).
+        (?<pm> \\?" permissionMode \\?" \s*+ : \s*+ \\?" (?:acceptEdits|auto) \\?" )
+        # The --agents value: one quoted argument holding that JSON. Shell quotes can span lines,
+        # as in the docs' multi-line example, so these may cross newlines; the argument ends at its
+        # own closing quote, so a --settings JSON later on the line is never read.
+        (?<sqjson> ' [^']*? (?&pm) [^']*+ ' )
+        # Runs of plain characters are single atomic steps, so a long string doesn't hit PCRE's
+        # match limit (permissionMode always starts at a quote or a backslash).
+        (?<dqjson> " (?> [^"\\]++ | \\. )*? (?&pm) (?: [^"\\]++ | \\. )*+ " )
+        (?<json> (?&sqjson) | (?&dqjson) )
+      )
+      (?:
+        # Prose keys (a step's name:, a package.json "description") are not commands.
+        ^ (?! [ \t]*+ (?:-[ \t]+)? "? (?:name|description|summary|title|message) "? [ \t]*+ : )
+        (?&pre) (?&cmd) \K
+        (?&claude) (?&end) (?&g) (?<=\s) --agents (?: = | (?&ws) ) (?&json)
+        # The JSON kept in a shell variable that a later --agents "$VAR" passes on.
+      | ^ [ \t]*+ (?: (?: export | readonly | local | declare (?:[ \t]++-\w++)*+ ) [ \t]++ )?
+        \K (?<var> [A-Za-z_]\w*+ ) = (?&json)
+        (?= (?s:.{0,60000}?) --agents (?: = | (?&ws) ) "? \$ \{? \k<var> \b )
+        # claude-code-action's claude_args input, inline or in a block scalar, reported on its
+        # key as ai-cli-bypass-flag-invocation-gha does.
+      | ^ (?<ind> [ \t]*+ ) \K claude_args [ \t]*+ : [ \t]*+
+        (?: [|>][-+]?[ \t]*+ \r?\n (?: (?: \k<ind> [ \t]++ [^\n]*+ | [ \t]*+ ) \r?\n )*? \k<ind> [ \t]++ )?
+        [^\n]*? (?<= [\s"':] ) --agents (?: = | (?&ws) ) (?&json)
+      )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI03 - Identity and Privilege Abuse"
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-269: Improper Privilege Management"
+      # The job's author writes both the session flags and the subagent definition; the finding
+      # marks a subagent the session's limits don't cover.
+      confidence: LOW
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code]
+      references:
+        - https://code.claude.com/docs/en/cli-reference
+        - https://code.claude.com/docs/en/sub-agents#permission-modes
+        - https://code.claude.com/docs/en/permission-modes
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

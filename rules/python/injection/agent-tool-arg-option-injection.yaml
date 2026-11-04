@@ -1,0 +1,274 @@
+rules:
+  - id: agent-tool-arg-option-injection
+    # Agent-framework sibling of mcp-tool-arg-option-injection (the CVE-2025-68144 shape):
+    # an agent tool argument becomes an argv item of git or another option-parsing program
+    # with no "--" before it. Same sanitizers and sinks (build.py SHARED_BLOCKS); the
+    # pattern-sources block is shared with agent-tool-arg-to-shell: edit both together.
+    languages: [python]
+    severity: WARNING
+    message: >-
+      An agent tool argument is passed to git (or ssh, rsync, tar, curl, wget, rg) as a
+      command-line argument with no `--` before it and no check for a leading dash. The model
+      chooses tool arguments, and a prompt injection can choose them for it: a value like
+      `--output=/home/user/.bashrc` (git diff), `--upload-pack=...` (git fetch), `--pre=...`
+      (rg), or `-oProxyCommand=...` (ssh) is read as an option, which can overwrite files or
+      run commands. Put `"--"` before user values where the program accepts it, reject values
+      that start with `-`, or check them against an allowlist (for git refs, resolve them with
+      `git rev-parse --verify` first).
+    mode: taint
+    pattern-sources:
+      # A tool function's parameters, which the model fills in. Parameters typed int, float,
+      # bool, Literal[...] (or an alias of one assigned earlier in the file), a framework
+      # context (RunContext, RunContextWrapper, ToolContext,
+      # ToolRuntime, RunnableConfig), an Injected* argument the application supplies, or a
+      # string constrained by an anchored pattern (Field(pattern=r"^...$")) are skipped: the
+      # frameworks validate arguments against the annotation with pydantic before the call.
+      - patterns:
+          - pattern-either:
+              # LangChain @tool (langchain_core.tools, re-exported by langchain.tools and,
+              # before 1.0, langchain.agents), CrewAI @tool, OpenAI Agents SDK @function_tool.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          @$DEC
+                          def $F(...): ...
+                      - pattern-inside: |
+                          @$DEC(...)
+                          def $F(...): ...
+                  - metavariable-pattern:
+                      metavariable: $DEC
+                      pattern-either:
+                        - pattern: langchain_core.tools.tool
+                        - pattern: langchain.tools.tool
+                        - pattern: langchain.agents.tool
+                        - pattern: crewai.tools.tool
+                        - pattern: agents.function_tool
+              # pydantic-ai: @agent.tool takes a RunContext first (pydantic-ai rejects a
+              # context tool without one, and no MCP server SDK uses RunContext), and
+              # @agent.tool_plain. mcp-tool-arg-to-shell skips the RunContext form.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          @$AGENT.tool
+                          def $F(...): ...
+                      - pattern-inside: |
+                          @$AGENT.tool(...)
+                          def $F(...): ...
+                  - pattern-either:
+                      - pattern-inside: |
+                          def $F($CTX: pydantic_ai.RunContext, ...): ...
+                      - pattern-inside: |
+                          def $F($CTX: pydantic_ai.RunContext[...], ...): ...
+              - pattern-inside: |
+                  @$AGENT.tool_plain
+                  def $F(...): ...
+              - pattern-inside: |
+                  @$AGENT.tool_plain(...)
+                  def $F(...): ...
+              # A plain function registered later in the file: StructuredTool.from_function(f),
+              # Tool.from_function(func=f), function_tool(f), pydantic_ai.Tool(f),
+              # Agent(tools=[f]), create_agent(model, tools=[f]), ToolNode([f]),
+              # llm.bind_tools([f]), in a file that imports an agent framework. The regex covers
+              # the def (decorators, signature, and indented body) and looks ahead for a call to
+              # one of those names with F among its top-level arguments (bare, in a list, or as a
+              # keyword's value); its F group must name the def below. A statement region from
+              # each def to a later registration took 257 s on a 4,000-function file (OpenGrep
+              # 1.30.2); the regex scans the rest of the file once per def, 5 s there. A paren
+              # not preceded by e, l, n, s, or t can't end a registration callee, so the scan steps
+              # over it before trying the callee names (20 s without that). The callee is matched
+              # by name, so the import region stands in for resolving it; an MCP
+              # add_tool(Tool.from_function(f)) is mcp-tool-arg-to-shell's.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import $MOD
+                          ...
+                      - pattern-inside: |
+                          from $MOD import $NAME
+                          ...
+                  - metavariable-regex:
+                      metavariable: $MOD
+                      regex: ^(?:langchain\w*|langgraph|agents|crewai|pydantic_ai)(?:\.|$)
+                  - pattern-regex: >-
+                      (?m)^(?<IND>[ \t]*+)(?:@[^\n]*+\n\k<IND>)*+(?:async[ \t]++)?def[ \t]++(?<F>\w++)\b[^\n]*+(?:\n(?:\k<IND>[ \t)\]][^\n]*+|[ \t]*+(?:\#[^\n]*+)?(?=\n|\z)))*+(?=(?:[^(]++|(?<![elnst])\(|(?<=add_tool|add_prompt|add_template)\(\s*+[\w.]*\.from_function\(|(?<!\.from_function|\bfunction_tool|\btool|\bTool|\bAgent|\bcreate_agent|\bcreate_react_agent|\bToolNode|\.bind_tools)\(|\((?!(?:[^()"'\w]++|(?:"(?:[^"\\\n]|\\.)*+"|'(?:[^'\\\n]|\\.)*+'|["'])|(?&pa)|(?!\k<F>\b(?!\s*+[(=]))\w++)*+\k<F>\b(?!\s*+[(=])))*+(?<=\.from_function|\bfunction_tool|\btool|\bTool|\bAgent|\bcreate_agent|\bcreate_react_agent|\bToolNode|\.bind_tools)\((?:[^()"'\w]++|(?:"(?:[^"\\\n]|\\.)*+"|'(?:[^'\\\n]|\\.)*+'|["'])|(?&pa)|(?!\k<F>\b(?!\s*+[(=]))\w++)*+\k<F>\b(?!\s*+[(=]))(?(DEFINE)(?<pa>\((?:[^()"']++|(?:"(?:[^"\\\n]|\\.)*+"|'(?:[^'\\\n]|\\.)*+'|["'])|(?&pa))*+\)))
+              # LangChain and CrewAI BaseTool subclasses: _run / _arun get the arguments.
+              - patterns:
+                  - pattern-inside: |
+                      class $C(..., $BASE, ...):
+                          ...
+                  - metavariable-pattern:
+                      metavariable: $BASE
+                      pattern-either:
+                        - pattern: langchain_core.tools.BaseTool
+                        - pattern: langchain.tools.BaseTool
+                        - pattern: crewai.tools.BaseTool
+                  - pattern-inside: |
+                      def $F(...): ...
+                  - metavariable-regex:
+                      metavariable: $F
+                      regex: ^_a?run$
+          - pattern-either:
+              - patterns:
+                  - pattern: |
+                      def $F(..., $P, ...): ...
+                  - pattern-not: |
+                      def $F(..., $P: $TYPE, ...): ...
+                  - pattern-not: |
+                      def $F(..., $P: $TYPE = $DEFAULT, ...): ...
+              - patterns:
+                  - pattern-either:
+                      - pattern: |
+                          def $F(..., $P: $TYPE, ...): ...
+                      - pattern: |
+                          def $F(..., $P: $TYPE = $DEFAULT, ...): ...
+                  - metavariable-regex:
+                      metavariable: $TYPE
+                      regex: ^(?!(?:typing\.)?(?:Annotated\[\s*)?(?:int|float|bool|(?:typing\.)?Literal\[|[\w.]*(?:Context|ContextWrapper|ToolRuntime|RunnableConfig)\b|(?:typing\.)?Optional\[[\w.]*CallbackManager)|.*\bInjected\w*|.*\bpattern\s*=\s*r?["']\^.*\$["'])
+                  # A Literal alias assigned earlier in the block (Service = Literal["web", "db"],
+                  # or Service: TypeAlias = ...) is as safe as the Literal written inline.
+                  - pattern-not-inside: |
+                      $TYPE = typing.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE: $ALIAS_KIND = typing.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE = typing_extensions.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE: $ALIAS_KIND = typing_extensions.Literal[...]
+                      ...
+          - metavariable-regex:
+              metavariable: $P
+              regex: ^(?!(?:self|cls|run_manager)$)
+          - focus-metavariable: $P
+    pattern-sanitizers:
+      # A leading-dash or allowlist check before use: value.startswith("-"), re.match,
+      # re.fullmatch, or a compiled pattern's match / fullmatch.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X.startswith(...)
+              - pattern: re.match($PAT, $X, ...)
+              - pattern: re.fullmatch($PAT, $X, ...)
+              - pattern: $RE.match($X, ...)
+              - pattern: $RE.fullmatch($X, ...)
+              - pattern: $REPO.rev_parse($X)
+          - focus-metavariable: $X
+      # An allowlist membership check before use: `if unit not in ALLOWED_UNITS: raise`.
+      # (Only the left operand: `";" in value` is a blocklist check and sanitizes nothing.)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X in $ALLOWED
+              - pattern: $X not in $ALLOWED
+          - focus-metavariable: $X
+      - exact: true
+        pattern: $X.lstrip("-")
+      # A GitPython Repo built from a tool's path argument is not attacker text, and neither
+      # is what is read through it (repo.git_dir files, commit SHAs).
+      - exact: true
+        pattern: git.Repo(...)
+      - exact: true
+        pattern: git.repo.Repo(...)
+      # Paths and SHAs read from a Repo are absolute paths or hex. (A Repo object counts as
+      # tainted after a method call with a tainted argument, such as repo.index.commit(msg).)
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $REPO.git_dir
+              - pattern: $REPO.common_dir
+              - pattern: $REPO.working_dir
+              - pattern: $REPO.working_tree_dir
+              - pattern: $OBJ.hexsha
+      - exact: true
+        pattern: int(...)
+      - exact: true
+        pattern: float(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              # An argv list or tuple, or the same items passed positionally.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: '[$PROG, ..., $ARG, ...]'
+                      - pattern-inside: '($PROG, ..., $ARG, ...)'
+                      - pattern-inside: asyncio.create_subprocess_exec($PROG, ..., $ARG, ...)
+                      - pattern-inside: asyncio.subprocess.create_subprocess_exec($PROG, ..., $ARG, ...)
+                      - pattern-inside: $LOOP.subprocess_exec($FACTORY, $PROG, ..., $ARG, ...)
+                  - metavariable-regex:
+                      metavariable: $PROG
+                      regex: ^["'](?:[\w./-]*/)?(?:git|ssh|scp|sftp|rsync|tar|curl|wget|rg|zip|hg|svn)["']$
+                  # Everything after "--" (or git's --end-of-options) is an operand.
+                  - pattern-not-inside: '[..., "--", ..., $ARG, ...]'
+                  - pattern-not-inside: '(..., "--", ..., $ARG, ...)'
+                  - pattern-not-inside: $EXEC(..., "--", ..., $ARG, ...)
+                  - pattern-not-inside: '[..., "--end-of-options", ..., $ARG, ...]'
+                  - pattern-not-inside: '(..., "--end-of-options", ..., $ARG, ...)'
+                  - pattern-not-inside: $EXEC(..., "--end-of-options", ..., $ARG, ...)
+                  - pattern-either:
+                      - pattern-inside: '[$PROG, $ARG, ...]'
+                      - pattern-inside: '($PROG, $ARG, ...)'
+                      - pattern-inside: $EXEC($PROG, $ARG, ...)
+                      - pattern-inside: $LOOP.subprocess_exec($FACTORY, $PROG, $ARG, ...)
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: '[..., $PREV, $ARG, ...]'
+                              - pattern-inside: '(..., $PREV, $ARG, ...)'
+                              - pattern-inside: $EXEC(..., $PREV, $ARG, ...)
+                          # Not the value of the option before it: any single-dash option
+                          # (-m msg, -C dir, -czf out.tgz) or a long option that takes a
+                          # separate value.
+                          - metavariable-regex:
+                              metavariable: $PREV
+                              regex: ^(?!["'](?:-[a-zA-Z]+|--(?:author|committer|grep|since|until|after|before|branch|depth|message|file|origin|reference|template|config|exclude|include|directory|output|max-count|skip|shallow-since|shallow-exclude|jobs|filter|sort|remote|regexp|glob|type|max-depth))["']$)
+              # GitPython: positional arguments of repo.git.<command>(...) become argv items.
+              - patterns:
+                  - pattern-inside: $R.git.$CMD(..., $ARG, ...)
+                  - pattern-not-inside: $R.git.$CMD(..., "--", ..., $ARG, ...)
+                  - pattern-not-inside: $R.git.$CMD(..., "--end-of-options", ..., $ARG, ...)
+                  - pattern-either:
+                      - pattern-inside: $R.git.$CMD($ARG, ...)
+                      - patterns:
+                          - pattern-inside: $R.git.$CMD(..., $PREV, $ARG, ...)
+                          - metavariable-regex:
+                              metavariable: $PREV
+                              regex: ^(?!["'](?:-[a-zA-Z]+|--(?:author|committer|grep|since|until|after|before|branch|depth|message|file|origin|reference|template|config|exclude|include|directory|output|max-count|skip|shallow-since|shallow-exclude|jobs|filter|sort|remote|regexp|glob|type|max-depth))["']$)
+          - pattern: $ARG
+          # A splat (*args) hides which positions hold values, so it isn't reported.
+          - pattern-not: '*$SPLAT'
+          # A value built after a literal prefix (f"origin/{branch}", "refs/heads/" + name)
+          # can't start with "-".
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: ^(?![a-zA-Z]{0,2}["'][^{%])
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C7.1.1 - Output Format Enforcement"
+        - "v1.01-C9.3.1 - Component Isolation and Tool Authorization"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-88: Improper Neutralization of Argument Delimiters in a Command ('Argument Injection')"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [langchain, crewai, openai-agents, pydantic-ai, gitpython, git]
+      references:
+        - https://github.com/langchain-ai/langchain/blob/langchain-core%3D%3D1.6.13/libs/core/langchain_core/tools/convert.py
+        - https://github.com/langchain-ai/langchain/blob/langchain-core%3D%3D1.6.13/libs/core/langchain_core/tools/structured.py
+        - https://github.com/openai/openai-agents-python/blob/v0.24.0/src/agents/tool.py
+        - https://github.com/pydantic/pydantic-ai/blob/v2.59.0/pydantic_ai_slim/pydantic_ai/toolsets/function.py
+        - https://github.com/crewAIInc/crewAI/blob/1.15.28/lib/crewai/src/crewai/tools/base_tool.py
+        - https://github.com/modelcontextprotocol/servers/security/advisories/GHSA-9xwc-hfwc-8w59
+        - https://git-scm.com/docs/gitcli
+        - https://cwe.mitre.org/data/definitions/88.html

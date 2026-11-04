@@ -1,0 +1,48 @@
+# Fixture for ai-cli-bypass-flag-invocation: a GitHub Actions workflow.
+name: nightly-triage
+on:
+  schedule:
+    - cron: "0 3 * * *"
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    env:
+      # ruleid: ai-cli-bypass-flag-invocation
+      COPILOT_ALLOW_ALL: "true"
+      # ruleid: ai-cli-bypass-flag-invocation
+      CLAUDE_EXTRA_ARGS: "--output-format json --dangerously-skip-permissions"
+      # Workspace trust is the documented switch for headless runs, not an approval bypass.
+      # ok: ai-cli-bypass-flag-invocation
+      GEMINI_CLI_TRUST_WORKSPACE: "true"
+    steps:
+      - uses: actions/checkout@v4
+      # ok: ai-cli-bypass-flag-invocation
+      - name: Run claude --dangerously-skip-permissions in the sandbox image
+        # ruleid: ai-cli-bypass-flag-invocation
+        run: claude -p "Summarize issue ${{ github.event.issue.number }}" --dangerously-skip-permissions
+      - run: |
+          npm ci
+          # ruleid: ai-cli-bypass-flag-invocation
+          codex exec \
+            --model gpt-5.5 \
+            --dangerously-bypass-approvals-and-sandbox
+      # ruleid: ai-cli-bypass-flag-invocation
+      - run: "gemini --approval-mode=yolo -p 'summarize the failing tests'"
+      # ruleid: ai-cli-bypass-flag-invocation
+      - run: echo it's nightly && copilot -p "summarize the failing tests" --yolo
+      # ruleid: ai-cli-bypass-flag-invocation
+      - run: claude -p "fix issue #12" --dangerously-skip-permissions
+      # ok: ai-cli-bypass-flag-invocation
+      - run: claude -p "summarize the failing tests" --permission-mode dontAsk --allowedTools "Read"
+      # ok: ai-cli-bypass-flag-invocation
+      - run: echo "Never pass --yolo to codex here"
+      # ok: ai-cli-bypass-flag-invocation
+      # - run: codex exec --yolo "summarize the failing tests"
+      # ok: ai-cli-bypass-flag-invocation
+      - run: gemini --approval-mode auto_edit -p "summarize the failing tests"
+      - uses: anthropics/claude-code-action@v1
+        with:
+          prompt: |
+            Review the failing tests and summarize them.
+            # ok: ai-cli-bypass-flag-invocation
+            Do not run claude --dangerously-skip-permissions or codex --yolo yourself.

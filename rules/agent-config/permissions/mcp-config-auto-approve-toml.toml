@@ -1,0 +1,61 @@
+# Project defaults for Codex.
+approval_policy = "on-request"
+# ok: mcp-config-auto-approve-toml
+mcp_servers.notes.command = "npx"
+# ruleid: mcp-config-auto-approve-toml
+mcp_servers.notes.default_tools_approval_mode = "approve"
+# ruleid: mcp-config-auto-approve-toml
+mcp_servers.notes.tools.delete_note.approval_mode = "approve"
+# ok: mcp-config-auto-approve-toml
+mcp_servers.notes.tools.list_notes.approval_mode = "approve"
+
+[mcp_servers.github]
+command = "npx"
+args = ["-y", "@example-org/github-mcp@1.4.0"]
+# ok: mcp-config-auto-approve-toml
+default_tools_approval_mode = "writes"
+# default_tools_approval_mode = "approve"
+# ok: mcp-config-auto-approve-toml
+tools.get_file_contents.approval_mode = "approve"
+# ruleid: mcp-config-auto-approve-toml
+tools.create_pull_request.approval_mode = "approve"
+# ok: mcp-config-auto-approve-toml
+tools.merge_pull_request.approval_mode = "prompt"
+
+[mcp_servers.github.tools.push_files]
+# ruleid: mcp-config-auto-approve-toml
+approval_mode = "approve"
+
+[mcp_servers.github.tools.list_issues]
+# ok: mcp-config-auto-approve-toml
+approval_mode = "approve"
+
+[mcp_servers.shell]
+command = "uvx"
+args = ["example-org-shell-mcp==0.3.1"]
+# ruleid: mcp-config-auto-approve-toml
+default_tools_approval_mode = "approve"
+
+[mcp_servers.db.tools]
+# ruleid: mcp-config-auto-approve-toml
+execute_sql = { approval_mode = "approve" }
+# ok: mcp-config-auto-approve-toml
+"read_query" = { approval_mode = "approve" }
+# ruleid: mcp-config-auto-approve-toml
+"run-migration".approval_mode = 'approve'
+
+[mcp_servers]
+# ruleid: mcp-config-auto-approve-toml
+docs = { command = "uvx", args = ["example-org-docs-mcp==1.0.0"], default_tools_approval_mode = "approve" }
+# ruleid: mcp-config-auto-approve-toml
+tracker = { command = "uvx", args = ["example-org-tracker-mcp==2.0.0"], tools = { close_ticket = { approval_mode = "approve" } } }
+# ok: mcp-config-auto-approve-toml
+search = { command = "uvx", args = ["example-org-search-mcp==1.0.0"], tools = { search_docs = { approval_mode = "approve" } } }
+
+[apps.connector.tools.send_email]
+# ok: mcp-config-auto-approve-toml
+approval_mode = "approve"
+
+[profiles.ci]
+# ok: mcp-config-auto-approve-toml
+approval_policy = "never"

@@ -1,0 +1,29 @@
+researcher:
+  role: >
+    Senior support-trend researcher
+  goal: Find the week's recurring ticket themes
+  backstory: You read every ticket the queue closed this week.
+  # ruleid: agent-loop-unbounded-iterations-crewai-yaml
+  max_iter: 5000
+  verbose: true
+
+writer:
+  role: Digest writer
+  goal: Write the weekly digest
+  backstory: You turn findings into a short digest.
+  # ok: agent-loop-unbounded-iterations-crewai-yaml
+  max_iter: 40
+
+auditor:
+  role: Ticket auditor
+  goal: Re-check every escalated ticket
+  backstory: You are thorough.
+  # A time limit still bounds the agent.
+  # ok: agent-loop-unbounded-iterations-crewai-yaml
+  max_iter: 2000
+  max_execution_time: 900
+
+defaults:
+  # Not an agent entry (no role).
+  # ok: agent-loop-unbounded-iterations-crewai-yaml
+  max_iter: 99999

@@ -1,0 +1,78 @@
+rules:
+  - id: project-mcp-server-no-prompt
+    languages: [json]
+    severity: WARNING
+    message: >-
+      This committed MCP server runs a program on the developer's machine, and VS Code starts it
+      without asking. Servers in a workspace folder's .vscode/mcp.json and .mcp.json inherit
+      Workspace Trust: once someone trusts the folder, as most people do for a repository they
+      clone, VS Code starts them with no separate MCP prompt, also after their command changes,
+      and by default it starts them at the next chat message to list their tools. A pull request
+      that adds a server or edits a command therefore runs that program on every teammate's
+      machine, with their credentials and the agent's tool access. Claude Code asks before it
+      starts each .mcp.json server, but VS Code reads the same file, and so does GitHub Copilot
+      CLI, after folder trust alone. Keep personal servers in user-level config, run shared ones
+      from a pinned package (npx "pkg@1.2.3"), and review these files like code that runs on
+      checkout (a CODEOWNERS entry).
+    # VS Code 1.143.1: WorkspaceDotMcpDiscovery registers root .mcp.json servers, in either the
+    # {"mcpServers": {...}} shape or with servers at the root, as McpServerTrust.Kind.Trusted,
+    # and InstalledMcpServersDiscovery does the same for .vscode/mcp.json; McpRegistry only
+    # checks Workspace Trust for them. GitHub Copilot CLI (closed source) reads .mcp.json from
+    # the working directory up to the repository root; its docs, read 2026-10-25, say project
+    # servers "are loaded only after you confirm folder trust on first launch" and that folder
+    # trust is what prevents "starting repository-controlled MCP servers"
+    # (GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP). Remote servers (url, no command) run nothing
+    # locally and are left out.
+    paths:
+      include:
+        - ".vscode/mcp.json"
+        - ".mcp.json"
+      exclude:
+        # A Claude Code plugin in a marketplace repository: its servers run once someone
+        # installs the plugin, and VS Code reads .mcp.json only at a workspace folder's root.
+        # Paths can't be anchored to that root (OpenGrep matches "/.mcp.json" at any depth),
+        # so other nested .mcp.json files are still reported.
+        - "plugins/*/.mcp.json"
+    patterns:
+      # A server object, under "servers" (VS Code), "mcpServers" (Claude Code format) or at the
+      # root of .mcp.json; a non-empty command makes it a stdio server.
+      - pattern-inside: '"$NAME": {..., "command": $C, ...}'
+      - pattern: '"command": "$CMD"'
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: \S
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-agentic:
+        - "ASI04 - Agentic Supply Chain Vulnerabilities"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-mcp:
+        - "MCP04:2025 - Software Supply Chain Attacks & Dependency Tampering"
+        - "MCP09:2025 - Shadow MCP Servers"
+      owasp-aisvs:
+        - "v1.01-C10.1.2 - Component Integrity"
+      mitre-atlas:
+        - "AML.T0010.005 - AI Supply Chain Compromise: AI Agent Tool"
+      cwe:
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+      # Committing a team's MCP servers is common and usually intended; the finding marks a
+      # file whose changes run code on checkout, not a mistake.
+      confidence: LOW
+      likelihood: LOW
+      impact: HIGH
+      technology: [mcp, vscode, claude-code, copilot-cli]
+      references:
+        - https://code.visualstudio.com/docs/agents/run/manage-mcp-servers#_mcp-server-trust
+        - https://github.com/microsoft/vscode/blob/1.143.1/src/vs/workbench/contrib/mcp/common/discovery/workspaceDotMcpDiscovery.ts
+        - https://github.com/microsoft/vscode/blob/1.143.1/src/vs/workbench/contrib/mcp/common/discovery/installedMcpServersDiscovery.ts
+        - https://github.com/microsoft/vscode/blob/1.143.1/src/vs/workbench/contrib/mcp/common/mcpRegistry.ts
+        - https://code.claude.com/docs/en/mcp
+        - https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers
+        - https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#environment-variables
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP09-2025%E2%80%93Shadow-MCP-Servers.md
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md

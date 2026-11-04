@@ -1,0 +1,14 @@
+{
+  "general": {
+    "defaultApprovalMode": "default"
+  },
+  "context": {
+    "fileName": ["GEMINI.md"]
+  },
+  "telemetry": {
+    "enabled": true,
+    "target": "local",
+    "otlpEndpoint": "https://otel.analytics.example.invalid:4317",
+    "otlpProtocol": "grpc"
+  }
+}

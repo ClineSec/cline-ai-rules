@@ -1,0 +1,301 @@
+rules:
+  - id: llm-output-to-code-execution
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Model output reaches a code or shell execution sink. Treat completions as untrusted
+      input: an attacker who can influence the prompt (directly or through retrieved content)
+      can choose what runs here. Parse the output into a constrained structure and dispatch
+      to an allowlist of operations instead of executing it.
+    mode: taint
+    # The pattern-sources are shared with llm-output-to-sql (build.py SHARED_BLOCKS "model-output
+    # sources (Python)"), and are the first sources of llm-output-rendered-as-html ("model-output
+    # sources (Python, HTML rule)"): edit them together.
+    pattern-sources:
+      - pattern: $CLIENT.chat.completions.create(...)
+      - pattern: $CLIENT.responses.create(...)
+      - pattern: $CLIENT.messages.create(...)
+      - pattern: litellm.completion(...)
+      - pattern: litellm.acompletion(...)
+      - pattern: $LLM.invoke(...)
+      - pattern: $LLM.ainvoke(...)
+      # Agent SDKs (claude-agent-sdk 0.2.173, openai-agents 0.24.0): Claude Agent SDK query()
+      # and ClaudeSDKClient messages (`message.result`), and OpenAI Agents Runner results
+      # (`result.final_output`).
+      - pattern: claude_agent_sdk.query(...)
+      - patterns:
+          - pattern-inside: |
+              async with claude_agent_sdk.ClaudeSDKClient(...) as $SDK:
+                  ...
+          - pattern-either:
+              - pattern: $SDK.receive_response(...)
+              - pattern: $SDK.receive_messages(...)
+      - pattern: agents.Runner.run(...)
+      - pattern: agents.Runner.run_sync(...)
+      - pattern: agents.Runner.run_streamed(...)
+      # Streaming and the Google Gen AI SDK (google-genai 2.33.0): Chat Completions and
+      # Messages streams, generate_content / generate_content_stream (also `client.aio`), and
+      # chat sessions.
+      - pattern: $CLIENT.chat.completions.stream(...)
+      - pattern: $CLIENT.messages.stream(...)
+      - pattern: $CLIENT.models.generate_content(...)
+      - pattern: $CLIENT.models.generate_content_stream(...)
+      - patterns:
+          - pattern-inside: |
+              $CHAT = $CLIENT.chats.create(...)
+              ...
+          - pattern-either:
+              - pattern: $CHAT.send_message(...)
+              - pattern: $CHAT.send_message_stream(...)
+      # LangChain / LangGraph runnables streamed or batched (`for chunk in llm.stream(q)`).
+      # `.stream` is a common method name (a Panel chat feed has one), so require a LangChain
+      # or LangGraph import in the file or a receiver named like a model, chain, or graph.
+      - patterns:
+          - pattern-either:
+              - pattern: $RUNNABLE.stream(...)
+              - pattern: $RUNNABLE.astream(...)
+              - pattern: $RUNNABLE.batch(...)
+              - pattern: $RUNNABLE.abatch(...)
+          - pattern-either:
+              - patterns:
+                  - pattern: $RUNNABLE.$M(...)
+                  - pattern-not-regex: '\A(?:(?![ \t]*+(?:import|from)[ \t]++(?:langchain\w*|langgraph)\b)[^\n]*+\n)*+(?![ \t]*+(?:import|from)[ \t]++(?:langchain\w*|langgraph)\b)[^\n]*+\z'
+              - patterns:
+                  - pattern: $RUNNABLE.$M(...)
+                  - metavariable-regex:
+                      metavariable: $RUNNABLE
+                      regex: (?i)^(?:\w+\.)*\w*(?:llm|model|chain|agent|graph|runnable)$
+    pattern-sinks:
+      # The code argument only: model text passed in the globals or locals dict is data.
+      # eval and exec take the code positionally only; compile also takes it as source=
+      # (CPython 3.15.2 Python/bltinmodule.c).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: eval($CODE, ...)
+              - pattern-inside: exec($CODE, ...)
+              - pattern-inside: compile($CODE, ...)
+              - pattern-inside: compile(..., source=$CODE, ...)
+          - pattern: $CODE
+      # os.system, os.popen, getoutput, and getstatusoutput: any argument, so the command
+      # passed by keyword (command=, cmd=) counts too.
+      - pattern: os.system(...)
+      - pattern: os.popen(...)
+      # The command passed first or as args= (run, call, check_call, and check_output hand
+      # their arguments to Popen(args, ...); CPython 3.15.2 Lib/subprocess.py).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: subprocess.$FN($CMD, ..., shell=True, ...)
+              - pattern-inside: subprocess.$FN(..., args=$CMD, ..., shell=True, ...)
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(run|call|check_call|check_output|Popen)$
+          - pattern: $CMD
+      - pattern: subprocess.getoutput(...)
+      - pattern: subprocess.getstatusoutput(...)
+      # Only the command string: env, cwd, or stdin built from model output is not a shell.
+      # The keyword names are cmd= (asyncio) and command= (paramiko).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: asyncio.create_subprocess_shell($CMD, ...)
+              - pattern-inside: asyncio.create_subprocess_shell(..., cmd=$CMD, ...)
+              - pattern-inside: asyncio.subprocess.create_subprocess_shell($CMD, ...)
+              - pattern-inside: asyncio.subprocess.create_subprocess_shell(..., cmd=$CMD, ...)
+              - pattern-inside: $LOOP.subprocess_shell($FACTORY, $CMD, ...)
+              - pattern-inside: $LOOP.subprocess_shell(..., cmd=$CMD, ...)
+              # paramiko: the SSH server runs the string in the remote user's shell.
+              - pattern-inside: $SSH.exec_command($CMD, ...)
+              - pattern-inside: $SSH.exec_command(..., command=$CMD, ...)
+          - pattern: $CMD
+      # anyio runs a str command through the shell and a sequence without one, so only
+      # string-building expressions count, directly or through a name assigned one.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: anyio.run_process($CMD, ...)
+              - pattern-inside: anyio.run_process(..., command=$CMD, ...)
+              - pattern-inside: anyio.open_process($CMD, ...)
+              - pattern-inside: anyio.open_process(..., command=$CMD, ...)
+          - pattern: $CMD
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $CMD = $STR
+                      ...
+                  - metavariable-pattern:
+                      metavariable: $STR
+                      pattern-either:
+                        - pattern: f"..."
+                        - pattern: $A + $B
+                        - pattern: $A % $B
+                        - pattern: $FMT.format(...)
+                        - pattern: $SEP.join(...)
+              - pattern-either:
+                  - pattern: f"..."
+                  - pattern: $A + $B
+                  - pattern: $A % $B
+                  - pattern: $FMT.format(...)
+                  - pattern: $SEP.join(...)
+          - pattern-not: '[...] + $B'
+          - pattern-not: '$A + [...]'
+      # An argv that starts a shell on the next item: ["bash", "-c", cmd], ("sh", "-lc", cmd),
+      # or asyncio.create_subprocess_exec("sh", "-c", cmd).
+      - patterns:
+          - pattern-either:
+              - pattern: '[..., $SH, $FLAG, $CMD, ...]'
+              - pattern: '(..., $SH, $FLAG, $CMD, ...)'
+              - pattern: $EXEC(..., $SH, $FLAG, $CMD, ...)
+          - metavariable-regex:
+              metavariable: $SH
+              regex: ^["'](?:[\w./-]*/)?(?:(?:ba|da|z|k|fi|c|tc)?sh|cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh)["']$
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^["'](?:-[a-zA-Z]*c[a-zA-Z]*|/[cCkK]|-(?i:command))["']$
+          - focus-metavariable: $CMD
+      # The last two sinks are shared with mcp-tool-arg-to-shell and agent-tool-arg-to-shell
+      # (build.py SHARED_BLOCKS): edit them together.
+      # An argv that starts an interpreter on inline code: [sys.executable, "-c", code],
+      # ["node", "-e", code], ("deno", "eval", code), or the same items passed positionally.
+      # Each interpreter is paired with its own eval flag, so `node -c` (syntax check) doesn't
+      # count.
+      # The eval flag comes right after the interpreter or after one option that takes no
+      # value ([sys.executable, "-I", "-c", code]).
+      - patterns:
+          - pattern-either:
+              - pattern: '[..., $BIN, $FLAG, $CODE, ...]'
+              - pattern: '(..., $BIN, $FLAG, $CODE, ...)'
+              - pattern: $EXEC(..., $BIN, $FLAG, $CODE, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern: '[..., $BIN, $OPT, $FLAG, $CODE, ...]'
+                      - pattern: '(..., $BIN, $OPT, $FLAG, $CODE, ...)'
+                      - pattern: $EXEC(..., $BIN, $OPT, $FLAG, $CODE, ...)
+                  - metavariable-regex:
+                      metavariable: $OPT
+                      regex: ^["'](?:-(?![WXmr]["'])[a-zA-Z]{1,3}|--[a-z][\w-]*(?<!require)(?<!import)(?<!loader))["']$
+          - metavariable-comparison:
+              comparison: >-
+                ((re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:python[0-9.]*|py)(?:[.]exe)?$", str($BIN))
+                or str($BIN) == "sys.executable")
+                and str($FLAG) == "-c")
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:node|nodejs|bun|tsx|ts-node)(?:[.]exe)?$", str($BIN))
+                and re.match("^(?:-e|--eval|-p|--print|-pe)$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?deno(?:[.]exe)?$", str($BIN)) and str($FLAG) == "eval")
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:ruby|perl)(?:[.]exe)?$", str($BIN)) and re.match("^-[eE]$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?php(?:[.]exe)?$", str($BIN)) and str($FLAG) == "-r")
+          - focus-metavariable: $CODE
+      # Code written to a file and then run in the same function: path.write_text(code) or
+      # `with open(path, "w") as f: f.write(code)` (or a NamedTemporaryFile), and later
+      # subprocess.run([sys.executable, str(path)]), create_subprocess_exec("bash", path),
+      # runpy.run_path(path), or spec_from_file_location(name, path). Only the written contents
+      # count; a file handed to a program that only reads it (git, a linter) doesn't. The argv
+      # list may also be passed by keyword (subprocess args=, anyio command=).
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $PATH.write_text($CODE, ...)
+                          ...
+                          $RUN([$BIN, ..., <... $PATH ...>, ...], ...)
+                      - pattern-inside: |
+                          $PATH.write_text($CODE, ...)
+                          ...
+                          $RUN(..., $KW=[$BIN, ..., <... $PATH ...>, ...], ...)
+                      - pattern-inside: |
+                          $PATH.write_text($CODE, ...)
+                          ...
+                          $RUN($BIN, ..., <... $PATH ...>, ...)
+                      - pattern-inside: |
+                          with open($PATH, ...) as $F:
+                              ...
+                          ...
+                          $RUN([$BIN, ..., <... $PATH ...>, ...], ...)
+                      - pattern-inside: |
+                          with open($PATH, ...) as $F:
+                              ...
+                          ...
+                          $RUN(..., $KW=[$BIN, ..., <... $PATH ...>, ...], ...)
+                      - pattern-inside: |
+                          with open($PATH, ...) as $F:
+                              ...
+                          ...
+                          $RUN($BIN, ..., <... $PATH ...>, ...)
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  with $TMP(...) as $F:
+                                      ...
+                                  ...
+                                  $RUN([$BIN, ..., <... $F.name ...>, ...], ...)
+                              - pattern-inside: |
+                                  with $TMP(...) as $F:
+                                      ...
+                                  ...
+                                  $RUN(..., $KW=[$BIN, ..., <... $F.name ...>, ...], ...)
+                              - pattern-inside: |
+                                  with $TMP(...) as $F:
+                                      ...
+                                  ...
+                                  $RUN($BIN, ..., <... $F.name ...>, ...)
+                          - metavariable-regex:
+                              metavariable: $TMP
+                              regex: ^(?:tempfile\.)?NamedTemporaryFile$
+                  - metavariable-regex:
+                      metavariable: $BIN
+                      regex: ^(?:["'](?:[\w./-]*/)?(?:python[\d.]*|py|node|nodejs|deno|bun|ruby|perl|php|(?:ba|da|z|k|fi|c|tc)?sh|pwsh|powershell)(?:\.exe)?["']|sys\.executable)$
+                  - metavariable-regex:
+                      metavariable: $RUN
+                      regex: ^(?:subprocess\.(?:run|call|check_call|check_output|Popen)|(?:asyncio\.)?create_subprocess_exec|anyio\.(?:run_process|open_process)|os\.(?:exec|spawn)\w*)$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $PATH.write_text($CODE, ...)
+                          ...
+                          $LOAD(..., <... $PATH ...>, ...)
+                      - pattern-inside: |
+                          with open($PATH, ...) as $F:
+                              ...
+                          ...
+                          $LOAD(..., <... $PATH ...>, ...)
+                      - patterns:
+                          - pattern-inside: |
+                              with $TMP(...) as $F:
+                                  ...
+                              ...
+                              $LOAD(..., <... $F.name ...>, ...)
+                          - metavariable-regex:
+                              metavariable: $TMP
+                              regex: ^(?:tempfile\.)?NamedTemporaryFile$
+                  - metavariable-regex:
+                      metavariable: $LOAD
+                      regex: ^(?:runpy\.run_path|(?:importlib\.util\.)?spec_from_file_location)$
+          # The written contents themselves, not a later use of the same name.
+          - pattern-either:
+              - pattern-inside: $PATH.write_text($CODE, ...)
+              - pattern-inside: $F.write($CODE)
+          - pattern: $CODE
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C7.1.1 - Output Format Enforcement"
+      mitre-atlas:
+        - "AML.T0051 - LLM Prompt Injection"
+        - "AML.T0050 - Command and Scripting Interpreter"
+      cwe:
+        - "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [openai, anthropic, litellm, langchain, claude-agent-sdk, openai-agents]
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md
+        - https://cwe.mitre.org/data/definitions/94.html
+        - https://docs.python.org/3/library/asyncio-subprocess.html#asyncio.create_subprocess_shell
+        - https://github.com/agronholm/anyio/blob/4.15.1/src/anyio/_core/_subprocesses.py

@@ -1,0 +1,562 @@
+rules:
+  - id: mcp-tool-arg-to-sql-ts
+    # JavaScript/TypeScript twin of mcp-tool-arg-to-sql. Sources and the first sanitizer
+    # (schema-constrained fields): the MCP tool arguments of mcp-tool-arg-to-shell-ts (build.py
+    # SHARED_BLOCKS "MCP tool sources (TypeScript)", "MCP tool schema sanitizer (TypeScript)");
+    # sinks and the last 6 sanitizers: llm-output-to-sql-ts ("SQL sinks (TypeScript)", "SQL
+    # sanitizers (TypeScript)"). Edit each block with its group.
+    # Resource templates and prompts (since 2026-10-25): registerResource with a
+    # ResourceTemplate (the callback gets the filled-in URI and its variables), registerPrompt
+    # with argsSchema (validated before the handler runs, so the schema sanitizer covers it),
+    # the 1.32.1 resource() / prompt() overloads, setRequestHandler("resources/read" |
+    # "prompts/get") and ReadResourceRequestSchema / GetPromptRequestSchema, and punkpeye
+    # fastmcp 4.23.5 addResourceTemplate / addPrompt load(args), checked at v2.3.1 and 1.32.1.
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      An MCP tool argument, resource-template parameter, or prompt argument reaches a SQL
+      statement. The client fills every one of them, and clients let the model choose them
+      (tool arguments always, resource URIs and prompt arguments in many clients); the server
+      can't tell who did. A prompt injection in anything the model has read (a web page, an
+      issue, a file, another tool's result) can choose them for it, so a value like `x' OR
+      '1'='1` or a whole statement reads or changes rows the tool was never meant to touch,
+      with this server's database privileges. Keep the statement fixed and pass the argument
+      as a bound parameter (`pool.query("... WHERE queue = $1", [queue])`, Prisma's tagged
+      `$queryRaw`, Drizzle's `sql` template), pick table and column names from a constant
+      allowlist (`COLUMNS[choice]`), or constrain the schema (`z.enum([...])`, `z.number()`).
+      If the tool exists to run model-written SQL, give it a read-only role limited to the
+      views it may read, with row-level security, a statement timeout, and a row limit.
+    mode: taint
+    pattern-sources:
+      # The handler's first parameter (the validated arguments object, destructured or not).
+      # `($ARGS, ...) => {...}` also matches function expressions and expression bodies.
+      # Resource templates and prompts count since 2026-10-25: the client fills a template's
+      # variables and a prompt's arguments, and clients let the model fill them.
+      - patterns:
+          - pattern-either:
+              - pattern: $SERVER.registerTool($NAME, $CONFIG, ($ARGS, ...) => {...})
+              # Deprecated v1 overloads: the handler is the last argument. tool(name, cb) and
+              # tool(name, description, cb) register zero-argument tools whose handler only
+              # gets the request context.
+              - patterns:
+                  - pattern: $SERVER.tool($NAME, $X, ..., ($ARGS, ...) => {...})
+                  - pattern-not: $SERVER.tool($NAME, "$DESC", ($ARGS, ...) => {...})
+              - pattern: '$SERVER.addTool({..., execute: ($ARGS, ...) => {...}, ...})'
+              # Prompts: registerPrompt(name, { argsSchema }, (args, ctx) => ...). Without
+              # argsSchema the handler gets only the context. The v1 prompt(name,
+              # [description,] argsSchema, cb) overloads are like tool()'s.
+              - pattern: '$SERVER.registerPrompt($NAME, {..., argsSchema: $SCHEMA, ...}, ($ARGS, ...) => {...})'
+              - patterns:
+                  - pattern: $SERVER.registerPrompt($NAME, $CONFIG, ($ARGS, ...) => {...})
+                  - pattern-not: '$SERVER.registerPrompt($NAME, {...}, ($ARGS, ...) => {...})'
+              - patterns:
+                  - pattern: $SERVER.prompt($NAME, $X, ..., ($ARGS, ...) => {...})
+                  - pattern-not: $SERVER.prompt($NAME, "$DESC", ($ARGS, ...) => {...})
+              # Resource templates: registerResource(name, new ResourceTemplate("x://{name}",
+              # ...), config, (uri, variables, ctx) => ...) and v1 resource(name, template,
+              # [metadata,] cb): the filled-in URI and its variables. A resource at a fixed
+              # URI string gets only that URI.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SERVER.registerResource($NAME, $TPL, $CONFIG, ($ARGS, ...) => {...})
+                      - pattern: $SERVER.registerResource($NAME, $TPL, $CONFIG, ($URI, $ARGS, ...) => {...})
+                      - pattern: $SERVER.resource($NAME, $TPL, ..., ($ARGS, ...) => {...})
+                      - pattern: $SERVER.resource($NAME, $TPL, ..., ($URI, $ARGS, ...) => {...})
+                  - pattern-not: $SERVER.registerResource($NAME, "$FIXED", ...)
+                  - pattern-not: $SERVER.resource($NAME, "$FIXED", ...)
+              # punkpeye fastmcp: addResourceTemplate and addPrompt take load(args, ...).
+              - pattern: '$SERVER.addResourceTemplate({..., load: ($ARGS, ...) => {...}, ...})'
+              - pattern: '$SERVER.addPrompt({..., load: ($ARGS, ...) => {...}, ...})'
+              # Low-level handlers: the request (request.params.arguments, request.params.uri).
+              - patterns:
+                  - pattern: $SERVER.setRequestHandler($KIND, ($ARGS, ...) => {...})
+                  - metavariable-regex:
+                      metavariable: $KIND
+                      regex: ^(?:[\w.]*(?:CallTool|ReadResource|GetPrompt)RequestSchema|["'](?:tools/call|resources/read|prompts/get)["'])$
+              # Claude Agent SDK: tool(name, description, schema, handler).
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import { $TOOL } from "@anthropic-ai/claude-agent-sdk";
+                          ...
+                      - pattern-inside: |
+                          import { $ORIG as $TOOL } from "@anthropic-ai/claude-agent-sdk";
+                          ...
+                  - pattern: $TOOL($NAME, $DESC, $SCHEMA, ($ARGS, ...) => {...}, ...)
+              # A named handler registered elsewhere in the file: registerTool, tool,
+              # registerPrompt, prompt, registerResource, or resource(..., handler), or
+              # setRequestHandler(<call-tool, read-resource, or get-prompt>, handler). Declared
+              # before its registration, it's found by a regex over the declaration (signature and
+              # balanced body) that looks ahead for the registration; NAMED must name the
+              # function. A statement region from every function to a later registration took
+              # about 15 s on a 5,000-line file (OpenGrep 1.30.2). Declared after it, by regions
+              # that start at the registration (hoisting) or at a function that contains it (a
+              # factory such as createServer() with its handlers declared below it).
+              - patterns:
+                  - pattern-either:
+                      - patterns:
+                          - pattern-regex: |-
+                              (?x)
+                              (?(DEFINE)
+                                (?<str> "(?:[^"\\\n]|\\.)*+" | '(?:[^'\\\n]|\\.)*+' | `(?:[^`\\]|\\.)*+` )
+                                (?<com> //[^\n]*+ | /\*(?:[^*]++|\*(?!/))*+\*/ )
+                                (?<br> \{ (?: [^{}"'`/]++ | (?&com) | (?&str) | (?&br) | [/"'`] )*+ \} )
+                                (?<pa> \( (?: [^()"'`/]++ | (?&com) | (?&str) | (?&pa) | [/"'`] )*+ \) )
+                                (?<ang> < (?: [^<>=]++ | =>? | (?&ang) )*+ > )
+                                (?<ty> (?: [^{}()<>=;]++ | (?&ang) | (?&pa) | => )*? )
+                                (?<arg> [^(),"'`/]++ | (?&com) | (?&str) | (?&pa) | [,"'`/] )
+                                (?<fn> (?: \bexport [ \t]++ (?:default [ \t]++)? )? (?: \basync [ \t]++ )? \bfunction\b [ \t]*+ \*? [ \t]*+ \k<NAMED> \b
+                                  \s*+ (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? (?&br) )
+                                (?<arrow> (?: \bexport [ \t]++ )? \b(?:const|let|var) [ \t]++ \k<NAMED> \b \s*+ (?: : (?&ty) )? = \s*+ (?: async\b \s*+ )?
+                                  (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? => \s*+ (?&br) [ \t]*+ ;? )
+                                (?<reg> (?:registerTool|tool|registerPrompt|prompt) \( (?&arg)*? , \s*+ \k<NAMED> \s*+ ,? \s*+ \)
+                                      | (?:registerResource|resource) \( (?: [^(),"'`/]++ | (?&com) | (?&str) | (?&pa) )++ , \s*+ (?!["'`]) (?&arg)*? , \s*+ \k<NAMED> \s*+ ,? \s*+ \)
+                                      | setRequestHandler \( \s*+ (?: [\w$.]*(?:CallTool|ReadResource|GetPrompt)RequestSchema | "(?:tools/call|resources/read|prompts/get)" | '(?:tools/call|resources/read|prompts/get)' ) \s*+ , \s*+ \k<NAMED> \s*+ ,? \s*+ \)
+                                )
+                              )
+                              (?| (?: \bexport [ \t]++ (?:default [ \t]++)? )? (?: \basync [ \t]++ )? \bfunction\b [ \t]*+ \*? [ \t]*+ (?<NAMED>[\w$]++)
+                                  \s*+ (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? (?&br)
+                                | (?: \bexport [ \t]++ )? \b(?:const|let|var) [ \t]++ (?<NAMED>[\w$]++) \s*+ (?: : (?&ty) )? = \s*+ (?: async\b \s*+ )?
+                                  (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? => \s*+ (?&br) [ \t]*+ ;? )
+                              (?= (?: [^.]++ | \.(?!(?&reg)) )*+ \.(?&reg) )
+                          - pattern-either:
+                              - pattern: function $H($ARGS, ...) {...}
+                              - pattern: const $H = ($ARGS, ...) => {...};
+                          - metavariable-comparison:
+                              comparison: str($H) == str($NAMED)
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: "$SERVER.registerTool(..., $H);\n..."
+                              - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.registerTool(..., $H);\n  ...\n}\n..."
+                              - pattern-inside: "$SERVER.tool(..., $H);\n..."
+                              - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.tool(..., $H);\n  ...\n}\n..."
+                              - pattern-inside: "$SERVER.registerPrompt(..., $H);\n..."
+                              - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.registerPrompt(..., $H);\n  ...\n}\n..."
+                              - pattern-inside: "$SERVER.prompt(..., $H);\n..."
+                              - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.prompt(..., $H);\n  ...\n}\n..."
+                              - patterns:
+                                  - pattern-either:
+                                      - pattern-inside: "$SERVER.registerResource($NAME, $TPL, ..., $H);\n..."
+                                      - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.registerResource($NAME, $TPL, ..., $H);\n  ...\n}\n..."
+                                      - pattern-inside: "$SERVER.resource($NAME, $TPL, ..., $H);\n..."
+                                      - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.resource($NAME, $TPL, ..., $H);\n  ...\n}\n..."
+                                  - metavariable-regex:
+                                      metavariable: $TPL
+                                      regex: ^[^"'`]
+                              - patterns:
+                                  - pattern-either:
+                                      - pattern-inside: "$SERVER.setRequestHandler($KIND, $H);\n..."
+                                      - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.setRequestHandler($KIND, $H);\n  ...\n}\n..."
+                                  - metavariable-regex:
+                                      metavariable: $KIND
+                                      regex: ^(?:[\w.]*(?:CallTool|ReadResource|GetPrompt)RequestSchema|["'](?:tools/call|resources/read|prompts/get)["'])$
+                          - pattern-either:
+                              - pattern: function $H($ARGS, ...) {...}
+                              - pattern: const $H = ($ARGS, ...) => {...};
+              # The second parameter of a named resource-template handler: its variables.
+              - patterns:
+                  - pattern-either:
+                      - patterns:
+                          - pattern-regex: |-
+                              (?x)
+                              (?(DEFINE)
+                                (?<str> "(?:[^"\\\n]|\\.)*+" | '(?:[^'\\\n]|\\.)*+' | `(?:[^`\\]|\\.)*+` )
+                                (?<com> //[^\n]*+ | /\*(?:[^*]++|\*(?!/))*+\*/ )
+                                (?<br> \{ (?: [^{}"'`/]++ | (?&com) | (?&str) | (?&br) | [/"'`] )*+ \} )
+                                (?<pa> \( (?: [^()"'`/]++ | (?&com) | (?&str) | (?&pa) | [/"'`] )*+ \) )
+                                (?<ang> < (?: [^<>=]++ | =>? | (?&ang) )*+ > )
+                                (?<ty> (?: [^{}()<>=;]++ | (?&ang) | (?&pa) | => )*? )
+                                (?<arg> [^(),"'`/]++ | (?&com) | (?&str) | (?&pa) | [,"'`/] )
+                                (?<fn> (?: \bexport [ \t]++ (?:default [ \t]++)? )? (?: \basync [ \t]++ )? \bfunction\b [ \t]*+ \*? [ \t]*+ \k<NAMED> \b
+                                  \s*+ (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? (?&br) )
+                                (?<arrow> (?: \bexport [ \t]++ )? \b(?:const|let|var) [ \t]++ \k<NAMED> \b \s*+ (?: : (?&ty) )? = \s*+ (?: async\b \s*+ )?
+                                  (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? => \s*+ (?&br) [ \t]*+ ;? )
+                                (?<reg> (?:registerResource|resource) \( (?: [^(),"'`/]++ | (?&com) | (?&str) | (?&pa) )++ , \s*+ (?!["'`]) (?&arg)*? , \s*+ \k<NAMED> \s*+ ,? \s*+ \)
+                                )
+                              )
+                              (?| (?: \bexport [ \t]++ (?:default [ \t]++)? )? (?: \basync [ \t]++ )? \bfunction\b [ \t]*+ \*? [ \t]*+ (?<NAMED>[\w$]++)
+                                  \s*+ (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? (?&br)
+                                | (?: \bexport [ \t]++ )? \b(?:const|let|var) [ \t]++ (?<NAMED>[\w$]++) \s*+ (?: : (?&ty) )? = \s*+ (?: async\b \s*+ )?
+                                  (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? => \s*+ (?&br) [ \t]*+ ;? )
+                              (?= (?: [^.]++ | \.(?!(?&reg)) )*+ \.(?&reg) )
+                          - pattern-either:
+                              - pattern: function $H($URI, $ARGS, ...) {...}
+                              - pattern: const $H = ($URI, $ARGS, ...) => {...};
+                          - metavariable-comparison:
+                              comparison: str($H) == str($NAMED)
+                      - patterns:
+                          - pattern-either:
+                              - patterns:
+                                  - pattern-either:
+                                      - pattern-inside: "$SERVER.registerResource($NAME, $TPL, ..., $H);\n..."
+                                      - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.registerResource($NAME, $TPL, ..., $H);\n  ...\n}\n..."
+                                      - pattern-inside: "$SERVER.resource($NAME, $TPL, ..., $H);\n..."
+                                      - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.resource($NAME, $TPL, ..., $H);\n  ...\n}\n..."
+                                  - metavariable-regex:
+                                      metavariable: $TPL
+                                      regex: ^[^"'`]
+                          - pattern-either:
+                              - pattern: function $H($URI, $ARGS, ...) {...}
+                              - pattern: const $H = ($URI, $ARGS, ...) => {...};
+          - focus-metavariable: $ARGS
+    pattern-sanitizers:
+      # Shared with mcp-tool-arg-option-injection-ts (the first sanitizer; build.py
+      # SHARED_BLOCKS). A field whose schema only admits safe values: z.enum, z.literal,
+      # z.number, z.boolean, or a string with an anchored .regex(/^...$/). The SDK validates
+      # arguments against inputSchema before calling the handler, so uses of that field
+      # (destructured or args.field) are clean.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: '$SERVER.registerTool($NAME, {..., inputSchema: {..., $KEY: $TYPE, ...}, ...}, ...)'
+              - pattern-inside: '$SERVER.registerTool($NAME, {..., inputSchema: $Z.object({..., $KEY: $TYPE, ...}), ...}, ...)'
+              - pattern-inside: '$SERVER.tool($NAME, ..., {..., $KEY: $TYPE, ...}, ($ARGS, ...) => {...})'
+              - pattern-inside: '$SERVER.addTool({..., parameters: $Z.object({..., $KEY: $TYPE, ...}), ...})'
+              # A prompt's argsSchema, validated the same way before its handler runs.
+              - pattern-inside: '$SERVER.registerPrompt($NAME, {..., argsSchema: {..., $KEY: $TYPE, ...}, ...}, ...)'
+              - pattern-inside: '$SERVER.registerPrompt($NAME, {..., argsSchema: $Z.object({..., $KEY: $TYPE, ...}), ...}, ...)'
+              - pattern-inside: '$SERVER.prompt($NAME, ..., {..., $KEY: $TYPE, ...}, ($ARGS, ...) => {...})'
+          - metavariable-pattern:
+              metavariable: $TYPE
+              pattern-either:
+                - pattern: $Z.enum(...)
+                - pattern: $Z.nativeEnum(...)
+                - pattern: $Z.literal(...)
+                - pattern: $Z.number(...)
+                - pattern: $Z.boolean(...)
+                - pattern: $Z.int(...)
+                - patterns:
+                    - pattern: $STR.regex($RE, ...)
+                    - metavariable-regex:
+                        metavariable: $RE
+                        regex: ^/\^.*\$/[a-z]*$
+          - pattern-either:
+              - pattern: $KEY
+              - pattern: $OBJ.$KEY
+      # A lookup in a constant table (`SORT_COLUMNS[choice]`, `VIEWS.get(name)`): the
+      # allowlist dispatch the message recommends.
+      - patterns:
+          - pattern-either:
+              - pattern: $TABLE[$KEY]
+              - pattern: $TABLE.get($KEY)
+          - metavariable-regex:
+              metavariable: $TABLE
+              regex: ^(?:[\w$]+\.)*[A-Z][A-Z0-9_]*$
+      # This sanitizer and the rest are shared with mcp-tool-arg-to-sql-ts and
+      # agent-tool-arg-to-sql-ts (build.py SHARED_BLOCKS "SQL sanitizers (TypeScript)").
+      # An allowlist check before use: /^...$/.test(value).
+      - by-side-effect: true
+        patterns:
+          - pattern: $RE.test($X)
+          - metavariable-regex:
+              metavariable: $RE
+              regex: ^/\^.*\$/[a-z]*$
+          - focus-metavariable: $X
+      # An allowlist membership check before use: ALLOWED.has(value), ALLOWED.includes(value).
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $ALLOWED.has($X)
+              - pattern: $ALLOWED.includes($X)
+          - focus-metavariable: $X
+      - exact: true
+        pattern: Number(...)
+      - exact: true
+        pattern: parseInt(...)
+      - exact: true
+        pattern: parseFloat(...)
+      # The drivers' own quoting: mysql / mysql2 / sqlstring escape() and escapeId(), and
+      # node-postgres escapeLiteral() and escapeIdentifier().
+      - exact: true
+        patterns:
+          - pattern: $ESC.$FN(...)
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(?:escape|escapeId|escapeLiteral|escapeIdentifier)$
+          - metavariable-regex:
+              metavariable: $ESC
+              regex: (?:^(?:mysql2?|SqlString|sqlstring)$|(?:[\w$]+\.)*(?:[\w$]*[a-z0-9_$](?=[A-Z])|[\w$]*_)?(?i:db|database|pool|conn|connection|pg|mysql|sqlite|knex|sequelize|tx|trx|transaction)$)
+    pattern-sinks:
+      # Shared with mcp-tool-arg-to-sql-ts and agent-tool-arg-to-sql-ts (build.py
+      # SHARED_BLOCKS "SQL sinks (TypeScript)"): edit them together.
+      # Every sink below skips a statement built by a parameterizing API, inline or assigned
+      # to a variable first: tagged templates (`sql`...`` from Drizzle, postgres.js, Kysely,
+      # @vercel/postgres, and Neon; `SQL`...``; Prisma's `Prisma.sql`...``) send
+      # interpolations as parameters, and `format()` on a $FMT receiver is only excluded when
+      # assigned (inline, only mysql / SqlString format() counts). Model text passed to
+      # sql.raw() or as format()'s SQL is still reported, by the last sink.
+      #
+      # node-postgres, mysql2, libsql, Neon, PlanetScale, Sequelize, Drizzle's db.execute(string),
+      # BigQuery: `query` / `execute` with the statement first, or the statement inside a
+      # query config object (pg `{ text, values }`, mysql2 and libsql `{ sql, args }`,
+      # Sequelize and BigQuery `{ query }`). Only the statement counts, not the values array
+      # or options. Both method names are common, so the receiver must be named like a
+      # database (first two sinks) or the file must import a SQL driver (next two); a call
+      # both cover is reported once. For speed on large files, method names are spelled out
+      # (`$DB.$M(...)` plus a regex matches every call first), and "imports a driver" is a
+      # whole-file regex used as pattern-not-regex (it matches the whole file only when no
+      # line imports or requires one), which is much cheaper than `import ... from "$MOD"`
+      # regions.
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.query($Q, ...)
+              - pattern: $DB.execute($Q, ...)
+          - pattern-not: $DB.query({...}, ...)
+          - pattern-not: $DB.execute({...}, ...)
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?:[\w$]+\.)*(?:[\w$]*[a-z0-9_$](?=[A-Z])|[\w$]*_)?(?i:db|database|pool|conn|connection|pg|mysql|sqlite|knex|sequelize|tx|trx|transaction)$
+          - metavariable-regex:
+              metavariable: $Q
+              regex: ^(?!(?:[\w$]+\.)*(?:sql|SQL|\$queryRaw|\$executeRaw|\$queryRawTyped)\s*`)(?!(?:mysql2?|SqlString|sqlstring)\.format\s*\()(?!Prisma\.join\s*\()
+          - pattern-not-inside: |
+              $Q = sql`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = SQL`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = $X.sql`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = $FMT.format(...);
+              ...
+          - pattern-not-inside: |
+              $Q = Prisma.join(...);
+              ...
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern-either:
+              - pattern: '$DB.query({..., $K: $Q, ...}, ...)'
+              - pattern: '$DB.execute({..., $K: $Q, ...}, ...)'
+              - pattern: '$DB.createQueryJob({..., $K: $Q, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $K
+              regex: ^(?:text|sql|query)$
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?:[\w$]+\.)*(?:[\w$]*[a-z0-9_$](?=[A-Z])|[\w$]*_)?(?i:db|database|pool|conn|connection|pg|mysql|sqlite|knex|sequelize|tx|trx|transaction)$
+          - metavariable-regex:
+              metavariable: $Q
+              regex: ^(?!(?:[\w$]+\.)*(?:sql|SQL|\$queryRaw|\$executeRaw|\$queryRawTyped)\s*`)(?!(?:mysql2?|SqlString|sqlstring)\.format\s*\()(?!Prisma\.join\s*\()
+          - pattern-not-inside: |
+              $Q = sql`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = SQL`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = $X.sql`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = $FMT.format(...);
+              ...
+          - pattern-not-inside: |
+              $Q = Prisma.join(...);
+              ...
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.query($Q, ...)
+              - pattern: $DB.execute($Q, ...)
+          - pattern-not: $DB.query({...}, ...)
+          - pattern-not: $DB.execute({...}, ...)
+          - pattern-not-regex: '\A(?:(?![^\n]*?\b(?:from|require\(|import\(?)\s*[\"''](?:pg|pg-pool|mysql|mysql2(?:/promise)?|better-sqlite3|sqlite3?|node:sqlite|bun:sqlite|@libsql/client(?:/[\w./-]*)?|@neondatabase/serverless|@vercel/postgres|@planetscale/database|postgres|sequelize|knex|drizzle-orm(?:/[\w./-]*)?|kysely|duckdb|@duckdb/node-api|mssql|oracledb|snowflake-sdk|@google-cloud/bigquery)[\"''])[^\n]*+\n)*+(?![^\n]*?\b(?:from|require\(|import\(?)\s*[\"''](?:pg|pg-pool|mysql|mysql2(?:/promise)?|better-sqlite3|sqlite3?|node:sqlite|bun:sqlite|@libsql/client(?:/[\w./-]*)?|@neondatabase/serverless|@vercel/postgres|@planetscale/database|postgres|sequelize|knex|drizzle-orm(?:/[\w./-]*)?|kysely|duckdb|@duckdb/node-api|mssql|oracledb|snowflake-sdk|@google-cloud/bigquery)[\"''])[^\n]*+\z'
+          - metavariable-regex:
+              metavariable: $Q
+              regex: ^(?!(?:[\w$]+\.)*(?:sql|SQL|\$queryRaw|\$executeRaw|\$queryRawTyped)\s*`)(?!(?:mysql2?|SqlString|sqlstring)\.format\s*\()(?!Prisma\.join\s*\()
+          - pattern-not-inside: |
+              $Q = sql`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = SQL`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = $X.sql`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = $FMT.format(...);
+              ...
+          - pattern-not-inside: |
+              $Q = Prisma.join(...);
+              ...
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern-either:
+              - pattern: '$DB.query({..., $K: $Q, ...}, ...)'
+              - pattern: '$DB.execute({..., $K: $Q, ...}, ...)'
+              - pattern: '$DB.createQueryJob({..., $K: $Q, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $K
+              regex: ^(?:text|sql|query)$
+          - pattern-not-regex: '\A(?:(?![^\n]*?\b(?:from|require\(|import\(?)\s*[\"''](?:pg|pg-pool|mysql|mysql2(?:/promise)?|better-sqlite3|sqlite3?|node:sqlite|bun:sqlite|@libsql/client(?:/[\w./-]*)?|@neondatabase/serverless|@vercel/postgres|@planetscale/database|postgres|sequelize|knex|drizzle-orm(?:/[\w./-]*)?|kysely|duckdb|@duckdb/node-api|mssql|oracledb|snowflake-sdk|@google-cloud/bigquery)[\"''])[^\n]*+\n)*+(?![^\n]*?\b(?:from|require\(|import\(?)\s*[\"''](?:pg|pg-pool|mysql|mysql2(?:/promise)?|better-sqlite3|sqlite3?|node:sqlite|bun:sqlite|@libsql/client(?:/[\w./-]*)?|@neondatabase/serverless|@vercel/postgres|@planetscale/database|postgres|sequelize|knex|drizzle-orm(?:/[\w./-]*)?|kysely|duckdb|@duckdb/node-api|mssql|oracledb|snowflake-sdk|@google-cloud/bigquery)[\"''])[^\n]*+\z'
+          - metavariable-regex:
+              metavariable: $Q
+              regex: ^(?!(?:[\w$]+\.)*(?:sql|SQL|\$queryRaw|\$executeRaw|\$queryRawTyped)\s*`)(?!(?:mysql2?|SqlString|sqlstring)\.format\s*\()(?!Prisma\.join\s*\()
+          - pattern-not-inside: |
+              $Q = sql`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = SQL`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = $X.sql`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = $FMT.format(...);
+              ...
+          - pattern-not-inside: |
+              $Q = Prisma.join(...);
+              ...
+          - focus-metavariable: $Q
+      # SQLite drivers: better-sqlite3 and node:sqlite `prepare` / `exec`, and sqlite3, sqlite,
+      # and bun:sqlite `run` / `all` / `get` / `each`, on a receiver named like a database or
+      # built with `new Database(...)` / `new DatabaseSync(...)`. RegExp.prototype.exec is
+      # not a database.
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.prepare($Q, ...)
+              - pattern: $DB.exec($Q, ...)
+              - pattern: $DB.run($Q, ...)
+              - pattern: $DB.all($Q, ...)
+              - pattern: $DB.get($Q, ...)
+              - pattern: $DB.each($Q, ...)
+          - pattern-inside: |
+              $DB = new $CLS(...);
+              ...
+          - metavariable-regex:
+              metavariable: $CLS
+              regex: ^(?:[\w$]+\.)?(?:Database|DatabaseSync)$
+          - metavariable-regex:
+              metavariable: $Q
+              regex: ^(?!(?:[\w$]+\.)*(?:sql|SQL|\$queryRaw|\$executeRaw|\$queryRawTyped)\s*`)(?!(?:mysql2?|SqlString|sqlstring)\.format\s*\()(?!Prisma\.join\s*\()
+          - pattern-not-inside: |
+              $Q = sql`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = SQL`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = $X.sql`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = $FMT.format(...);
+              ...
+          - pattern-not-inside: |
+              $Q = Prisma.join(...);
+              ...
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.prepare($Q, ...)
+              - pattern: $DB.exec($Q, ...)
+              - pattern: $DB.run($Q, ...)
+              - pattern: $DB.all($Q, ...)
+              - pattern: $DB.get($Q, ...)
+              - pattern: $DB.each($Q, ...)
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?:[\w$]+\.)*(?:[\w$]*[a-z0-9_$](?=[A-Z])|[\w$]*_)?(?i:db|database|pool|conn|connection|pg|mysql|sqlite|knex|sequelize|tx|trx|transaction)$
+          - metavariable-regex:
+              metavariable: $Q
+              regex: ^(?!(?:[\w$]+\.)*(?:sql|SQL|\$queryRaw|\$executeRaw|\$queryRawTyped)\s*`)(?!(?:mysql2?|SqlString|sqlstring)\.format\s*\()(?!Prisma\.join\s*\()
+          - pattern-not-inside: |
+              $Q = sql`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = SQL`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = $X.sql`...`;
+              ...
+          - pattern-not-inside: |
+              $Q = $FMT.format(...);
+              ...
+          - pattern-not-inside: |
+              $Q = Prisma.join(...);
+              ...
+          - focus-metavariable: $Q
+      # Raw-SQL escape hatches: Prisma $queryRawUnsafe / $executeRawUnsafe, postgres.js
+      # sql.unsafe(), Drizzle / knex / Kysely / Prisma `raw()`, knex's *Raw builder methods,
+      # Sequelize literal(), and the SQL template of mysql / sqlstring format().
+      - patterns:
+          - pattern-either:
+              - pattern: $X.$queryRawUnsafe($Q, ...)
+              - pattern: $X.$executeRawUnsafe($Q, ...)
+              - pattern: $X.unsafe($Q, ...)
+              - patterns:
+                  - pattern: $X.raw($Q, ...)
+                  - pattern-not: String.raw(...)
+              - pattern: $X.whereRaw($Q, ...)
+              - pattern: $X.orWhereRaw($Q, ...)
+              - pattern: $X.andWhereRaw($Q, ...)
+              - pattern: $X.havingRaw($Q, ...)
+              - pattern: $X.orHavingRaw($Q, ...)
+              - pattern: $X.orderByRaw($Q, ...)
+              - pattern: $X.groupByRaw($Q, ...)
+              - pattern: $X.joinRaw($Q, ...)
+              - pattern: $X.fromRaw($Q, ...)
+              - patterns:
+                  - pattern: $X.literal($Q)
+                  - metavariable-regex:
+                      metavariable: $X
+                      regex: ^(?:[\w$]+\.)*[Ss]equelize$
+              - patterns:
+                  - pattern-inside: |
+                      import {..., literal, ...} from "sequelize";
+                      ...
+                  - pattern: literal($Q)
+              - patterns:
+                  - pattern: $FMT.format($Q, ...)
+                  - metavariable-regex:
+                      metavariable: $FMT
+                      regex: ^(?:mysql2?|SqlString|sqlstring)$
+          - focus-metavariable: $Q
+      # SQL text built from untrusted input (a template literal or `+` whose text starts like
+      # an uppercase SQL statement) and handed to any call, such as a module's own run-query
+      # helper, so it is reported where the text is built, in the default scan too. Console and
+      # logger calls are skipped, and so are tagged templates (`sql`...``, `pg`...``,
+      # `prisma.$queryRaw`...``), which OpenGrep treats as calls but which send interpolations
+      # as parameters. A statement built into a variable first is left to the sinks above, so
+      # it is reported once.
+      - patterns:
+          - pattern-inside: $F(..., $Q, ...)
+          - pattern: $Q
+          - pattern-not-inside: $TAG`...`
+          - metavariable-regex:
+              metavariable: $Q
+              regex: ^[`"']\s*(?:SELECT\b[\s\S]*?\bFROM\b|WITH\s+\w+\s+AS\s*\(|INSERT\s+INTO\b|UPDATE\s+\w+\s+SET\b|DELETE\s+FROM\b)
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(?!console\.|(?:[\w$]+\.)*(?:log|logger|debug|info|warn|warning|error|trace)$)
+          - focus-metavariable: $Q
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-mcp:
+        - "MCP05:2025 - Command Injection & Execution"
+      owasp-aisvs:
+        - "v1.01-C10.4.4 - Schema, Message, and Input Validation"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0036 - Data from Information Repositories"
+      cwe:
+        - "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, fastmcp, claude-agent-sdk, node, pg, mysql2, better-sqlite3, prisma, knex, sequelize, drizzle, postgres]
+      # SQL API shapes: see llm-output-to-sql-ts (checked 2026-10-22).
+      references:
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/1.32.1/src/server/mcp.ts
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.3.1/packages/server/src/server/mcp.ts
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP05-2025%E2%80%93Command-Injection%26Execution.md
+        - https://cwe.mitre.org/data/definitions/89.html
+        - https://node-postgres.com/features/queries#parameterized-query
+        - https://www.prisma.io/docs/orm/prisma-client/using-raw-sql/raw-queries
+        - https://cheatsheetseries.owasp.org/cheatsheets/Query_Parameterization_Cheat_Sheet.html

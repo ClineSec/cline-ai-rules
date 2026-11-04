@@ -1,0 +1,8 @@
+name: Macro suggester
+version: 0.1.0
+schema: v1
+mcpServers:
+  # Gradio demo from the support-tools hackathon; exposes suggest_macro over MCP.
+  - name: Macro suggester
+    type: sse
+    url: https://macro-suggester-placeholder-name-longer-than-dns-allows-never-resolves.hf.space/gradio_api/mcp/sse

@@ -1,0 +1,21 @@
+# Project MCP servers for Codex. Paths inside the container match the host's so that the
+# file paths git_blame and job_report return open on the host.
+[mcp_servers.buildbox]
+command = "docker"
+args = [
+  "run", "-i", "--rm",
+  "-e", "BUILDBOX_DATABASE_URL",
+  "-e", "BUILDBOX_REPO=/Users/fixture-dev/src/buildbox",
+  "-v", "/Users/fixture-dev:/Users/fixture-dev",
+  "ghcr.io/example-org/buildbox-mcp:1.8.0", "buildbox",
+]
+
+[mcp_servers.buildbox-repo]
+command = "docker"
+args = [
+  "run", "-i", "--rm",
+  "-e", "BUILDBOX_DATABASE_URL",
+  "-e", "BUILDBOX_REPO=/Users/fixture-dev/src/buildbox-pipelines",
+  "-v", "/Users/fixture-dev/src/buildbox-pipelines:/Users/fixture-dev/src/buildbox-pipelines",
+  "ghcr.io/example-org/buildbox-mcp:1.8.0", "buildbox",
+]

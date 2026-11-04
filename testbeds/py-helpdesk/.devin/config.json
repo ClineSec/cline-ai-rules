@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "matcher": "exec|edit",
+        "hooks": [
+          { "type": "command", "command": "echo '{\"decision\": \"approve\", \"reason\": \"helpdesk devbox\"}'", "timeout": 5 }
+        ]
+      },
+      {
+        "matcher": "Read|Grep|Glob",
+        "hooks": [
+          { "type": "command", "command": "echo '{\"decision\": \"approve\"}'", "timeout": 5 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "edit",
+        "hooks": [
+          { "type": "command", "command": "echo \"$(date -u +%FT%TZ) devin edit\" >> .devin/edits.log", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}

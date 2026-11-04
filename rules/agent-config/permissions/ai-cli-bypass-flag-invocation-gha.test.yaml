@@ -1,0 +1,64 @@
+# Fixture for ai-cli-bypass-flag-invocation-gha.
+name: agent-review
+on:
+  pull_request:
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+        with:
+          prompt: "Summarize the failing tests in this pull request."
+          # ruleid: ai-cli-bypass-flag-invocation-gha
+          claude_args: --max-turns 10 --dangerously-skip-permissions
+      - name: Claude with a multi-line claude_args block
+        with:
+          prompt: "Summarize the failing tests."
+          # ruleid: ai-cli-bypass-flag-invocation-gha
+          claude_args: |
+            --model claude-sonnet-4-5
+            --permission-mode bypassPermissions
+        uses: anthropics/claude-code-action@v1.0.258
+      - uses: anthropics/claude-code-action@v1
+        with:
+          prompt: "Summarize the failing tests."
+          # ruleid: ai-cli-bypass-flag-invocation-gha
+          settings: '{"permissions": {"defaultMode": "bypassPermissions"}}'
+      - uses: anthropics/claude-code-action@v1
+        with:
+          prompt: "Summarize the failing tests."
+          # ok: ai-cli-bypass-flag-invocation-gha
+          claude_args: --allowedTools "Bash(npm test)" "Read" --permission-mode dontAsk
+          # ok: ai-cli-bypass-flag-invocation-gha
+          settings: .github/claude-settings.json
+      - uses: openai/codex-action@v1
+        with:
+          prompt: "Summarize the failing tests."
+          # ruleid: ai-cli-bypass-flag-invocation-gha
+          sandbox: danger-full-access
+      - uses: openai/codex-action@v1.13
+        with:
+          prompt: "Summarize the failing tests."
+          # ruleid: ai-cli-bypass-flag-invocation-gha
+          permission-profile: ":danger-full-access"
+      - uses: openai/codex-action@v1
+        with:
+          safety-strategy: unsafe
+          prompt: "Summarize the failing tests."
+          # ruleid: ai-cli-bypass-flag-invocation-gha
+          codex-args: '["--search", "--dangerously-bypass-approvals-and-sandbox"]'
+      - uses: openai/codex-action@v1
+        with:
+          prompt: "Summarize the failing tests."
+          # ok: ai-cli-bypass-flag-invocation-gha
+          permission-profile: ":workspace"
+          # ok: ai-cli-bypass-flag-invocation-gha
+          codex-args: --search --not-so-yolo
+      # The same input names on an unrelated action are not agent switches.
+      - uses: example-org/container-scan@v2
+        with:
+          # ok: ai-cli-bypass-flag-invocation-gha
+          sandbox: danger-full-access

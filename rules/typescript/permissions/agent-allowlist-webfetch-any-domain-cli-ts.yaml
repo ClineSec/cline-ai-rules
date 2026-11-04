@@ -1,0 +1,202 @@
+rules:
+  - id: agent-allowlist-webfetch-any-domain-cli-ts
+    # JavaScript/TypeScript twin of agent-allowlist-webfetch-any-domain-cli: the same allow flags and entries,
+    # here as argv elements (spawn, execFile, execa, Bun.spawn) or inside a command
+    # string (exec, execSync). Only agent CLIs take these flags with these entries, so the program needn't be
+    # in view: an argv built in pieces counts.
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      This code starts an agent CLI that may fetch any web address without asking: an
+      --allowedTools / --allowed-tools entry such as WebFetch or WebFetch(domain:*) (Claude
+      Code) or web_fetch (Gemini CLI), --allow-tool url or --allow-all-urls (GitHub Copilot
+      CLI), or Gemini's --approval-mode auto_edit, which approves web_fetch along with file
+      edits. Agents launched from code usually work on text other people control (a ticket,
+      an issue, a pull request, a log), and a prompt injection in it can then have the agent
+      read a secret (an API key in the environment, a credential file, source code) and send
+      it out in the address of a request to a server the attacker runs, such as
+      https://attacker.example/?d=<secret>. Allow only the hosts the agent needs
+      (WebFetch(domain:docs.example.com), --allow-url docs.example.com), or fetch the page in
+      your own code and put it in the prompt.
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      # An entry after a separate allow flag in an argv array or call
+                      # (args.push(...) included; Claude Code takes several values after one
+                      # flag).
+                      - pattern: '[..., $AF, ..., $VAL, ...]'
+                      - pattern: '$F(..., $AF, ..., $VAL, ...)'
+                      # A tool list kept in a variable, then spread or joined into argv.
+                      - pattern: |
+                          $T = [..., $VAL, ...];
+                          ...
+                          $Y = [..., $AF, ..., <... $T ...>, ...];
+                      - pattern: |
+                          $T = [..., $VAL, ...];
+                          ...
+                          $F(..., [..., $AF, ..., <... $T ...>, ...], ...);
+                      - pattern: |
+                          $T = [..., $VAL, ...];
+                          ...
+                          $F(..., $AF, ..., <... $T ...>, ...);
+                  - metavariable-regex:
+                      metavariable: $AF
+                      regex: ^["'`](?:--allowed[-_]?[tT]ools|--allow-tool|--approval-mode)["'`]$
+                  # A deny flag or a prompt flag after the allow flag starts another value.
+                  - pattern-not-inside: '[..., $AF, ..., "=~/^(?:--(?:disallowed[-_]?[tT]ools|deny-tool|prompt|print)|-p)$/", ..., $VAL, ...]'
+                  - pattern-not-inside: '$F(..., $AF, ..., "=~/^(?:--(?:disallowed[-_]?[tT]ools|deny-tool|prompt|print)|-p)$/", ..., $VAL, ...)'
+                  - focus-metavariable: $VAL
+              # One element: "--allowedTools=WebFetch", "--allow-tool=url",
+              # "--approval-mode=auto_edit".
+              - pattern: '"=~/^--(?:allowed[-_]?[tT]ools|allow-tool|approval-mode)=/"'
+          # A bare WebFetch or a domain: rule for any host (Claude Code), web_fetch (Gemini
+          # CLI), url (Copilot CLI), or auto_edit, as a whole element or a list item.
+          - pattern-regex: |-
+              (?x)
+              # --- web fetch any host (begin): build.py keeps this block identical in the
+              # agent-allowlist-webfetch-any-domain rules; edit every copy together. ---
+              (?(DEFINE)
+                # A DNS label as written, and one with a * in it. In Claude Code and Cursor rules a *
+                # other than a leading *. matches text within one label.
+                (?<wflit> [A-Za-z0-9_-]++ )
+                (?<wfwild> [A-Za-z0-9_-]*+ \* [A-Za-z0-9_*-]*+ )
+                # Where a host pattern ends: a port, path, closing bracket, quote, separator, or the end.
+                (?<wfend> (?= [:/)"'`\s,;\]}] | $ ) )
+                # Top-level names that public DNS never answers (.local is mDNS; the private names of
+                # scripts/gen_mcp_remote_host.py plus the RFC 2606 / 6761 reserved names), so a wildcard
+                # under one can't reach an attacker's server.
+                (?<wfpriv> (?i: local | localhost | internal | lan | home | corp | intranet | private
+                  | consul | proxy | lab | wg | monitor | hammernet | test | invalid | example | onion
+                  | arpa ) (?&wfend) )
+                # Country-code second levels that anyone can register under (co.uk, com.au).
+                (?<wfcc2> (?i: co | com | net | org | ne | or ) \. [A-Za-z]{2} )
+                # Tunnels and free app and page hosts, where anyone can get a subdomain and read its
+                # request logs (scripts/gen_mcp_remote_host.py's services plus free static page hosts).
+                (?<wfshared> (?i: trycloudflare\.com | ngrok-free\.(?:app|dev|pizza) | ngrok\.(?:app|dev|io|pizza)
+                  | loca\.lt | localtunnel\.me | lhr\.life | lhr\.rocks | serveo\.net | pinggy(?:-free)?\.link
+                  | tunnelmole\.net | bore\.pub | loclx\.io | devtunnels\.ms | app\.github\.dev
+                  | oast\.(?:pro|live|site|online|fun|me) | oastify\.com | burpcollaborator\.net
+                  | onrender\.com | fly\.dev | herokuapp\.com | vercel\.app | netlify\.app | railway\.app
+                  | workers\.dev | deno\.dev | deno\.net | replit\.app | koyeb\.app | hf\.space | modal\.run
+                  | github\.io | gitlab\.io | pages\.dev | web\.app | firebaseapp\.com | glitch\.me | surge\.sh
+                  # Tailscale Funnel publishes any tailnet's node under ts.net.
+                  | ts\.net ) )
+                # A host pattern that matches hosts anyone can own: every host (*, *.*), a wildcard in the
+                # registrable label (*.com, *example.com, docs.*.com, *.co.uk), or any subdomain of a tunnel
+                # or free hosting domain (*.trycloudflare.com, *.up.railway.app). A wildcard under a domain
+                # someone owns (*.example.com, api-*.example.com, example.*) or a private name (*.local) is
+                # scoped.
+                (?<anyhost>
+                    (?= \.*+ \* ) [*.]++ (?&wfend)
+                  | (?: (?: (?&wflit) | (?&wfwild) ) \. )*? (?&wfwild) \. (?! (?&wfpriv) )
+                    (?: (?&wfcc2) | (?&wflit) ) \.?+ (?&wfend)
+                  | \* \. (?: (?&wflit) \. )*? (?&wfshared) \.?+ (?&wfend) )
+              )
+              # --- web fetch any host (end) ---
+              (?<= ["'`,=\x20] )
+              (?: WebFetch (?: \( \s*+ \) | \( domain: (?&anyhost) \) )? | web_fetch (?: \( [^)\n]*+ \) )?
+                | url | auto_edit )
+              (?= ["'`,\x20] )
+      # Copilot CLI --allow-all-urls as an argv element; not a list of flags to refuse.
+      - patterns:
+          - pattern-either:
+              - pattern: '[..., "--allow-all-urls", ...]'
+              - pattern: '$F(..., "--allow-all-urls", ...)'
+          - pattern-not-inside: $X.includes($Y)
+          - pattern-not-inside: $X === $Y
+          - pattern-not-inside:
+              patterns:
+                - pattern-inside: const $NAME = $V
+                - metavariable-regex:
+                    metavariable: $NAME
+                    regex: (?i)^[\w.]*(?:disallow|deny|denied|block|forbid|exclude|risk|danger|unsafe|reject)
+          - pattern-regex: --allow-all-urls
+      # A whole command line in one string (exec, execSync, a shell: true spawn).
+      - patterns:
+          - pattern-regex: |-
+              (?x)
+              # --- web fetch any host (begin): build.py keeps this block identical in the
+              # agent-allowlist-webfetch-any-domain rules; edit every copy together. ---
+              (?(DEFINE)
+                # A DNS label as written, and one with a * in it. In Claude Code and Cursor rules a *
+                # other than a leading *. matches text within one label.
+                (?<wflit> [A-Za-z0-9_-]++ )
+                (?<wfwild> [A-Za-z0-9_-]*+ \* [A-Za-z0-9_*-]*+ )
+                # Where a host pattern ends: a port, path, closing bracket, quote, separator, or the end.
+                (?<wfend> (?= [:/)"'`\s,;\]}] | $ ) )
+                # Top-level names that public DNS never answers (.local is mDNS; the private names of
+                # scripts/gen_mcp_remote_host.py plus the RFC 2606 / 6761 reserved names), so a wildcard
+                # under one can't reach an attacker's server.
+                (?<wfpriv> (?i: local | localhost | internal | lan | home | corp | intranet | private
+                  | consul | proxy | lab | wg | monitor | hammernet | test | invalid | example | onion
+                  | arpa ) (?&wfend) )
+                # Country-code second levels that anyone can register under (co.uk, com.au).
+                (?<wfcc2> (?i: co | com | net | org | ne | or ) \. [A-Za-z]{2} )
+                # Tunnels and free app and page hosts, where anyone can get a subdomain and read its
+                # request logs (scripts/gen_mcp_remote_host.py's services plus free static page hosts).
+                (?<wfshared> (?i: trycloudflare\.com | ngrok-free\.(?:app|dev|pizza) | ngrok\.(?:app|dev|io|pizza)
+                  | loca\.lt | localtunnel\.me | lhr\.life | lhr\.rocks | serveo\.net | pinggy(?:-free)?\.link
+                  | tunnelmole\.net | bore\.pub | loclx\.io | devtunnels\.ms | app\.github\.dev
+                  | oast\.(?:pro|live|site|online|fun|me) | oastify\.com | burpcollaborator\.net
+                  | onrender\.com | fly\.dev | herokuapp\.com | vercel\.app | netlify\.app | railway\.app
+                  | workers\.dev | deno\.dev | deno\.net | replit\.app | koyeb\.app | hf\.space | modal\.run
+                  | github\.io | gitlab\.io | pages\.dev | web\.app | firebaseapp\.com | glitch\.me | surge\.sh
+                  # Tailscale Funnel publishes any tailnet's node under ts.net.
+                  | ts\.net ) )
+                # A host pattern that matches hosts anyone can own: every host (*, *.*), a wildcard in the
+                # registrable label (*.com, *example.com, docs.*.com, *.co.uk), or any subdomain of a tunnel
+                # or free hosting domain (*.trycloudflare.com, *.up.railway.app). A wildcard under a domain
+                # someone owns (*.example.com, api-*.example.com, example.*) or a private name (*.local) is
+                # scoped.
+                (?<anyhost>
+                    (?= \.*+ \* ) [*.]++ (?&wfend)
+                  | (?: (?: (?&wflit) | (?&wfwild) ) \. )*? (?&wfwild) \. (?! (?&wfpriv) )
+                    (?: (?&wfcc2) | (?&wflit) ) \.?+ (?&wfend)
+                  | \* \. (?: (?&wflit) \. )*? (?&wfshared) \.?+ (?&wfend) )
+              )
+              # --- web fetch any host (end) ---
+              (?<![\w$])  (?<qt>["'`]) [ \t]*
+              # Optional path and package runner in front of the program.
+              (?: [\w.~/${}-]*/ )?
+              (?: (?:npx|bunx|pnpx) (?:[ \t]+(?:-y|--yes))? [ \t]+ @(?:anthropic-ai/claude-code|google/gemini-cli|github/copilot)
+                  (?:@[\w.^~-]+)? | claude | gemini | copilot | gh[ \t]+copilot )
+              (?=[ \t]) (?: (?!\k<qt>) [^\n\\] | \\. )*? [ \t]
+              (?:
+                  (?: --allowed[-_]?[tT]ools | --allow-tool ) [= \t]
+                  # The flag's values, up to the next --flag or the end of the string.
+                  (?: (?!\k<qt>) (?! [ \t]--[a-zA-Z] ) [^\n\\] | \\. )*?
+                  (?<! [\w(:*.-] ) \K
+                  (?: WebFetch (?: \( \s*+ \) | \( domain: (?&anyhost) \) )? | web_fetch (?: \( [^)\n]*+ \) )? | url )
+                  (?! [\w(.:-] )
+                | \K (?: --allow-all-urls | --approval-mode [= \t] ["']?+ auto_edit ) (?! [\w-] ) )
+          # Not in a comment.
+          - pattern-not-regex: (?m)^[ \t]*(?://|/?\*)[^\n]*
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0086 - Exfiltration via AI Agent Tool Invocation"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code, gemini-cli, copilot-cli]
+      references:
+        - https://code.claude.com/docs/en/cli-reference
+        - https://code.claude.com/docs/en/permissions#webfetch
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/policy/policies/write.toml
+        - https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#tool-permission-patterns
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

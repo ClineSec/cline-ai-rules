@@ -1,0 +1,46 @@
+{
+  "permissions": {
+    "allow": [
+      // ok: claude-settings-mcp-auto-approve
+      "Read",
+      // ok: claude-settings-mcp-auto-approve
+      "Bash(npm test)",
+      // ruleid: claude-settings-mcp-auto-approve
+      "mcp__github",
+      // ruleid: claude-settings-mcp-auto-approve
+      "mcp__linear__*",
+      // ruleid: claude-settings-mcp-auto-approve
+      "mcp__github__merge_pull_request",
+      // ruleid: claude-settings-mcp-auto-approve
+      "mcp__db__*_query",
+      // ruleid: claude-settings-mcp-auto-approve
+      "mcp__browser__browser_evaluate",
+      // ok: claude-settings-mcp-auto-approve
+      "mcp__github__get_*",
+      // ok: claude-settings-mcp-auto-approve
+      "mcp__github__list_issues",
+      // ok: claude-settings-mcp-auto-approve
+      "mcp__github__get_workflow_run",
+      // ok: claude-settings-mcp-auto-approve
+      "mcp__puppeteer__puppeteer_navigate",
+      // ok: claude-settings-mcp-auto-approve
+      "mcp__*",
+      // ok: claude-settings-mcp-auto-approve
+      "mcp__*__*",
+      // ok: claude-settings-mcp-auto-approve
+      "*",
+      // ok: claude-settings-mcp-auto-approve
+      "mcp__github__create_issue(repo:example-org/helpdesk)"
+    ],
+    "deny": [
+      // ok: claude-settings-mcp-auto-approve
+      "mcp__github__delete_repository"
+    ],
+    "ask": [
+      // ok: claude-settings-mcp-auto-approve
+      "mcp__github"
+    ]
+  },
+  // ok: claude-settings-mcp-auto-approve
+  "enabledMcpjsonServers": ["github"]
+}

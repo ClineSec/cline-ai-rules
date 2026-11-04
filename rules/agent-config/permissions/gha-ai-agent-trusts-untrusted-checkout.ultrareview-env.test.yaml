@@ -1,0 +1,17 @@
+# Fixture for gha-ai-agent-trusts-untrusted-checkout: Claude Code's ultrareview trust check
+# switched off for every job, on issue_comment.
+name: ultrareview-command
+on:
+  issue_comment:
+    types: [created]
+env:
+  # ruleid: gha-ai-agent-trusts-untrusted-checkout
+  CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK: 1
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+      - run: claude ultrareview ${{ github.event.issue.number }} --json > review.json

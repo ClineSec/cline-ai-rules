@@ -1,0 +1,171 @@
+rules:
+  - id: agent-allowlist-webfetch-any-domain-opencode
+    # Regex, not JSON: OpenGrep's JSON parser skips *.jsonc files (Kilo's default project file
+    # is .kilo/kilo.jsonc), and opencode applies the last matching rule, so key order matters,
+    # which JSON object patterns ignore. Both formats are JSONC, so comments are skipped.
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This opencode / Kilo permission lets the agent fetch any web address without asking:
+      "webfetch": "allow", or a webfetch URL pattern such as "*" or "https://*.example.com/*"
+      set to "allow". A pattern's * matches any text, / included, so any * before the host's
+      closing / also matches https://attacker.example/?x=.example.com/. opencode 1.19 and Kilo
+      7.8 already allow webfetch by default, and this line makes that the project's policy,
+      overriding a developer's own "webfetch": "ask" or the file's "*": "ask". A prompt
+      injection in a file, issue, web page, or tool result the agent reads can then have it
+      read a secret (.env, a cloud credential, source code) and send it out in the address of
+      a request to a server the attacker runs, such as https://attacker.example/?d=<secret>,
+      with nobody asked. Set "webfetch" to "ask", with "allow" only for patterns that start
+      with a fixed host and a slash ("https://docs.example.com/*").
+    paths:
+      include:
+        # Project config at any depth, including .opencode/, .kilo/, and .kilocode/ folders.
+        - "opencode.json"
+        - "opencode.jsonc"
+        - "kilo.json"
+        - "kilo.jsonc"
+        # Agents and modes in Markdown front matter (opencode 1.19 and Kilo 7.8 read
+        # {agent,agents}/**/*.md and {mode,modes}/*.md in these folders).
+        - ".opencode/agent/**/*.md"
+        - ".opencode/agents/**/*.md"
+        - ".opencode/mode/*.md"
+        - ".opencode/modes/*.md"
+        - ".kilo/agent/**/*.md"
+        - ".kilo/agents/**/*.md"
+        - ".kilo/mode/*.md"
+        - ".kilo/modes/*.md"
+        - ".kilocode/agent/**/*.md"
+        - ".kilocode/agents/**/*.md"
+        - ".kilocode/mode/*.md"
+        - ".kilocode/modes/*.md"
+    pattern-either:
+      # "webfetch": "allow" as a member of a "permission" object (top level or in an agent),
+      # where neither key is on a // line, with no later "*" member: the last matching rule
+      # wins. A "*": "allow" member approves every tool: that is a wholesale allow, reported by
+      # kilo-opencode-permission-allow, not this rule's finding.
+      - pattern-regex: |-
+          (?xm)
+          (?(DEFINE)
+            # A JSON string, so comment markers and braces inside one are skipped.
+            (?<str> " [^"\\\n]*+ (?: \\. [^"\\\n]*+ )*+ " )
+            # One token of an object body: a string, a // or /* */ comment, a nested object or
+            # array, or any other character. It never consumes the body's own closing brace.
+            (?<piece> (?> (?&str) | //[^\n]*+ | /\* (?: [^*] | \*(?!/) )*+ \*/
+                        | \{ (?&piece)*+ \} | \[ (?&piece)*+ \] | [^"{}\[\]/] | /(?![/*]) ) )
+            # A key that matches every permission or URL.
+            (?<star> " \* " \s*+ : )
+          )
+          ^[\x20\t]*+ (?!//) (?: [^"\n/] | (?&str) | /(?![/*]) )*? " permission " \s*+ : \s*+ \{
+          (?! (?&piece)*? (?&star) \s*+ " allow " )
+          (?: (?! " webfetch " \s*+ : ) (?&piece) )*?
+          \K " webfetch " \s*+ : \s*+ " allow "
+          (?! (?&piece)*? (?&star) )
+      # A webfetch URL pattern that matches any host, set to allow, with no later "*" key in
+      # the webfetch object or in the permission object after it.
+      - patterns:
+          - pattern-regex: |-
+              (?xm)
+              (?(DEFINE)
+                (?<str> " [^"\\\n]*+ (?: \\. [^"\\\n]*+ )*+ " )
+                (?<piece> (?> (?&str) | //[^\n]*+ | /\* (?: [^*] | \*(?!/) )*+ \*/
+                            | \{ (?&piece)*+ \} | \[ (?&piece)*+ \] | [^"{}\[\]/] | /(?![/*]) ) )
+                (?<star> " \* " \s*+ : )
+              )
+              ^[\x20\t]*+ (?!//) (?: [^"\n/] | (?&str) | /(?![/*]) )*? " permission " \s*+ : \s*+ \{
+              (?! (?&piece)*? (?&star) \s*+ " allow " )
+              (?&piece)*+ \}
+          - pattern-regex: |-
+              (?xm)
+              (?(DEFINE)
+                (?<str> " [^"\\\n]*+ (?: \\. [^"\\\n]*+ )*+ " )
+                (?<piece> (?> (?&str) | //[^\n]*+ | /\* (?: [^*] | \*(?!/) )*+ \*/
+                            | \{ (?&piece)*+ \} | \[ (?&piece)*+ \] | [^"{}\[\]/] | /(?![/*]) ) )
+              )
+              ^[\x20\t]*+ (?!//) (?: [^"\n/] | (?&str) | /(?![/*]) )*? " webfetch " \s*+ : \s*+ \{
+              (?&piece)*+ \}
+          - pattern-regex: |-
+              (?xm)
+              (?(DEFINE)
+                (?<str> " [^"\\\n]*+ (?: \\. [^"\\\n]*+ )*+ " )
+                (?<piece> (?> (?&str) | //[^\n]*+ | /\* (?: [^*] | \*(?!/) )*+ \*/
+                            | \{ (?&piece)*+ \} | \[ (?&piece)*+ \] | [^"{}\[\]/] | /(?![/*]) ) )
+                (?<star> " \* " \s*+ : )
+                # opencode turns * into .* and ? into . and matches the whole URL, so a
+                # pattern scopes the host only when it starts with http(s)://, a fixed host,
+                # and then / or the end. A wildcard anywhere before that (in the scheme, host,
+                # or port) matches any host.
+                (?<anyurl> \* | [hH] [tT]{0,2} [pP]?+ [sS]?+ :?+ /{0,2} [^/\s"*?]*+ [*?] )
+              )
+              (?: ^[\x20\t]*+ (?!//) | \G ) (?: [^"\n/] | (?&str) | /(?![/*]) )*?
+              \K " (?&anyurl) [^"\n]*+ " \s*+ : \s*+ " allow "
+              (?! (?&piece)*? (?&star) )
+              (?! (?&piece)*+ \} (?&piece)*? (?&star) )
+      # The same in an agent's Markdown front matter (YAML): a permission: block, then its
+      # webfetch key.
+      - patterns:
+          - pattern-regex: \A(?:\x{FEFF})?---[ \t]*\r?\n(?s:.*?)\r?\n---[ \t]*(?:\r?\n|\z)
+          # The permission block, unless it holds a "*": allow key (a wholesale allow).
+          - pattern-regex: |-
+              (?xm)
+              ^ (?<pind>[\x20\t]*+) permission [\x20\t]*+ :
+              (?! [^\n]*? ["']\*["'] [\x20\t]*+ : [\x20\t]*+ ["']?allow\b )
+              (?! [^\n]*+ (?: \n \k<pind> [\x20\t]++ [^\n]*+ )*? \n \k<pind> [\x20\t]++ ["']\*["'] [\x20\t]*+ : [\x20\t]*+ ["']?allow\b )
+              [^\n]*+ (?: \n (?: \k<pind> [\x20\t]++ [^\n]*+ | [\x20\t]*+ (?=\n) ) )*+
+          - pattern-regex: |-
+              (?xm)
+              (?(DEFINE)
+                (?<anyurl> \* | [hH] [tT]{0,2} [pP]?+ [sS]?+ :?+ /{0,2} [^/\s"'*?]*+ [*?] )
+                (?<allow> (?: allow | "allow" | 'allow' ) (?= [\x20\t]*+ (?: [,}\#] | $ ) ) )
+                # A later "*" key at a given indent, before the block at that indent ends.
+                (?<qstar> ["']\*["'] [\x20\t]*+ : )
+              )
+              (?:
+                  # webfetch: allow, as a block key or inside a flow mapping, with no later "*"
+                  # key beside it.
+                  (?: ^ (?<wi>[\x20\t]++) | [{,][\x20\t]*+ ) \K webfetch [\x20\t]*+ : [\x20\t]*+ (?&allow)
+                  (?! [^\n]*? (?&qstar) )
+                  (?(<wi>) (?! (?: \n (?: \k<wi> [^\n]*+ | [\x20\t]*+ (?=\n) ) )*? \n \k<wi> (?&qstar) ) )
+                  # A URL pattern for any host in a webfetch flow mapping.
+                | ^ (?<fi>[\x20\t]++) webfetch [\x20\t]*+ : [\x20\t]*+ \{ [^\n]*? [{,][\x20\t]*+ \K
+                  (?: " (?&anyurl) [^"\n]*+ " | ' (?&anyurl) [^'\n]*+ ' ) [\x20\t]*+ : [\x20\t]*+ (?&allow)
+                  (?! [^\n]*? (?&qstar) )
+                  (?! (?: \n (?: \k<fi> [^\n]*+ | [\x20\t]*+ (?=\n) ) )*? \n \k<fi> (?&qstar) )
+                  # A URL pattern for any host as a key of a webfetch block.
+                | ^ (?<bi>[\x20\t]++) webfetch [\x20\t]*+ : [\x20\t]*+ (?: \#[^\n]*+ )? \n
+                  (?: (?: \k<bi> [\x20\t]++ [^\n]*+ | [\x20\t]*+ ) \n )*?
+                  (?<ki> \k<bi> [\x20\t]++ ) \K
+                  (?: " (?&anyurl) [^"\n]*+ " | ' (?&anyurl) [^'\n]*+ ' | (?! \* ) (?&anyurl) [^:\#\n\x20\t]*+ )
+                  [\x20\t]*+ : [\x20\t]*+ (?&allow)
+                  (?! (?: \n (?: \k<ki> [^\n]*+ | [\x20\t]*+ (?=\n) ) )*? \n \k<ki> (?&qstar) )
+                  (?! (?: \n (?: \k<bi> [^\n]*+ | [\x20\t]*+ (?=\n) ) )*? \n \k<bi> (?&qstar) )
+              )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0086 - Exfiltration via AI Agent Tool Invocation"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      # LOW: both clients allow webfetch by default, so the line often only restates the
+      # default; it still decides the outcome where a developer or the file asks.
+      confidence: LOW
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [opencode, kilo-code]
+      references:
+        - https://opencode.ai/docs/permissions/
+        - https://github.com/sst/opencode/blob/v1.19.4/packages/opencode/src/tool/webfetch.ts
+        - https://github.com/sst/opencode/blob/v1.19.4/packages/opencode/src/util/wildcard.ts
+        - https://github.com/sst/opencode/blob/v1.19.4/packages/opencode/src/agent/agent.ts
+        - https://github.com/Kilo-Org/kilocode/blob/v7.8.17/packages/opencode/src/agent/agent.ts
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

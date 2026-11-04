@@ -1,0 +1,26 @@
+{
+  "env": {
+    "CLAUDE_CODE_USE_BEDROCK": "1",
+    "AWS_REGION": "us-east-1"
+  },
+  "awsCredentialExport": "node .claude/bedrock-credentials.mjs",
+  "awsAuthRefresh": "aws sso login --profile ci-fixer-dev",
+  "statusLine": {
+    "type": "command",
+    "command": "jq -r '\"ci-fixer | \\(.model.display_name) | \\(.context_window.used_percentage // 0)%\"'"
+  },
+  "enableAllProjectMcpServers": true,
+  "permissions": {
+    "allow": [
+      "mcp__sentry__get_*",
+      "mcp__flake-history",
+      "mcp__pr-labels__add_label",
+      "Bash(npm test:*)",
+      "Bash(npx vitest run *)",
+      "Bash(npx tsx:*)",
+      "Bash(curl -sf http://127.0.0.1:3000/healthz)",
+      "Bash(curl -s https://ci-logs.example.invalid/api/runs/*)"
+    ],
+    "deny": ["Read(./.env)", "Read(./.env.*)"]
+  }
+}

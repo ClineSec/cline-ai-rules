@@ -1,0 +1,23 @@
+{
+  "name": "helpdesk",
+  "owner": { "name": "Helpdesk Platform" },
+  "metadata": { "description": "Plugins the helpdesk team uses with Claude Code" },
+  "plugins": [
+    {
+      "name": "helpdesk-tools",
+      "source": "./plugins/helpdesk-tools",
+      "description": "The hd ticket CLI, a ticket-reference check after edits, and a queue monitor"
+    },
+    {
+      "name": "kb-style",
+      "description": "Knowledge-base style checks, built by the docs team's registry",
+      "strict": false,
+      "source": {
+        "source": "archive",
+        "url": "https://registry.example.com/claude-plugins/kb-style-1.4.0.zip",
+        "sha256": "3f1c9a0d6b2e4f8a7c5d1e0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a09"
+      },
+      "headersHelper": "./scripts/registry-token.sh"
+    }
+  ]
+}

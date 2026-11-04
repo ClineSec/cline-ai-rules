@@ -1,0 +1,66 @@
+# Nightly jobs that let coding agents read yesterday's tickets and test logs and post a summary
+# to the helpdesk channel. Runs on GitHub-hosted runners.
+name: nightly-triage
+
+on:
+  schedule:
+    - cron: "30 4 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  ticket-triage:
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      HELPDESK_TICKETS_DIR: tickets/open
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g @openai/codex@0.163.0
+      - name: Summarize open tickets
+        working-directory: ops/nightly-triage
+        run: |
+          mkdir -p out
+          codex exec \
+            --skip-git-repo-check \
+            --output-last-message out/summary.md \
+            --dangerously-bypass-approvals-and-sandbox \
+            "Summarize yesterday's open tickets in $HELPDESK_TICKETS_DIR. Do not change any files."
+      - name: Post summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment 412 --body-file ops/nightly-triage/out/summary.md
+
+  flaky-tests:
+    runs-on: ubuntu-latest
+    env:
+      COPILOT_ALLOW_ALL: "1"
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install -e ".[dev]" && pytest -q --junitxml=pytest.xml || true
+      - run: npm install -g @github/copilot
+      - name: Explain flaky tests
+        run: copilot -p "Summarize the failing tests in pytest.xml and suggest which are flaky" --no-color > flaky.md
+
+  docs-digest:
+    runs-on: ubuntu-latest
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # Headless runs need the workspace trusted; this job only reads docs/.
+      GEMINI_CLI_TRUST_WORKSPACE: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Draft the weekly KB digest (edits only, no shell)
+        run: npx -y @google/gemini-cli@0.65.0 --approval-mode auto_edit -p "Summarize this week's KB changes into docs/digest.md"
+      - name: Explain the triage summary format
+        run: |
+          claude -p "Explain the summary format in ops/nightly-triage/README.md" \
+            --permission-mode dontAsk \
+            --allowedTools "Read"

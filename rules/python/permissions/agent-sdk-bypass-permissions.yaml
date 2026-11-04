@@ -1,0 +1,161 @@
+rules:
+  - id: agent-sdk-bypass-permissions
+    languages: [python]
+    severity: ERROR
+    message: >-
+      This Claude Agent SDK session runs with its tool permission check turned off
+      (`bypassPermissions` mode, the `dangerously-skip-permissions` CLI flag, or a
+      `can_use_tool` callback that approves every call). The model's shell commands, file
+      writes, and network requests are then all approved, and `allowed_tools` no longer limits
+      them, so a prompt injection in any file, ticket, web page, or tool result the agent reads
+      can run arbitrary commands with this process's credentials. Keep the default mode, or use
+      `dontAsk` with an explicit `allowed_tools` list, and gate everything else in
+      `can_use_tool` or a PreToolUse hook. If a job truly needs bypass, run it in a disposable
+      sandbox with no secrets and no open network access, and add `disallowed_tools` deny rules,
+      which bypass mode still honors.
+    # Tests build permissive options on purpose (an allow-all can_use_tool, a hook that
+    # approves) and run them against a mocked or throwaway session, so test files are
+    # skipped, as in llm-debug-logging-enabled. OpenGrep's own ignore list skips only test/
+    # and tests/.
+    paths:
+      exclude:
+        - "test_*.py"
+        - "*_test.py"
+        - "conftest.py"
+        - "test/"
+        - "tests/"
+        - "e2e/"
+        - "e2e-tests/"
+    pattern-either:
+      # A permission mode that is, or can fall back to, "bypassPermissions": a literal, a
+      # module constant (constant propagation), an env-var default, or a conditional, under
+      # any name ending in "mode". That covers ClaudeAgentOptions(permission_mode=...), the
+      # older ClaudeCodeOptions, dataclasses.replace(), a helper's keyword or default, an
+      # options dict, the settings JSON's "defaultMode", extra_args' "permission-mode", and a
+      # config constant, attribute, or dataclass field (which constant propagation can't
+      # follow across an import or an env-var default, so it is reported where it is
+      # assigned). Values that can't be resolved (os.environ["MODE"]) are left alone. The
+      # finding sits on the value.
+      - patterns:
+          - pattern-either:
+              - pattern: $FN(..., $KEY=$V, ...)
+              - pattern: '{..., "$KEY": $V, ...}'
+              - pattern: $KEY = $V
+              - pattern: '$KEY: $T = $V'
+              - pattern: |
+                  def $DEF(..., $KEY=$V, ...):
+                      ...
+              - pattern: |
+                  def $DEF(..., $KEY: $T = $V, ...):
+                      ...
+          # Claude Code v2.1.267 and later never apply "bypassPermissions" from a subagent's
+          # AgentDefinition (agent-sdk-subagent-permission-mode covers the modes it does apply).
+          - pattern-not-inside: AgentDefinition(...)
+          - pattern-not-inside: claude_agent_sdk.AgentDefinition(...)
+          # Names that read as a guard (BLOCKED_MODE, UNSAFE_MODE) are left to the use site.
+          # Keep this regex in step with the one on $V below.
+          - metavariable-regex:
+              metavariable: $KEY
+              regex: (?i)^(?![\w.-]*(?:bypass|block|forbid|deny|danger|unsafe|disallow))[\w.-]*mode$
+          # A value that is itself a name ending in "mode" is reported where that name is
+          # assigned, so it isn't reported twice.
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^(?!(?i:(?![\w.]*(?:bypass|block|forbid|deny|danger|unsafe|disallow))[\w.]*mode)$)
+          - metavariable-pattern:
+              metavariable: $V
+              patterns:
+                - pattern: '"bypassPermissions"'
+                # A guard that clamps the mode is the safe variant, not a use of it.
+                - pattern-not-inside: $A == $B
+                - pattern-not-inside: $A != $B
+                - pattern-not-inside: $A in $B
+                - pattern-not-inside: $A not in $B
+                # PermissionMode = Literal["default", ..., "bypassPermissions"] is a type.
+                - pattern-not-inside: Literal[...]
+                - pattern-not-inside: typing.Literal[...]
+                # A list of allowed modes is a schema or a guard, not a setting:
+                # `permission_mode: list[str] = ["default", "bypassPermissions"]`.
+                - pattern-not-inside: '[...]'
+          - focus-metavariable: $V
+      # Switching a running ClaudeSDKClient session into bypass.
+      - patterns:
+          - pattern: $CLIENT.set_permission_mode($V)
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^(?!(?i:(?![\w.]*(?:bypass|block|forbid|deny|danger|unsafe|disallow))[\w.]*mode)$)
+          - metavariable-pattern:
+              metavariable: $V
+              patterns:
+                - pattern: '"bypassPermissions"'
+                # A guard that clamps the mode is the safe variant, not a use of it.
+                - pattern-not-inside: $A == $B
+                - pattern-not-inside: $A != $B
+                - pattern-not-inside: $A in $B
+                - pattern-not-inside: $A not in $B
+                # PermissionMode = Literal["default", ..., "bypassPermissions"] is a type.
+                - pattern-not-inside: Literal[...]
+                - pattern-not-inside: typing.Literal[...]
+          - focus-metavariable: $V
+      # extra_args={"dangerously-skip-permissions": None} passes the CLI's bypass flag.
+      - patterns:
+          - pattern: '{..., "dangerously-skip-permissions": $V, ...}'
+          - focus-metavariable: $V
+      # A can_use_tool callback that approves every call with no condition, deny, or raise:
+      # the same as bypass for every tool the allow rules don't already cover. Skipped when
+      # the same call also sets bypass, which is reported above.
+      - patterns:
+          - pattern-inside: |
+              async def $CB(...):
+                  ...
+                  return PermissionResultAllow(...)
+              ...
+          - pattern-not-inside: |
+              async def $CB(...):
+                  ...
+                  if $C:
+                      ...
+                  ...
+              ...
+          - pattern-not-inside: |
+              async def $CB(...):
+                  ...
+                  raise $E
+                  ...
+              ...
+          - pattern-not-inside: |
+              async def $CB(...):
+                  ...
+                  <... PermissionResultDeny(...) ...>
+                  ...
+              ...
+          - pattern: $FN(..., can_use_tool=$CB, ...)
+          - pattern-not: $FN(..., permission_mode="bypassPermissions", ...)
+          - focus-metavariable: $CB
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0112.000 - Machine Compromise: Local AI Agent"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-agent-sdk, anthropic]
+      references:
+        - https://code.claude.com/docs/en/agent-sdk/permissions
+        - https://github.com/anthropics/claude-agent-sdk-python/blob/v0.2.172/src/claude_agent_sdk/types.py
+        - https://github.com/anthropics/claude-agent-sdk-python/blob/v0.2.172/src/claude_agent_sdk/client.py
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

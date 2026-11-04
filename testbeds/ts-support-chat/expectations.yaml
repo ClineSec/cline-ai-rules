@@ -1,0 +1,468 @@
+# Every finding cline-ai-rules must produce in this testbed, and nothing else.
+# Anchors are substrings of the flagged line, so refactors only need the anchor updated.
+findings:
+  - rule: llm-output-to-html-ts
+    file: components/message-bubble.tsx
+    line_contains: "dangerouslySetInnerHTML={{ __html: html }}"
+    note: >-
+      Assistant message (props typed as the AI SDK's UIMessage, passed down from useChat in
+      app/chat/page.tsx) joined from its text parts by a typed helper, turned into HTML by the
+      marked helper in lib/markdown.ts inside a memoized ternary, in a memo() component. The
+      user branch renders part.text as JSX text and must stay quiet.
+  - rule: llm-output-to-html-ts
+    file: components/answer-markdown.tsx
+    line_contains: "{part.text}"
+    note: >-
+      react-markdown with rehype-raw from a module-level plugin list and no rehype-sanitize, so
+      raw HTML in a model answer becomes real elements. KbAnswer in kb-answer.tsx adds
+      rehype-sanitize and must stay quiet.
+  - rule: llm-output-to-html-ts
+    file: app/handoff/page.tsx
+    line_contains: "srcDoc={draft.text}"
+    note: >-
+      Escalation email written by the handoffAgent (AI SDK ToolLoopAgent in lib/agents.ts)
+      shown in an iframe with no sandbox, so its scripts run with the app's origin. The
+      <pre>{draft.text}</pre> next to it is text and must stay quiet.
+  - rule: llm-output-to-html-ts
+    file: widget/help-widget.ts
+    line_contains: "bubble.innerHTML = marked.parseInline(snapshot)"
+    note: >-
+      OpenAI chat-completions stream in the browser; the content event's snapshot goes through
+      marked into innerHTML. The token-count footer (usage only) and the user bubble
+      (textContent) must stay quiet.
+  - rule: llm-output-to-html-ts
+    file: components/legacy/QuickAnswer.jsx
+    line_contains: "answerRef.current.innerHTML = marked(completion);"
+    note: >-
+      Plain JSX: useCompletion (old ai/react import path) rendered through marked into a ref's
+      innerHTML in an effect.
+  - rule: llm-output-to-html-ts
+    file: widget/help-widget.ts
+    line_contains: "<dd>${marked.parse(answerMarkdown)}</dd>"
+    requires: taint-intrafile
+    note: >-
+      The final answer is passed to the module-level saveTranscriptEntry helper, which converts
+      it with marked and inserts it with insertAdjacentHTML. The flow crosses a function
+      boundary, so default mode misses it. The finding lands on the argument line of the
+      multi-line call.
+  - rule: llm-output-to-html-ts
+    file: app/api/handoff-preview/route.ts
+    line_contains: "return new Response(draft.text, { status: 200, headers: HTML_HEADERS });"
+    note: >-
+      Next.js route handler serving the agent-written email as a text/html page from a shared
+      header constant, so it runs on the app's origin. The JSON and text/plain branches above
+      must stay quiet.
+  - rule: llm-output-to-html-ts
+    file: widget/legacy-embed.js
+    line_contains: ".html(answer).appendTo($log);"
+    note: >-
+      jQuery embed: chat completion set with .html(). The user bubble and footer use .text()
+      and must stay quiet.
+  - rule: llm-output-to-code-execution-ts
+    file: components/computed-field.tsx
+    line_contains: 'return new Function("ticket", `"use strict"; return (${completion});`) as Compute;'
+    note: >-
+      Custom ticket-table column: useCompletion streams a model-written expression that is
+      compiled with new Function inside useMemo and run on every row in the browser. The
+      PRESET_COLUMNS lookup and the <code>{completion}</code> preview must stay quiet.
+  - rule: llm-output-to-code-execution-ts
+    file: lib/refunds.ts
+    line_contains: "const value = vm.runInNewContext(expression, { order: { ...order }, Math }, { timeout: FORMULA_TIMEOUT_MS });"
+    requires: taint-intrafile
+    note: >-
+      Goodwill-refund formula from generateText with Output.object, evaluated with node:vm
+      (not a sandbox, timeout or not; a namespace import) through the exported evaluateFormula
+      arrow helper, so default mode misses it. approvedRefund sends a signed-off formula picked
+      from POLICY_FORMULAS by the model's policy through the same helper; that call is not a
+      second finding.
+  - rule: llm-output-to-code-execution-ts
+    file: scripts/ticket-query.cjs
+    line_contains: "const result = spawnSync(pipeline, { shell: SHELL, encoding: \"utf8\", timeout: 30_000 });"
+    note: >-
+      CommonJS ops script: an OpenAI chat completion's shell pipeline run through spawnSync
+      with a `shell` option taken from the environment. The jq filter below it is passed as an
+      argument without a shell and must stay quiet.
+  - rule: llm-output-to-sql-ts
+    file: app/api/insights/route.ts
+    line_contains: '`SELECT ${breakdown.groupBy} AS bucket, count(*)::int AS tickets FROM "Ticket" WHERE "queue" = $1 GROUP BY 1 ORDER BY 2 DESC`,'
+    note: >-
+      Chat-completion JSON plan: the queue is bound as $1, but the model's GROUP BY
+      expression is spliced into $queryRawUnsafe. PUT maps the model's choice through the
+      GROUP_COLUMNS table and uses the tagged $queryRaw for the total; both must stay quiet.
+  - rule: llm-output-to-sql-ts
+    file: lib/insights.ts
+    line_contains: "const { rows } = await readonlyPool.query(draft.sql);"
+    requires: taint-intrafile
+    note: >-
+      Text-to-SQL: generateObject returns the SQL from the exported draftQuery helper and
+      runInsight runs it on the read-only replica pool. A SELECT-only role still reads every
+      table it is granted, so it is reported; default mode misses the cross-function flow.
+  - rule: llm-output-to-sql-ts
+    file: lib/insights.ts
+    line_contains: "sql`SELECT id, status, opened_at FROM tickets WHERE queue = ${queue.trim()} AND status = 'open' ORDER BY ${sql.raw(sort)} LIMIT 50`,"
+    note: >-
+      Drizzle: the queue is a bound template value, but the model's ORDER BY goes through
+      sql.raw. channelVolume binds the model's channel in the sql template and must stay quiet.
+  - rule: llm-markdown-remote-image-render
+    file: components/assistant-turn.tsx
+    line_contains: "{part.text}"
+    note: >-
+      AI Elements MessageResponse (the project's Streamdown wrapper in
+      components/ai-elements/message.tsx) renders each text part of an assistant message;
+      Streamdown's default rehype-harden settings allow images from any host. The reasoning
+      part in <pre> is text and must stay quiet.
+  - rule: llm-markdown-remote-image-render
+    file: app/chat/[id]/summary/page.tsx
+    line_contains: "{summary.text}"
+    note: >-
+      Server component: a generateText summary of a customer ticket rendered with
+      react-markdown and a module-level components object whose img override only adds
+      classes, so the model's image URL still loads in the account team's browser. The
+      follow-up below uses the helpCenterUrlsOnly urlTransform from lib/markdown-urls.ts and
+      must stay quiet.
+  - rule: llm-markdown-remote-image-render
+    file: lib/transcript-email.ts
+    line_contains: "html: marked.parse(recap.text, { async: false }),"
+    note: >-
+      The model's chat recap is rendered with marked into the HTML part of a nodemailer
+      email, so a remote image loads when the customer opens it. lib/kb-markdown.ts renders
+      with a marked image renderer limited to the docs CDN and must stay quiet.
+  - rule: llm-markdown-remote-image-render
+    file: components/answer-markdown.tsx
+    line_contains: "{part.text}"
+    note: >-
+      react-markdown with rehype-raw: also an XSS finding for llm-output-to-html-ts, and
+      markdown images load from any host either way.
+  - rule: llm-markdown-remote-image-render
+    file: components/kb-answer.tsx
+    line_contains: "{part.text}"
+    note: >-
+      rehype-sanitize with a schema extended from the default one stops script but keeps
+      <img src="https://...">, so the image exfiltration path stays open.
+  - rule: llm-markdown-remote-image-render
+    file: components/draft-reply.tsx
+    line_contains: "const richHtml = useMemo(() => DOMPurify.sanitize(renderMarkdown(completion)), [completion]);"
+    note: >-
+      useCompletion text through the imported renderMarkdown helper (marked, lib/markdown.ts)
+      and DOMPurify, whose default configuration keeps remote images.
+  - rule: llm-markdown-remote-image-render
+    file: components/draft-reply.tsx
+    line_contains: "dangerouslySetInnerHTML={{ __html: plain.render(completion) }}"
+    note: >-
+      markdown-it with default options escapes raw HTML but renders ![x](url) images from any
+      host.
+  - rule: llm-markdown-remote-image-render
+    file: components/message-bubble.tsx
+    line_contains: 'renderMarkdown(messageText(message))'
+    note: >-
+      Assistant message text through the imported renderMarkdown helper inside a memoized
+      ternary; reported where the helper is called, since its body is in another module.
+  - rule: llm-markdown-remote-image-render
+    file: components/legacy/QuickAnswer.jsx
+    line_contains: "answerRef.current.innerHTML = marked(completion);"
+    note: >-
+      Plain JSX: useCompletion text through marked; same line as the XSS finding.
+  - rule: llm-markdown-remote-image-render
+    file: widget/help-widget.ts
+    line_contains: "bubble.innerHTML = marked.parseInline(snapshot) as string;"
+    note: >-
+      Embeddable widget: the streamed snapshot through marked.parseInline loads model image
+      URLs on the customer's site.
+  - rule: llm-markdown-remote-image-render
+    file: widget/help-widget.ts
+    line_contains: "<dd>${marked.parse(answerMarkdown)}</dd>"
+    requires: taint-intrafile
+    note: >-
+      The final answer reaches marked inside the module-level saveTranscriptEntry helper, a
+      cross-function flow that default mode misses.
+  - rule: user-input-in-system-prompt-ts
+    file: app/api/assist/route.ts
+    line_contains: "instructions: assistInstructions({ tone, agentName }),"
+    note: >-
+      Agent-assist drafts: the request's free-text agentName goes into the AI SDK instructions
+      through a prompt helper in lib/assist-prompts.ts, after safeParse. The tone is a z.enum
+      field, so PUT, which re-tones a draft with only the parsed object's tone (input.tone),
+      must stay quiet.
+  - rule: user-input-in-system-prompt-ts
+    file: app/api/queues/[queue]/summary/route.ts
+    line_contains: "instructions: `Summarize the open tickets in the ${queue} queue for the support lead. Group them by root cause.`,"
+    note: >-
+      Next.js dynamic route segment: the [queue] param (any URL-encoded text) is interpolated
+      into the instructions. The Prisma lookup keyed by the queue is stored data and doesn't
+      count.
+  - rule: user-input-in-system-prompt-ts
+    file: lib/assist-actions.ts
+    line_contains: "instructions: `Rewrite the support reply in the voice of ${voice}. Keep every link and step.`,"
+    note: >-
+      Server action in a "use server" module: the client chooses every argument, whatever
+      the TypeScript types say. polishDraft looks its instruction up in POLISH_GUIDES and
+      must stay quiet, as must the chat route's PERSONA_INSTRUCTIONS lookup.
+  - rule: user-input-in-system-prompt-ts
+    file: app/api/assist/kb/route.ts
+    line_contains: "customerName: body.customerName,"
+    note: >-
+      LangChain.js: the request body's customerName fills {customerName} in a
+      SystemMessagePromptTemplate, through a prompt.pipe(model).pipe(parser) chain. The
+      product comes from the PRODUCT_NAMES table, and the question fills the human message's
+      {question} (the system text only says "questions"); both must stay quiet.
+  - rule: llm-output-as-template-ts
+    file: lib/templating/status-banner.ts
+    line_contains: "return env.renderString(BANNER_OPEN + update.text + BANNER_CLOSE"
+    note: >-
+      The model's status update is concatenated into the banner's Nunjucks source; the
+      environment is configured in ./engine. The full status page passes the update as data
+      to a template file and stays quiet.
+  - rule: llm-output-as-template-ts
+    file: lib/templating/macros.ts
+    line_contains: "const compiled = hb.compile(text, { strict: true });"
+    note: >-
+      A model-suggested reply macro compiled by a Handlebars.create() instance. Saved macros
+      written by support leads and the fixed draft frame, which takes the model's text as
+      data, stay quiet.
+  - rule: llm-output-as-template-ts
+    file: lib/templating/lead-digest.ts
+    line_contains: "const render = _.template(response.output_text);"
+    note: >-
+      lodash compiles the model-written layout into a JavaScript function. The headline goes
+      through Mustache, which is logic-less, and stays quiet.
+  - rule: mermaid-or-katex-unsafe-config
+    file: lib/diagram-config.ts
+    line_contains: 'securityLevel: "loose",'
+    note: >-
+      Mermaid config for flowcharts in assistant answers, typed MermaidConfig and set to loose
+      so diagram nodes can link to help-center articles. components/diagram-block.tsx renders
+      model-written ```mermaid fences with it and puts the SVG in innerHTML. The export config
+      spreads it and sets strict, and must stay quiet.
+  - rule: mermaid-or-katex-unsafe-config
+    file: lib/math-render.ts
+    line_contains: 'trust: (context) => ["\\href", "\\htmlId"].includes(context.command),'
+    note: >-
+      KaTeX options for rehype-katex in billing answers (components/math-answer.tsx): the trust
+      function allows \href with no protocol check, so \href{javascript:...} in a model answer
+      becomes a live link. The recap email's options check context.protocol and the URL
+      prefix, and must stay quiet.
+  - rule: client-message-roles-with-tools
+    file: app/api/account-chat/route.ts
+    line_contains: "messages: await convertToModelMessages(messages, { tools: accountTools }),"
+    note: >-
+      useChat route: the posted UI messages go through convertToModelMessages, which keeps
+      system messages and turns tool parts into tool calls and results, into a streamText
+      call whose tools (issueCredit, lookupInvoice) come from the ACCOUNT_CHAT settings
+      object spread into it.
+  - rule: client-message-roles-with-tools
+    file: app/api/account-chat/[chatId]/route.ts
+    line_contains: "messages: await convertToModelMessages([...history, message], { tools: accountTools }),"
+    note: >-
+      Persistent chat: the history is loaded from the database, but the client's newest
+      message is appended as sent, so it can be a system message or an assistant tool call.
+      The PUT retry handler rebuilds it as a user turn with only its text parts and must
+      stay quiet.
+  - rule: client-message-roles-with-tools
+    file: app/api/widget-agent/route.ts
+    line_contains: "const reply = await widgetModel.invoke([new SystemMessage(WIDGET_PROMPT), ...body.history]);"
+    note: >-
+      LangChain.js: the widget's transcript is spread into the message list of a model bound
+      to open_ticket and search_help_center, and the handler runs the calls it returns with
+      the helpdesk token; LangChain turns { role: "system" } and assistant tool_calls objects
+      into real messages. The legacy-embed handler rebuilds each turn as
+      HumanMessage / AIMessage text and must stay quiet.
+  - rule: fetched-content-in-system-prompt-ts
+    file: app/api/answers/route.ts
+    line_contains: "system: groundedRules(articles),"
+    note: >-
+      Help-center articles (and the customer comments indexed with them) found by
+      findRelevantArticles, a pgvector search through Drizzle in lib/help-center.ts, formatted
+      by the groundedRules helper and placed in the AI SDK system prompt.
+  - rule: fetched-content-in-system-prompt-ts
+    file: app/api/answers/route.ts
+    line_contains: "The customer shared this page:\\n${linkText}"
+    note: >-
+      The page behind a link the customer pasted, fetched by fetchSharedLink, in the system
+      message of a messages array. The PATCH rewrite (reference material in the prompt, only the article count
+      in the instructions) must stay quiet.
+  - rule: fetched-content-in-system-prompt-ts
+    file: app/api/answers/thread/route.ts
+    line_contains: "five bullets.\\n\\n${transcript}"
+    note: >-
+      A Prisma ticket thread's message bodies, written by customers, in the system prompt of a
+      shift-handoff summary. The GET header (the workspace's configured persona and the
+      thread's status, priority, and message count) must stay quiet.
+  - rule: fetched-content-in-system-prompt-ts
+    file: app/api/answers/rendered/route.ts
+    line_contains: "Rendered page:\\n${visible.slice(0, 8_000)}"
+    note: >-
+      A customer-shared page rendered with Playwright and read with page.evaluate(() =>
+      document.body.innerText), in the instructions. The second call, which only passes the
+      page's heading count, must stay quiet.
+  - rule: user-content-to-fine-tuning-ts
+    file: app/api/feedback/route.ts
+    line_contains: "await appendFile(SFT_EXAMPLES_PATH, toChatExample(turns));"
+    note: >-
+      Thumbs-up turns the client sends back (zod checks only their shape) appended to the SFT
+      examples file, whose path is imported from lib/feedback-export.ts and recognized by its
+      name. The audit-log append above it, and the weekly export of reviewed feedback read from
+      Prisma in lib/feedback-export.ts, must stay quiet.
+  - rule: user-content-to-fine-tuning-ts
+    file: app/api/fine-tune/examples/route.ts
+    line_contains: 'file: await toFile(upload.stream(), upload.name, { type: "application/jsonl" }),'
+    note: >-
+      A JSONL file from the request's form data uploaded with purpose FT_PURPOSE (a constant)
+      and a fine-tuning job started on the shared support model. The same upload under
+      app/api/admin/ (path excluded; middleware guards it) must stay quiet.
+  - rule: vector-filter-from-user-input-ts
+    file: app/api/help/search/route.ts
+    line_contains: "filter: filter ?? PUBLIC_ONLY,"
+    note: >-
+      The help widget's Pinecone filter, built into an options object and passed to
+      helpIndex.query: a caller sends { visibility: "internal" } and reads every workspace's
+      internal notes. The agent routes (a namespace per workspace; a server-built $or with the
+      product as a field value) stay quiet.
+  - rule: vector-filter-from-user-input-ts
+    file: app/api/macros/search/route.ts
+    line_contains: "macroStore.asRetriever(3, body.filter)"
+    note: >-
+      A LangChain.js Chroma retriever given the composer's filter, which names the workspace
+      itself. The library search (workspaceId from the session, facets ANDed in) stays quiet.
+  - rule: vector-filter-from-user-input-ts
+    file: app/api/transcripts/search/route.ts
+    line_contains: "filter: expression,"
+    note: >-
+      The console's typed Milvus expression is the whole filter, so an agent searches other
+      workspaces' transcripts with workspaceId != "". The CSAT drill-down, which binds the
+      pickers through exprValues, stays quiet.
+  - rule: vector-filter-from-user-input-ts
+    file: app/api/playbooks/search/route.ts
+    line_contains: "filter: body.filter,"
+    note: >-
+      The sidebar's filter is the $vectorSearch stage's filter in an aggregate pipeline, so a
+      caller leaves out workspaceId. The suggestion strip (workspace or shared from the session,
+      product as a value) stays quiet.
+  - rule: vector-filter-from-user-input-ts
+    file: app/api/playbooks/search/route.ts
+    line_contains: "{ preFilter: { ...scope, [body.facet]: body.value } }"
+    note: >-
+      A facet chip's field name, picked by the request, is the last key of the LangChain.js
+      preFilter, so { facet: "workspaceId", value: "other" } replaces the session's scope.
+  - rule: agent-memory-write-untrusted-ts
+    file: app/api/links/remember/route.ts
+    line_contains: "What the page says"
+    note: >-
+      The page behind a link a customer pasted (fetchSharedLink in lib/help-center.ts) written to
+      the customer's mem0 memory through a client exported from lib/assistant-memory.ts and
+      called with mem0's user_id / run_id scope. The PUT handler, which stores only the URL the
+      customer typed, must stay quiet.
+  - rule: agent-memory-write-untrusted-ts
+    file: lib/known-issues.ts
+    line_contains: "value: known,"
+    requires: taint-intrafile
+    note: >-
+      Help-center article matches (findRelevantArticles, whose articles index customer
+      comments) written to the agent-assist Letta agent's "known issues" core memory block,
+      which every draft sees. The search runs inside a Promise.all map callback, which default
+      mode doesn't follow. pinStaffNote, staff text from the admin panel into archival memory,
+      must stay quiet.
+  - rule: agent-memory-write-untrusted-ts
+    file: lib/handoff-graph.ts
+    line_contains: "lines: (thread?.messages ?? []).map("
+    note: >-
+      A LangGraph.js node writes each ticket thread's message bodies (Prisma findUnique with
+      messages) to the graph's store through config.store?.put, for the next shift's agent.
+      rememberStatus, which stores only status, priority, and a count, must stay quiet.
+  - rule: llm-debug-logging-enabled-ts
+    file: lib/reply-drafter.ts
+    line_contains: "verbose: true,"
+    note: >-
+      Shared LangChain.js model options with verbose: true, passed to ChatOpenAI by name, so
+      every drafter chain console.logs its prompts and outputs. The tone checker, which
+      follows LANGCHAIN_VERBOSE, stays quiet.
+  - rule: llm-debug-logging-enabled-ts
+    file: app/api/escalation/route.ts
+    line_contains: 'console.info("[escalation] model input", JSON.stringify(turns));'
+    note: >-
+      The escalation route logs the customer conversation it sends to generateText. The turn
+      count and decision lines stay quiet.
+  - rule: llm-debug-logging-enabled-env
+    file: .env.production
+    # The anchor leaves out the value: the env rule scans YAML, this file included.
+    line_contains: "LANGCHAIN_VERBOSE="
+    note: >-
+      Committed production defaults switch on LangChain.js verbose tracing for every run. The
+      same line in .env.development stays quiet, as does message capture set to false.
+  - rule: llm-max-tokens-from-user-input-ts
+    file: app/api/reply-variants/route.ts
+    line_contains: "length: variants ?? 2"
+    note: >-
+      The request's version count sizes an Array.from whose callback calls generateText once
+      per element.
+  - rule: llm-max-tokens-from-user-input-ts
+    file: app/api/reply-variants/route.ts
+    line_contains: "maxOutputTokens: maxTokens,"
+    note: >-
+      maxOutputTokens destructured straight from the request body.
+  - rule: llm-max-tokens-from-user-input-ts
+    file: app/api/reply-variants/stream/route.ts
+    line_contains: "maxOutputTokens: body.maxTokens,"
+    note: >-
+      A settings object built from the request body and spread into streamText. PUT (a zod
+      schema in the file with .max(1200), and capDraftTokens from lib/draft-budget.ts) and
+      PATCH (a loop whose pass count the schema caps) must stay quiet.
+  - rule: llm-max-tokens-from-user-input-ts
+    file: app/api/reply-variants/route.ts
+    line_contains: "while (kept.length < wanted)"
+    note: >-
+      A while loop that calls generateText until it has as many short replies as the request
+      body asks for.
+  - rule: vector-db-client-without-auth-ts
+    file: lib/macro-search.ts
+    line_contains: "new QdrantClient({ url: MACRO_INDEX_URL, timeout: 15_000 })"
+    note: >-
+      The shared macro index connects to a remote Qdrant URL from a module constant with no
+      apiKey. The draft index next to it passes QDRANT_DRAFTS_KEY and stays quiet.
+  - rule: vector-db-client-without-auth-ts
+    file: lib/article-vectors.ts
+    line_contains: "httpHost: ARTICLE_HOST,"
+    note: >-
+      Weaviate connectToCustom to a public address in production, with only the Cohere
+      vectorizer key as a header. The development connectToLocal() stays quiet.
+  - rule: vector-db-client-without-auth-ts
+    file: lib/policy-store.ts
+    line_contains: "export const policyStore = new Chroma(embeddings, {"
+    note: >-
+      A LangChain.js Chroma store on a remote URL with no clientParams, so the ChromaClient it
+      builds sends no token. The legal team's store with an x-chroma-token header stays quiet.
+  - rule: agent-settings-endpoint-override-continue
+    file: .continue/models/support-models.yaml
+    line_contains: "apiBase: https://chat-gateway.support.example.invalid/anthropic/v1"
+    note: >-
+      A workspace Continue model block whose apiKey names the developer's ANTHROPIC_API_KEY
+      secret, pointed at the staging support gateway. The local Ollama autocomplete model stays
+      quiet.
+  - rule: langchain-load-unsafe-objects-ts
+    file: lib/macro-chains.ts
+    line_contains: "  secretsFromEnv: true,"
+    note: >-
+      Shared restore options for saved macro chains read any secret a manifest names from the
+      server's environment. The draft preview that passes only OPENAI_API_KEY in secretsMap
+      stays quiet.
+  - rule: langchain-load-unsafe-objects-ts
+    file: lib/macro-chains.ts
+    line_contains: "pull<ChatPromptTemplate>(REPLY_DRAFTER_PROMPT, { includeModel: true })"
+    note: >-
+      A hub prompt pulled from langchain/hub/node with includeModel by name only, so the
+      latest commit picks the chat model class and its endpoint. The escalation prompt pinned
+      to a commit stays quiet.
+  - rule: langchain-load-untrusted-input-ts
+    file: app/api/macros/import/route.ts
+    line_contains: "await load<ChatPromptTemplate>(JSON.stringify(exported))"
+    note: >-
+      The import route revives a pasted macro export with @langchain/core load(), so the caller
+      chooses the classes and constructor arguments. The PUT handler that builds the chain from
+      zod-checked strings stays quiet.
+  - rule: agent-sdk-hook-auto-approves-ts
+    file: lib/refund-agent.ts
+    line_contains: 'hooks: [makeShiftHook("night")]'
+    note: >-
+      Overnight refund reconciliation: a factory that declares a PreToolUse callback and
+      returns it by name; it logs and allows every Bash, Write, and ledger call. The ledger
+      read hook, a factory returning a function expression that allows only listed read tools,
+      stays quiet.

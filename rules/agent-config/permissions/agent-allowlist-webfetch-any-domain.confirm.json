@@ -1,0 +1,13 @@
+{
+  "general": {
+    // ok: agent-allowlist-webfetch-any-domain
+    "defaultApprovalMode": "auto_edit"
+  },
+  "tools": {
+    "allowed": [
+      // ok: agent-allowlist-webfetch-any-domain
+      "web_fetch"
+    ],
+    "confirmationRequired": ["web_fetch", "run_shell_command"]
+  }
+}

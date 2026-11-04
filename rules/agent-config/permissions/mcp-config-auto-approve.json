@@ -1,0 +1,103 @@
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@example-org/github-mcp@1.4.0"],
+      "alwaysAllow": [
+        // ok: mcp-config-auto-approve
+        "get_file_contents",
+        // ok: mcp-config-auto-approve
+        "list_issues",
+        // ok: mcp-config-auto-approve
+        "get_workflow_run",
+        // ruleid: mcp-config-auto-approve
+        "create_or_update_file",
+        // ruleid: mcp-config-auto-approve
+        "mergePullRequest"
+      ]
+    },
+    "shell": {
+      "command": "uvx",
+      "args": ["example-org-shell-mcp==0.3.1"],
+      // ruleid: mcp-config-auto-approve
+      "alwaysAllow": ["*"]
+    },
+    "aws-docs": {
+      "command": "uvx",
+      "args": ["example-org-aws-docs-mcp==1.0.2"],
+      "autoApprove": [
+        // ok: mcp-config-auto-approve
+        "search_documentation",
+        // ok: mcp-config-auto-approve
+        "read_documentation",
+        // ruleid: mcp-config-auto-approve
+        "execute_command"
+      ]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@example-org/filesystem-mcp@2.0.1", "./docs"],
+      // ok: mcp-config-auto-approve
+      "alwaysAllow": [],
+      // ok: mcp-config-auto-approve
+      "disabledTools": ["write_file"]
+    },
+    "runbooks": {
+      "httpUrl": "https://runbooks.example.invalid/mcp",
+      // ruleid: mcp-config-auto-approve
+      "trust": true
+    },
+    "staging": {
+      "httpUrl": "https://staging.example.invalid/mcp",
+      // ok: mcp-config-auto-approve
+      "trust": false,
+      // ok: mcp-config-auto-approve
+      "includeTools": ["run_query"]
+    },
+    "copilot-style": {
+      "type": "local",
+      "command": "npx",
+      "args": ["-y", "@example-org/notes-mcp@1.1.0"],
+      // ok: mcp-config-auto-approve
+      "tools": ["*"]
+    }
+  },
+  "tools": {
+    "allowed": [
+      // ok: mcp-config-auto-approve
+      "read_file",
+      // ok: mcp-config-auto-approve
+      "*",
+      // ruleid: mcp-config-auto-approve
+      "mcp_github_*",
+      // ruleid: mcp-config-auto-approve
+      "mcp_*",
+      // ok: mcp-config-auto-approve
+      "mcp_github_get_*",
+      // ok: mcp-config-auto-approve
+      "mcp_github_list_issues",
+      // ruleid: mcp-config-auto-approve
+      "mcp_github_create_issue",
+      // ok: mcp-config-auto-approve
+      "mcp__github__create_issue"
+    ],
+    // ok: mcp-config-auto-approve
+    "exclude": ["mcp_github_delete_repo"]
+  },
+  "mcp": {
+    "allowed": [
+      // ruleid: mcp-config-auto-approve
+      "runbooks"
+    ],
+    // ok: mcp-config-auto-approve
+    "excluded": ["staging"],
+    // ruleid: mcp-config-auto-approve
+    "autoAllowInHeadless": true
+  },
+  "agent": {
+    "tool_permissions": {
+      // ok: mcp-config-auto-approve
+      "default": "allow"
+    }
+  }
+}

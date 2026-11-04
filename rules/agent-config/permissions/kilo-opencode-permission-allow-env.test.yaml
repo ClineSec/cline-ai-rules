@@ -1,0 +1,72 @@
+name: agent-tasks
+on:
+  workflow_dispatch:
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    env:
+      # ruleid: kilo-opencode-permission-allow-env
+      OPENCODE_PERMISSION: '{"*": "allow"}'
+    steps:
+      - run: opencode run "Summarize the open TODO comments"
+  review:
+    runs-on: ubuntu-latest
+    env:
+      # ruleid: kilo-opencode-permission-allow-env
+      KILO_PERMISSION: '{"edit": "deny", "bash": {"*": "ask", "git diff *": "allow", "python3 *": "allow"}, "github_*": "allow", "github_list_*": "allow"}'
+      # ok: kilo-opencode-permission-allow-env
+      OPENCODE_PERMISSION: |
+        {
+          "edit": "deny",
+          "bash": {
+            "*": "ask",
+            "git diff *": "allow",
+            "npm test": "allow"
+          },
+          "github_list_*": "allow"
+        }
+    steps:
+      - run: kilo run "Review the diff"
+  locked:
+    runs-on: ubuntu-latest
+    env:
+      # ok: kilo-opencode-permission-allow-env
+      OPENCODE_PERMISSION: '{"bash": "allow", "*": "deny", "read": "allow"}'
+      # ok: kilo-opencode-permission-allow-env
+      KILO_PERMISSION: '{"bash": {"*": "deny", "gh pr view *": "allow"}}'
+      # ok: kilo-opencode-permission-allow-env
+      OPENCODE_CONFIG_CONTENT: ${{ secrets.OPENCODE_CONFIG }}
+      # ok: kilo-opencode-permission-allow-env
+      DOCS: 'Set OPENCODE_PERMISSION to a JSON object such as {"bash": "ask"}'
+    steps:
+      - run: opencode run "List the failing tests"
+  escaped:
+    runs-on: ubuntu-latest
+    env:
+      # ruleid: kilo-opencode-permission-allow-env
+      OPENCODE_PERMISSION: "{\"external_directory\": {\"~/**\": \"allow\"}}"
+      # ok: kilo-opencode-permission-allow-env
+      KILO_PERMISSION: "{\"webfetch\": \"allow\"}"
+  configured:
+    runs-on: ubuntu-latest
+    env:
+      # ruleid: kilo-opencode-permission-allow-env
+      OPENCODE_CONFIG_CONTENT: '{"$schema": "https://opencode.ai/config.json", "agent": {"ci": {"description": "CI helper", "permission": {"edit": "allow", "webfetch": "ask"}}}}'
+      # ruleid: kilo-opencode-permission-allow-env
+      KILO_CONFIG_CONTENT: '{"model": "example/model-1", "permission": "allow"}'
+  legacy:
+    runs-on: ubuntu-latest
+    env:
+      # ruleid: kilo-opencode-permission-allow-env
+      OPENCODE_CONFIG_CONTENT: '{"tools": {"bash": true, "webfetch": true}}'
+      # ok: kilo-opencode-permission-allow-env
+      KILO_CONFIG_CONTENT: '{"tools": {"bash": true}, "permission": {"bash": "ask"}}'
+---
+services:
+  agent:
+    image: example/agent:1.0
+    environment:
+      # ruleid: kilo-opencode-permission-allow-env
+      - OPENCODE_PERMISSION={"bash":{"*":"allow","rm -rf *":"deny"}}
+      # ok: kilo-opencode-permission-allow-env
+      - KILO_PERMISSION={"permission":{"*":"allow"}}

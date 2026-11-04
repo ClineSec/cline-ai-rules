@@ -1,0 +1,27 @@
+name: mcp-smoke
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      # ruleid: mcp-server-bind-all-interfaces-config
+      FASTMCP_HOST: 0.0.0.0
+      # ok: mcp-server-bind-all-interfaces-config
+      FASTMCP_PORT: "8000"
+    steps:
+      - name: Start the server
+        # ruleid: mcp-server-bind-all-interfaces-config
+        run: uv run fastmcp run server.py --transport http --host 0.0.0.0 &
+      - name: Start a second copy
+        run: |
+          # ruleid: mcp-server-bind-all-interfaces-config
+          FASTMCP_HOST="0.0.0.0" FASTMCP_PORT=8001 uv run python server.py &
+          # ok: mcp-server-bind-all-interfaces-config
+          uv run fastmcp run server.py --transport http --host 127.0.0.1 --port 8002 &
+      - name: Explain
+        # ok: mcp-server-bind-all-interfaces-config
+        run: echo "the server binds FASTMCP_HOST=0.0.0.0 in CI"

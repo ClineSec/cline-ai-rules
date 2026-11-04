@@ -1,0 +1,12 @@
+{
+  "tools": {
+    "allowed": [
+      // ok: agent-allowlist-webfetch-any-domain-qwen
+      "web_fetch"
+    ],
+    "exclude": [
+      // ok: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetchTool"
+    ]
+  }
+}

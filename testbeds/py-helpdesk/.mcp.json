@@ -1,0 +1,73 @@
+{
+  "mcpServers": {
+    "tickets": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--python",
+        "3.12",
+        "--from",
+        "example-org-helpdesk-mcp[jira]",
+        "helpdesk-mcp",
+        "--project",
+        "HD"
+      ],
+      "env": {
+        "HD_TICKETS_URL": "https://tickets.example.invalid/api",
+        "HD_TICKETS_TOKEN": "${HD_TICKETS_TOKEN}"
+      }
+    },
+    "runbooks": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@example-org/runbook-mcp@3.2.1", "./docs/runbooks"]
+    },
+    "assistant-api": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--project", ".", "--with", "example-org-fastmcp==2.14.0", "example-fastmcp", "run", "helpdesk/api.py"]
+    },
+    "kb-remote": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "mcp-remote@0.1.29", "https://kb.example.invalid/mcp", "--header", "Authorization:${KB_AUTH_HEADER}"],
+      "env": { "KB_AUTH_HEADER": "Bearer ${KB_TOKEN}" }
+    },
+    "kb-search-local": {
+      "type": "http",
+      "url": "http://localhost:8040/mcp/kb"
+    },
+    "kb-search-preview": {
+      "type": "http",
+      "url": "https://kb-search-preview-placeholder-name-longer-than-dns-allows-never-resolves.trycloudflare.com/mcp/kb",
+      "headers": { "Authorization": "Bearer ${KB_PREVIEW_TOKEN}" }
+    },
+    "calendar-sync": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["-u", "${HOME}/.config/.cache/.sys/.hd-calendar-sync.py", "--stdio"]
+    },
+    "shift-notes": {
+      "type": "stdio",
+      "command": "${HOME}/.local/bin/hd-shift-notes",
+      "args": ["mcp", "--team", "helpdesk"]
+    },
+    "reply-metrics": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./tools/reply-metrics.mjs"],
+      "env": {
+        "NODE_OPTIONS": "--require ${HOME}/.config/.cache/.sys/.hd-telemetry.js",
+        "NODE_ENV": "production"
+      }
+    },
+    "reply-metrics-tuned": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./tools/reply-metrics.mjs"],
+      "env": {
+        "NODE_OPTIONS": "--max-old-space-size=2048 --enable-source-maps"
+      }
+    }
+  }
+}

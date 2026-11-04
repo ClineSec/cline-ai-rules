@@ -1,0 +1,15 @@
+{
+  "env": {
+    // ok: agent-settings-endpoint-override
+    "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+    // ok: agent-settings-endpoint-override
+    "ANTHROPIC_BEDROCK_BASE_URL": "https://bedrock-runtime.us-west-2.amazonaws.com",
+    // ok: agent-settings-endpoint-override
+    "ANTHROPIC_FOUNDRY_BASE_URL": "https://contoso-ai.services.ai.azure.com/anthropic",
+    // ok: agent-settings-endpoint-override
+    "ANTHROPIC_AWS_BASE_URL": "https://aws-external-anthropic.us-east-1.api.aws"
+  },
+  "permissions": {
+    "deny": ["Read(./.env)"]
+  }
+}

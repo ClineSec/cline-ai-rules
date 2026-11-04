@@ -1,0 +1,49 @@
+[project]
+name = "helpdesk"
+version = "0.4.2"
+description = "Internal IT helpdesk assistant (cline-ai-rules testbed; intentionally vulnerable)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "openai>=2.0",
+    "anthropic>=0.70",
+    "claude-agent-sdk>=0.2.172",
+    "mcp>=2.3",
+    "litellm>=1.80",
+    "transformers>=4.57",
+    "datasets>=4.0",
+    "huggingface-hub>=1.0",
+    "joblib>=1.5",
+    "scikit-learn>=1.7",
+    "torch>=2.6",
+    "numpy>=2.3",
+    "faiss-cpu>=1.12",
+    "langchain>=1.4",
+    "langchain-core>=1.6",
+    "langchain-community>=0.4",
+    "langchain-openai>=1.0",
+    "langgraph>=1.0",
+    "langgraph-checkpoint-sqlite>=3.0",
+    "sqlalchemy>=2.1",
+    "psycopg>=3.3",
+    "pydantic-ai>=2.59",
+    "pandas>=3.0",
+    "fastai>=2.8",
+    "jinja2>=3.1",
+    "markdown>=3.11",
+    "boto3>=1.40",
+    "langchain-classic>=1.0.8",
+    "openai-agents>=0.24",
+    "crewai>=1.15",
+    "smolagents[litellm]>=1.26",
+    "autogen-agentchat>=0.7.5",
+    "autogen-ext[openai]>=0.7.5",
+    "ag2>=0.14,<1.0",
+    "mem0ai>=2.2",
+    "zep-cloud>=3.30",
+    "paramiko>=4.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]

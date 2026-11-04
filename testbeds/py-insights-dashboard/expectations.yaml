@@ -1,0 +1,450 @@
+# Every finding cline-ai-rules must produce in this testbed, and nothing else.
+# Anchors are substrings of the flagged line, so refactors only need the anchor updated.
+findings:
+  - rule: llm-output-rendered-as-html
+    file: insights/app.py
+    line_contains: 'st.sidebar.markdown(formatting.card("Pinned", answer), unsafe_allow_html=True)'
+    note: >-
+      The streamed answer (st.write_stream over a Chat Completions stream) is pinned in the
+      sidebar inside a card helper from another module, with unsafe_allow_html=True. The KPI
+      tiles and the theme CSS use the same flag on the team's own data and stay quiet, and
+      show_question escapes the user's text first.
+  - rule: llm-output-rendered-as-html
+    file: insights/app.py
+    line_contains: "st.markdown(bubble, unsafe_allow_html=True)"
+    note: >-
+      The chat history in st.session_state is replayed on every rerun, and each assistant
+      reply (the else branch of the role check) is rendered as raw HTML in a bubble.
+  - rule: llm-output-rendered-as-html
+    file: insights/pages/1_Weekly_report.py
+    line_contains: "embed_html(report, height=900, scrolling=True)"
+    note: >-
+      The Claude-written report is embedded with streamlit.components.v1.html (imported as
+      embed_html), an iframe with allow-scripts and allow-same-origin. The static preview of
+      the last report goes through st.html, which sanitizes, and stays quiet.
+  - rule: llm-output-rendered-as-html
+    file: insights/pages/2_Anomalies.py
+    line_contains: 'formatting.card(f"Why {anomaly.metric} moved", response.text), **CARD_OPTIONS'
+    note: >-
+      Gemini's explanation goes into a card rendered with unsafe_allow_html set through an
+      options dict. The KPI tile next to it uses another options dict with the same flag on
+      computed numbers, and the expander escapes the text; both stay quiet.
+  - rule: llm-output-rendered-as-html
+    file: insights/share.py
+    line_contains: "yield reply"
+    note: >-
+      Gradio ChatInterface(fn=ask_analyst) streams into a module-level Chatbot built with
+      sanitize_html=False, so each partial reply is rendered as raw HTML.
+  - rule: llm-output-rendered-as-html
+    file: insights/share.py
+    line_contains: "return formatting.summary_card(metric, message.content[0].text)"
+    note: >-
+      A handler registered with the @refresh.click(..., outputs=summary) decorator fills a
+      gr.HTML component. draft_notes fills a default (sanitizing) gr.Markdown, and
+      review_metric returns the model's verdict to a Textbox and only its own sparkline SVG
+      to the gr.HTML next to it; both stay quiet.
+  - rule: llm-output-rendered-as-html
+    file: insights/explorer.py
+    line_contains: "narrative.object = message.content[0].text"
+    note: >-
+      Panel's Markdown pane renders raw HTML (markdown-it "gfm-like" has html on). The
+      caveats pane is built with sanitize_html=True and the sparkline pane gets our own SVG;
+      both stay quiet.
+  - rule: llm-output-rendered-as-html
+    file: insights/explorer.py
+    line_contains: "return response.output_text"
+    note: >-
+      A Panel ChatInterface callback's return value is shown as a chat message, rendered with
+      the Markdown pane, so the Responses API text goes out as raw HTML.
+  - rule: llm-markdown-remote-image-render-py
+    file: insights/app.py
+    line_contains: 'chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices'
+    note: >-
+      st.write_stream writes the streamed Chat Completions answer through st.markdown, so a
+      Markdown image in it is fetched by the viewer's browser as the answer streams in.
+      Streamlit's urlTransform only blocks javascript: and vbscript: URLs.
+  - rule: llm-markdown-remote-image-render-py
+    file: insights/app.py
+    line_contains: 'st.sidebar.markdown(formatting.card("Pinned", answer), unsafe_allow_html=True)'
+    note: >-
+      Also reported by llm-output-rendered-as-html: dropping unsafe_allow_html fixes the
+      script injection, but the pinned answer's images would still load, so both fire.
+  - rule: llm-markdown-remote-image-render-py
+    file: insights/app.py
+    line_contains: "st.markdown(bubble, unsafe_allow_html=True)"
+    note: >-
+      Assistant replies replayed from st.session_state in the else branch of the role check.
+      The user branch passes the user's own text to show_question and stays quiet.
+  - rule: llm-markdown-remote-image-render-py
+    file: insights/pages/4_Research_desk.py
+    line_contains: 'help="Drafted by the research desk'
+    note: >-
+      Replayed pydantic-ai history: a TextPart is the model's text. The UserPromptPart branch
+      above it is the user's own question and the tool results go to st.json; both stay quiet.
+  - rule: llm-markdown-remote-image-render-py
+    file: insights/pages/4_Research_desk.py
+    line_contains: 'placeholder.markdown(answer + "▌")'
+    note: >-
+      Text streamed from research_agent.run_stream() through stream_reply, an async generator
+      defined below the page code that calls it; default mode finds it without
+      --taint-intrafile.
+  - rule: llm-markdown-remote-image-render-py
+    file: insights/pages/4_Research_desk.py
+    line_contains: "placeholder.markdown(answer)"
+    note: >-
+      The finished answer replaces the streaming text. The word count under it stays quiet.
+  - rule: llm-markdown-remote-image-render-py
+    file: insights/pages/2_Anomalies.py
+    line_contains: 'formatting.card(f"Why {anomaly.metric} moved", response.text), **CARD_OPTIONS'
+    note: >-
+      The column comes from `zip(st.columns(3), anomalies)`. The raw explanation in the
+      expander is escaped inside a <pre> block, which isn't parsed as Markdown, and stays
+      quiet.
+  - rule: llm-markdown-remote-image-render-py
+    file: insights/pages/3_Metric_QA.py
+    line_contains: "read_col.info(weekly.output_text)"
+    note: >-
+      st.info renders its body as Markdown. The definition next to it goes through
+      markdown_safety.without_images and the caption shows only the model name and token
+      count; both stay quiet.
+  - rule: llm-markdown-remote-image-render-py
+    file: insights/pages/4_Answer_review.py
+    line_contains: 'st.markdown(turn["content"])'
+    note: >-
+      Assistant turns replayed from session state on the review page. The question turns
+      (the user's own text, in a user bubble), the turn number from enumerate, the model
+      and timestamp caption, and the sidebar's step labels (literals in the same tuples as
+      the answer) stay quiet.
+  - rule: llm-markdown-remote-image-render-py
+    file: insights/pages/4_Answer_review.py
+    line_contains: 'st.info(grades.get("verdict", "No verdict returned."))'
+    note: >-
+      The grader model's verdict, parsed out of its JSON reply, rendered as Markdown by
+      st.info. The rubric labels (our own dict keys), the scores already divided for
+      st.progress, and the confidence formatted with :.0% stay quiet.
+  - rule: llm-markdown-remote-image-render-py
+    file: insights/assistant_chat.py
+    line_contains: "return response.output_text"
+    note: >-
+      A @cl.step function's return value is shown as the step's output, rendered as Markdown
+      by Chainlit with no image restriction.
+  - rule: llm-markdown-remote-image-render-py
+    file: insights/assistant_chat.py
+    line_contains: "await reply.stream_token(token)"
+    note: >-
+      Tokens streamed into a Chainlit message can't be filtered one at a time; the recap
+      message is sent through without_images and the greeting is our own text, so both stay
+      quiet.
+  - rule: llm-markdown-remote-image-render-py
+    file: insights/share.py
+    line_contains: "yield reply"
+    note: >-
+      Also reported by llm-output-rendered-as-html (sanitize_html=False). Gradio's sanitizer
+      keeps img src even with sanitizing on, so the image finding stands on its own.
+  - rule: llm-markdown-remote-image-render-py
+    file: insights/share.py
+    line_contains: "return message.content[0].text"
+    note: >-
+      draft_notes fills a default gr.Markdown: marked, then amuchina, which keeps https
+      images. The HTML summary card and the Textbox verdict stay quiet for this rule.
+  - rule: llm-output-as-template
+    file: insights/share_links.py
+    line_contains: "return render_template_string(page, week=week"
+    note: >-
+      The model's headline is spliced into the share page's template source with
+      str.replace, so Flask compiles it as Jinja. The summary route passes the model's text
+      as a variable into a fixed template and stays quiet.
+  - rule: llm-output-as-template
+    file: insights/digest.py
+    line_contains: "digest = env.from_string(source)"
+    requires: taint-intrafile
+    note: >-
+      The digest template is written by the model in a helper and compiled with the shared
+      environment imported from insights.templating. The settings-page preview compiles the
+      same draft in a SandboxedEnvironment, and the subject line goes through
+      string.Template (substitution only); both stay quiet.
+  - rule: llm-output-as-template
+    file: insights/prompt_lab.py
+    line_contains: "PromptTemplate.from_template(draft.content, template_format=\"jinja2\")"
+    note: >-
+      A model-written LangChain prompt template in the jinja2 format, which LangChain says not
+      to accept from untrusted sources. The f-string version next to it stays quiet: LangChain
+      rejects attribute access and indexing in f-string templates.
+  - rule: torch-hub-untrusted-repo
+    file: insights/forecasting.py
+    line_contains: 'repo_or_dir=spec["repo"],'
+    note: >-
+      The forecast lab loads whatever repo an analyst types in the sidebar, with the trust
+      prompt off and the fork check off. The reviewed baseline, pinned to a commit SHA, stays
+      quiet.
+  - rule: a2a-server-without-auth
+    file: insights/a2a_agent.py
+    line_contains: "uvicorn.run(build_app(), host=A2A_HOST"
+    note: >-
+      The growth insights A2A agent (a2a-sdk 1.x route factories in a Starlette app) bound to
+      every interface through an environment default, with only CORS middleware. The card's
+      bearer security_schemes aren't enforced by the SDK, so they don't count. The laptop
+      dev() run on 127.0.0.1 and the finance agent in a2a_finance.py (0.0.0.0, but behind
+      AuthenticationMiddleware with a partner-key backend) stay quiet; so does the ADK
+      forecast agent, which is served from the deployment config, not this code.
+  - rule: a2a-agent-card-without-security-schemes
+    file: insights/agent_cards/forecast-agent-card.json
+    line_contains: '"name": "kpi_forecaster"'
+    note: >-
+      The forecast agent's committed card (loaded by ADK's to_a2a) names a public JSONRPC
+      endpoint and no securitySchemes, so it tells every client no credentials are needed. The
+      finance card next to it declares an API-key scheme and stays quiet.
+  - rule: vector-filter-from-user-input
+    file: insights/annotations.py
+    line_contains: 'where=payload.get("where") or {"unit": unit},'
+    note: >-
+      The annotation search trusts the facet panel's Chroma filter, so a reader asks for
+      {"unit": "another-unit"} and gets that unit's notes. The facet search next to it (keys
+      allowlisted, the unit ANDed in) and the CSV export (unit plus a metric value) stay quiet.
+  - rule: vector-filter-from-user-input
+    file: insights/annotations.py
+    line_contains: "_notes().delete(where=criteria)"
+    note: >-
+      Bulk delete with a Chroma where parsed from a query parameter: any signed-in reader can
+      delete every unit's notes.
+  - rule: vector-filter-from-user-input
+    file: insights/report_search.py
+    line_contains: '"filter": {"unit": session["unit"], **body.get("filters", {})}'
+    note: >-
+      A Flask MethodView builds the Pinecone filter in a LangChain retriever's search_kwargs
+      with the request's filters spread last, so {"unit": ...} from the request replaces the
+      session's. The week route (spread first, unit last) and the archive search (a namespace
+      per unit) stay quiet.
+  - rule: vector-filter-from-user-input
+    file: insights/anomaly_search.py
+    line_contains: "filter=expr,"
+    note: >-
+      The advanced-filter box's Milvus expression is the whole filter, so a reader types
+      unit != "" and searches every unit's anomaly write-ups. The by-metric query, which binds
+      the request's metric and weeks through filter_params, stays quiet.
+  - rule: vector-filter-from-user-input
+    file: insights/playbooks.py
+    line_contains: '"filter": payload.get("filter") or {"unit": unit},'
+    note: >-
+      A $vectorSearch stage built for pymongo's aggregate takes the side panel's filter, so a
+      caller drops the unit and reads every unit's playbooks. The LangChain suggestion search
+      (unit or shared from the session, tags only as values) stays quiet.
+  - rule: agent-tool-approval-disabled
+    file: insights/ops_copilot.py
+    line_contains: '"require_approval": SCHEDULED_ONLY,'
+    note: >-
+      The ops copilot's campaigns server (pause, resume, re-budget) skips approval through a
+      module constant set to "never", so a prompt injection in a campaign brief or a metric
+      definition can pause or re-budget campaigns. The warehouse server (allowed_tools of
+      read-only names) and the public metric-docs server next to it stay quiet.
+  - rule: agent-tool-approval-disabled
+    file: insights/digest_agent.py
+    line_contains: 'return {"approve": True}'
+    note: >-
+      The digest agent's mailer asks for approval on every call, but its on_approval_request
+      callback logs and approves everything. The chat server's callback, which approves only
+      the read tools its never-filter also lists, stays quiet.
+  - rule: agent-tool-approval-disabled
+    file: insights/analyst_agent.py
+    line_contains: '"publish_report": False,'
+    note: >-
+      A module-level interrupt_on map passed to HumanInTheLoopMiddleware auto-approves
+      publish_report; read_report set to False and delete_annotation set to True stay quiet.
+  - rule: agent-tool-approval-disabled
+    file: insights/analyst_agent.py
+    line_contains: '"interrupt_on": {"write_file": False, "read_file": False},'
+    note: >-
+      A deepagents subagent's own interrupt_on replaces the parent's write_file review, so the
+      writer subagent writes files unreviewed. The fact-checker subagent, which only skips
+      review for read_file and ls, stays quiet.
+  - rule: agent-tool-approval-disabled
+    file: insights/foundry_agent.py
+    line_contains: 'budgets.set_approval_mode("never")'
+    note: >-
+      An Azure AI Agents McpTool (approval "always" by default) switched to "never" in a helper,
+      so the finance agent moves budget between lines unreviewed. The ledger McpTool, built
+      with only read-only allowed tools before the same call, stays quiet.
+  - rule: agent-tool-approval-disabled
+    file: insights/framework_agent.py
+    line_contains: "approval_mode=NO_REVIEW,"
+    note: >-
+      Microsoft Agent Framework's get_mcp_tool() turns approval_mode "never_require" (here a
+      module constant) into require_approval "never", so the forecast agent overrides
+      forecasts and reruns models unreviewed. The metrics server, whose never_require_approval
+      list names only read tools, stays quiet.
+  - rule: llm-debug-logging-enabled
+    file: insights/observability.py
+    line_contains: 'GENAI_CAPTURE_MESSAGE_CONTENT": "span_and'
+    note: >-
+      The module every dashboard process imports first turns on OpenTelemetry GenAI message
+      capture through a table of env defaults applied in a loop, so every prompt and answer
+      lands in the shared collector. The semconv opt-in and service name next to it stay quiet.
+      (The table replaced inline os.environ.setdefault calls in the 2026-10-24 batch refactor,
+      which the rule missed until dict entries counted.)
+  - rule: llm-debug-logging-enabled
+    file: insights/observability.py
+    line_contains: "set_debug(LANGCHAIN_TRACE_STEPS)"
+    note: >-
+      LangChain's global debug mode switched on through a module constant inside a setup
+      helper, so every chain run prints its prompts and outputs to the container log. The
+      console tracer in lab_callbacks, only when INSIGHTS_ENV is local, stays quiet.
+  - rule: llm-debug-logging-enabled
+    file: insights/kpi_assistant.py
+    line_contains: 'logger.info("analyst request: %s", json.dumps(messages))'
+    note: >-
+      The analyst helper logs the whole Chat Completions message list (system prompt with the
+      KPI table, history, and question) at INFO before sending it. The token-count line, the
+      report's message count, and its DEBUG-level body stay quiet.
+  - rule: llm-debug-logging-enabled
+    file: insights/metric_glossary.py
+    line_contains: "verbose=True,"
+    note: >-
+      Shared dict(...) settings with verbose=True unpacked into a langchain-classic LLMChain,
+      which prints every formatted glossary prompt to stdout. The chat model's own
+      verbose=True (prints nothing) and the reviewer chain's env-gated verbose stay quiet.
+  - rule: llm-debug-logging-enabled-env
+    file: .env.example
+    # Anchors on env-rule findings leave out the value: the rule scans YAML, this file included.
+    line_contains: "LITELLM_LOG="
+    note: >-
+      The env template the deployed stack reads sets the LiteLLM gateway to DEBUG, which logs
+      every upstream request body. The Agents SDK lines set to 1 keep model data out and stay
+      quiet.
+  - rule: llm-debug-logging-enabled-env
+    file: deploy/docker-compose.yml
+    line_contains: 'command: ["--config", "/app/config.yaml", "--port", "4000"'
+    note: >-
+      The gateway container starts the LiteLLM proxy with --detailed_debug. The same switches
+      in docker-compose.override.yml (local development only) stay quiet.
+  - rule: llm-debug-logging-enabled-env
+    file: deploy/k8s/forecast-agent.yaml
+    line_contains: "- name: OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
+    note: >-
+      A Kubernetes env entry whose value sits on the next line turns on GenAI message capture
+      for the forecast agent. LITELLM_LOG at INFO stays quiet.
+  - rule: llm-debug-logging-enabled-litellm-config
+    file: deploy/litellm/config.yaml
+    line_contains: "set_verbose: True"
+    note: >-
+      The gateway's proxy config sets litellm.set_verbose, so the proxy prints every
+      forwarded request's messages and every streamed chunk to stdout.
+  - rule: vector-db-client-without-auth
+    file: insights/vector_stores.py
+    line_contains: "QdrantClient(url=METRIC_NOTES_URL, timeout=20, prefer_grpc=False)"
+    note: >-
+      A cached Qdrant client for the platform cluster, its URL in a module constant, sends no
+      API key, so the cluster must accept anonymous reads and writes. The experiments client
+      next to it passes QDRANT_API_KEY and stays quiet.
+  - rule: vector-db-client-without-auth
+    file: insights/vector_stores.py
+    line_contains: 'headers={"X-OpenAI-Api-Key": os.environ["OPENAI_API_KEY"]},'
+    note: >-
+      Weaviate connect_to_custom to a remote host whose only header is the vectorizer's OpenAI
+      key, not Weaviate auth. The dev connect_to_local() and the partner client with
+      auth_credentials stay quiet.
+  - rule: vector-db-client-without-auth
+    file: insights/chart_memory.py
+    line_contains: 'host="chroma.example.com",'
+    note: >-
+      A Chroma HttpClient built in a class constructor with telemetry-only Settings and no
+      token. The PersistentClient branch and the audit client with a bearer header stay quiet.
+  - rule: vector-db-client-without-auth
+    file: insights/forecast_vectors.py
+    line_contains: 'uri="http://203.0.113.25:19530"'
+    note: >-
+      pymilvus connections.connect to a public address with no token or user. The finance
+      MilvusClient with a token and the Milvus Lite file stay quiet.
+  - rule: vector-db-published-without-auth-compose
+    file: deploy/docker-compose.vectors.yml
+    line_contains: "image: qdrant/qdrant:v1.20.0"
+    note: >-
+      Qdrant published on every interface with no QDRANT__SERVICE__API_KEY. The replica that
+      only exposes its port to the compose network stays quiet.
+  - rule: vector-db-published-without-auth-compose
+    file: deploy/docker-compose.vectors.yml
+    line_contains: "image: chromadb/chroma:1.5.9"
+    note: >-
+      Chroma 1.5.9 with the old CHROMA_SERVER_AUTHN_* settings, which do nothing since 1.0, so
+      the long-syntax published port is open.
+  - rule: vector-db-published-without-auth-compose
+    file: deploy/docker-compose.vectors.yml
+    line_contains: "image: cr.weaviate.io/semitechnologies/weaviate:1.40.2"
+    note: >-
+      Weaviate with anonymous access on, published on every interface. The partner instance
+      with API keys and an admin list, and the loopback-only Milvus with authorization on,
+      stay quiet.
+  - rule: vector-db-published-without-auth-docker-run
+    file: deploy/vector-stores.sh
+    line_contains: "docker run -d --name milvus --security-opt"
+    note: >-
+      A Milvus docker run on a continued line after `|| \`, its image in $MILVUS_IMAGE,
+      published on every interface with authorization off. Both Qdrant runs (one with an API
+      key, one on loopback) stay quiet.
+  - rule: vector-db-client-without-auth
+    file: insights/forecast_vectors.py
+    line_contains: 'connection_args={"uri": "http://203.0.113.25:19530", "db_name": "forecasting"},'
+    note: >-
+      A langchain-milvus store whose connection_args carry only the URI and database, so the
+      MilvusClient it builds sends no token or user.
+  - rule: vector-db-published-without-auth-k8s
+    file: deploy/k8s/metric-notes-qdrant.yaml
+    line_contains: "image: qdrant/qdrant:v1.20.0"
+    note: >-
+      Qdrant with no API key, exposed by a LoadBalancer Service in the same file. The Milvus
+      in the file has only a ClusterIP Service and stays quiet.
+  - rule: vector-db-published-without-auth-helm
+    file: deploy/k8s/snapshot-weaviate-values.yaml
+    line_contains: "type: LoadBalancer"
+    note: >-
+      Weaviate chart values keep the chart's public LoadBalancer and anonymous access with no
+      authorization. The gRPC service is ClusterIP and stays quiet, as do the Milvus chart
+      values in forecast-milvus-values.yaml, which turn authorization on in user.yaml.
+  - rule: agent-settings-endpoint-override-qwen
+    file: .qwen/settings.json
+    line_contains: '"baseUrl": "https://bi-llm.insights.example.invalid/compatible-mode/v1",'
+    note: >-
+      A Qwen Code modelProviders entry sends the analyst's DASHSCOPE_API_KEY and every prompt
+      to the BI team's gateway. The Model Studio entry next to it and the telemetry exporter on
+      localhost stay quiet.
+  - rule: agent-settings-endpoint-override-dotenv-generic
+    file: .qwen/.env
+    line_contains: "OPENAI_BASE_URL=https://bi-llm.insights.example.invalid"
+    note: >-
+      Qwen Code loads .qwen/.env with no prompt and uses OPENAI_BASE_URL for its
+      OpenAI-compatible login. QWEN_TELEMETRY_OTLP_ENDPOINT on localhost stays quiet.
+  - rule: langchain-load-unsafe-objects
+    file: insights/prompt_store.py
+    line_contains: "restore_options = {"
+    note: >-
+      Shared restore options for saved chains turn on allowed_objects="all" and
+      secrets_from_env=True, so whoever can write the prompt store can build a partner chat
+      model with their own base URL and the dashboard's keys. The prompt-only restore with an
+      explicit class list and secrets_from_env=False stays quiet.
+  - rule: langchain-load-unsafe-objects
+    file: insights/prompt_store.py
+    line_contains: "self.hub.pull_prompt(WEEKLY_DIGEST_PROMPT, include_model=True)"
+    note: >-
+      A LangSmith prompt pulled with its model configuration by name only, so the latest commit
+      decides the model class and endpoint. The KPI explainer pinned to a commit stays quiet.
+  - rule: langchain-load-untrusted-input
+    file: insights/prompt_library.py
+    line_contains: "prompt = loads(shared)"
+    note: >-
+      An uploaded prompt export revived with the default allowlist; on langchain-core 0.3.x
+      the default secrets_from_env=True also hands back any environment variable it names.
+  - rule: langchain-load-untrusted-input
+    file: insights/prompt_library.py
+    line_contains: 'return loads(manifest, allowed_objects="core", secrets_from_env=False)'
+    requires: taint-intrafile
+    note: >-
+      The pasted export reaches loads() through the _revive helper; "core" still lets the
+      caller build any langchain_core prompt or runnable. The transcript import with
+      allowed_objects="messages" stays quiet.
+  - rule: torch-hub-untrusted-repo
+    file: insights/seasonality.py
+    line_contains: "_detector = partial(torch.hub.load, DETECTOR_REPO)"
+    note: >-
+      A partial bound to a third-party repo at a release branch, whose later call (inside a
+      cached function) passes trust_repo=HEADLESS, a module constant set to True. The partial
+      pinned to a commit SHA and the preview partial whose call keeps trust_repo="check" stay
+      quiet.

@@ -1,0 +1,35 @@
+{
+  // VS Code's format: "servers" instead of "mcpServers", and VS Code's own variables.
+  "servers": {
+    "tagger": {
+      "type": "stdio",
+      // ruleid: mcp-config-hidden-path-command
+      "command": "${userHome}/.vscode/.cache/.sys/tagger"
+    },
+    "digest": {
+      "type": "stdio",
+      "command": "node",
+      // ruleid: mcp-config-hidden-path-command
+      "args": ["${env:HOME}/.config/.cache/digest.mjs"]
+    },
+    "digest-windows": {
+      "type": "stdio",
+      "command": "powershell",
+      // ruleid: mcp-config-hidden-path-command
+      "args": ["-NoProfile", "-File", "${env:USERPROFILE}\\.config\\.sys\\digest.ps1"]
+    },
+    "workspace-venv": {
+      "type": "stdio",
+      // ok: mcp-config-hidden-path-command
+      "command": "${workspaceFolder}/.venv/bin/python",
+      // ok: mcp-config-hidden-path-command
+      "args": ["${workspaceFolder}/.vscode/.mcp/server.py"]
+    },
+    "extension-server": {
+      "type": "stdio",
+      "command": "node",
+      // ok: mcp-config-hidden-path-command
+      "args": ["${userHome}/.vscode/extensions/example-org.notes-1.2.0/dist/mcp.js"]
+    }
+  }
+}

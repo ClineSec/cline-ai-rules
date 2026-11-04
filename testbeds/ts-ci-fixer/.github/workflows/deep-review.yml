@@ -1,0 +1,72 @@
+# Deep review for large pull requests. Adding the "deep-review" label runs Claude Code's
+# ultrareview in the cloud; a maintainer can also comment "/ultrareview" to rerun it.
+name: deep-review
+
+on:
+  pull_request_target:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  # The documented setup: the runner stays on the base branch and ultrareview clones the pull
+  # request in the cloud.
+  ultrareview:
+    if: github.event_name == 'pull_request_target' && github.event.label.name == 'deep-review'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ultrareview
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: claude ultrareview "$PR_NUMBER" --post --trust-workspace
+
+  # Reviews the contributor's working tree as built, so generated files are included.
+  ultrareview-built:
+    if: github.event_name == 'pull_request_target' && github.event.label.name == 'deep-review'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci && npm run build
+      - name: Ultrareview the built tree
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          review_args=(--json --timeout 30)
+          npx -y @anthropic-ai/claude-code@2.1.312 ultrareview origin/main "${review_args[@]}" \
+            --trust-workspace > ultrareview.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultrareview
+          path: ultrareview.json
+
+  # "/ultrareview" from a maintainer on a pull request.
+  rerun:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/ultrareview') &&
+      contains(fromJSON('["OWNER", "MEMBER"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out the pull request
+        run: gh pr checkout "${{ github.event.issue.number }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Ultrareview
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK: "1"
+        run: claude ultrareview "${{ github.event.issue.number }}" --post

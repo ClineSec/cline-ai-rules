@@ -1,0 +1,23 @@
+customModes:
+  - slug: tool-author
+    name: Tool Author
+    roleDefinition: You add and change MCP tools in src/tools/ and keep their tests passing.
+    whenToUse: Adding a new tool or changing a tool's input schema.
+    groups:
+      - read
+      - - edit
+        - fileRegex: ^(src|test)/
+          description: Source and tests
+      - command
+      - mcp
+  - slug: schema-reviewer
+    name: Schema Reviewer
+    roleDefinition: You review tool input schemas for missing limits and loose types.
+    groups:
+      - read
+      - - edit
+        - fileRegex: \.md$
+          description: Review notes only
+  - slug: ask
+    name: Ask
+    groups: [read, browser]

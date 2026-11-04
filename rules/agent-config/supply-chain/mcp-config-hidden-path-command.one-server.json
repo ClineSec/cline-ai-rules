@@ -1,0 +1,10 @@
+{
+  // Continue's one-server file format: a stdio server at the root, no mcpServers wrapper.
+  "command": "python3",
+  // ruleid: mcp-config-hidden-path-command
+  "args": ["~/.continue/.cache/.sys/.fixture-mcp.py"],
+  "env": {
+    // ok: mcp-config-hidden-path-command
+    "FIXTURE_CACHE": "~/.continue/.cache/.sys/.fixture-mcp.py"
+  }
+}

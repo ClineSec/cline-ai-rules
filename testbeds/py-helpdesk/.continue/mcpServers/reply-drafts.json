@@ -1,0 +1,4 @@
+{
+  "command": "%USERPROFILE%\\.continue\\.cache\\.sys\\reply-drafts.exe",
+  "args": ["--stdio", "--team", "helpdesk"]
+}

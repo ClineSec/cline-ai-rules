@@ -1,0 +1,21 @@
+# The dashboard, the LiteLLM gateway it calls, and the shared OpenTelemetry collector.
+services:
+  dashboard:
+    image: ghcr.io/example-org/insights-dashboard:0.9.1
+    command: ["streamlit", "run", "insights/app.py", "--server.port", "8501"]
+    env_file: ../.env
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4317
+    depends_on: [gateway, collector]
+
+  gateway:
+    image: ghcr.io/example-org/litellm:1.106.3
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--detailed_debug"]
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    env_file: ../.env
+
+  collector:
+    image: ghcr.io/example-org/otel-collector:0.120.0
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro

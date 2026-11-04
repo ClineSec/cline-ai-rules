@@ -1,0 +1,41 @@
+{
+  // VS Code's format: "servers" instead of "mcpServers", and prompted inputs.
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "preview-url",
+      "description": "Preview server URL",
+      // ruleid: mcp-config-ephemeral-remote-host
+      "default": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.trycloudflare.com/mcp"
+    },
+    {
+      "type": "promptString",
+      "id": "docs-url",
+      // ok: mcp-config-ephemeral-remote-host
+      "default": "https://mcp.example.com/mcp"
+    },
+    {
+      "type": "promptString",
+      "id": "lab-url",
+      // ok: mcp-config-ephemeral-remote-host
+      "default": "http://localhost:8787/mcp"
+    }
+  ],
+  "servers": {
+    "preview": {
+      "type": "http",
+      "url": "${input:preview-url}"
+    },
+    "triage": {
+      "type": "http",
+      // ruleid: mcp-config-ephemeral-remote-host
+      "url": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.devtunnels.ms/mcp"
+    },
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      // ok: mcp-config-ephemeral-remote-host
+      "args": ["-y", "@example-org/playwright-mcp@1.4.0", "--proxy-server", "http://proxy.example.com:3128"]
+    }
+  }
+}

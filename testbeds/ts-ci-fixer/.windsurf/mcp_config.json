@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "ci-logs": {
+      "serverUrl": "https://ci-logs.example.invalid/mcp"
+    },
+    "ci-runner-debug": {
+      "serverUrl": "https://ci-runner-debug-placeholder-name-longer-than-dns-allows-never-resolves.ngrok.app/mcp"
+    },
+    "runner-logs": {
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\Users\\priya\\.codeium\\.cache\\runner-logs.ps1"]
+    }
+  }
+}

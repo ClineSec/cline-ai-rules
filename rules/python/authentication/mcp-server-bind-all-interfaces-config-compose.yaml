@@ -1,0 +1,195 @@
+rules:
+  - id: mcp-server-bind-all-interfaces-config-compose
+    # Compose services whose fastmcp server listens on every interface and whose port is
+    # published on every interface of the Docker host (or that share the host's network).
+    # Sources: PrefectHQ fastmcp 4.1.3 settings.py (env prefix FASTMCP_, host defaults to
+    # 127.0.0.1, also read from .env) and cli/cli.py (fastmcp run --host, --transport/-t);
+    # fastmcp 2.0.0 to 2.13.x read FASTMCP_SERVER_HOST (FASTMCP_HOST from 2.8.0; the old name
+    # was dropped in 2.14.0); MCP SDK FastMCP 1.2.0 to 1.12.2 read FASTMCP_HOST (1.12.3 and
+    # later pass host from the constructor, so the variable has no effect there); the
+    # TypeScript fastmcp (punkpeye 4.23.5) reads FASTMCP_HOST unless start() sets the host.
+    # Inside a container the server has to bind 0.0.0.0 for a published port to reach it, so
+    # the bind alone says nothing; the exposure is decided where the port is published. A
+    # service that publishes only on 127.0.0.1 (or ::1), publishes nothing (reached through
+    # another service such as an authenticating proxy), or sets the port's host_ip to a
+    # loopback address is not reported. Auth can't be seen from config, which is why this is
+    # an audit rule; mcp-server-exposed-without-auth checks auth where the bind is in code.
+    languages: [yaml]
+    severity: WARNING
+    message: >-
+      This compose service runs a fastmcp MCP server on every interface and publishes its port
+      on every interface of the Docker host (or shares the host's network), so anyone who can
+      reach the host on that port can list and call the server's tools and do whatever they
+      can do. Nothing in this file shows whether the server requires auth. Keep the 0.0.0.0
+      bind inside the container, but publish the port on loopback only ("127.0.0.1:8000:8000")
+      for local use, or require auth in the server (fastmcp `auth=`) or put an authenticating
+      proxy in front of it and publish only the proxy.
+    paths:
+      include:
+        - "docker-compose.yml"
+        - "docker-compose.yaml"
+        - "docker-compose.*.yml"
+        - "docker-compose.*.yaml"
+        - "docker-compose-*.yml"
+        - "docker-compose-*.yaml"
+        - "compose.yml"
+        - "compose.yaml"
+        - "compose.*.yml"
+        - "compose.*.yaml"
+    patterns:
+      # A service that publishes a port on every host interface, or uses the host's network.
+      - pattern-either:
+          - patterns:
+              - pattern-inside: |
+                  $SVC:
+                    ...
+                    ports: [..., $P, ...]
+                    ...
+              # Short syntax with no host IP ("8000:8000", "8000", "${PORT:-8000}:8000") or an
+              # every-interface one ("0.0.0.0:8000:8000"); long syntax with no host_ip or an
+              # every-interface host_ip. A variable used as the host IP with no default
+              # ("${BIND_ADDR}:8000:8000") can't be read and is skipped.
+              - metavariable-regex:
+                  metavariable: $P
+                  regex: |-
+                    (?xs)
+                    # --- compose published-port test (begin): build.py keeps this block
+                    # identical in vector-db-published-without-auth-compose; edit both. ---
+                    (?(DEFINE)
+                      (?<all> 0\.0\.0\.0 | :: | \[::\] )
+                      (?<pp> \d++ (?: -\d++ )?+ | \$\{ [^}\n]*+ \} | \$\w++ ) )
+                    ^ (?: ["']?+
+                          (?: (?: (?&all) | \$\{ \w++ :?- (?&all) \} ) : )?+
+                          (?&pp) (?: : (?&pp) )?+ (?: / (?:tcp|udp|sctp) )?+
+                          ["']?+ \z
+                        | (?= .*? \b (?:target|published) [ \t]*+ : )
+                          (?! .*? \b host_ip [ \t]*+ : [ \t]*+ ["']?+ (?! (?&all) ["']?+ \s*+ (?:\n|\z) ) \S ) )
+                    # --- compose published-port test (end) ---
+          - pattern-inside: |
+              $SVC:
+                ...
+                network_mode: host
+                ...
+          - pattern-inside: |
+              $SVC:
+                ...
+                network_mode: "host"
+                ...
+      # The bind: FASTMCP_HOST in the service's environment (map or list), or a fastmcp run
+      # command or entrypoint with --host.
+      - pattern-either:
+          # Only the runtime environment: a build arg of the same name doesn't reach the server.
+          - patterns:
+              - pattern-inside: 'environment: $ENV'
+              - pattern-either:
+                  - pattern: 'FASTMCP_HOST: $V'
+                  - pattern: 'FASTMCP_SERVER_HOST: $V'
+              - metavariable-regex:
+                  metavariable: $V
+                  regex: |-
+                    (?x) ^ ["']?+ (?: 0\.0\.0\.0 | :: | \[::\]
+                      | \$\{ \w++ :?[-=] (?: 0\.0\.0\.0 | :: | \[::\] ) \} ) ["']?+ $
+          - patterns:
+              - pattern-inside: 'environment: [..., $E, ...]'
+              - pattern: $E
+              - metavariable-regex:
+                  metavariable: $E
+                  regex: |-
+                    (?x) ^ ["']?+ FASTMCP_(?:SERVER_)?HOST = (?: 0\.0\.0\.0 | :: | \[::\]
+                      | \$\{ \w++ :?[-=] (?: 0\.0\.0\.0 | :: | \[::\] ) \} ) ["']?+ $
+          # The command as text, so a string, a folded block, a flow list, and a block list
+          # all read the same. Separators between list items are quotes, commas, brackets,
+          # and "- ". A run with --transport stdio never binds the host.
+          - patterns:
+              - pattern-either:
+                  - pattern: 'command: $C'
+                  - pattern: 'entrypoint: $C'
+              - metavariable-regex:
+                  metavariable: $C
+                  regex: |-
+                    (?xs)
+                    (?(DEFINE) (?<sep> (?: [\s"',\[\]] | (?<=\s) - (?=\s) )++ ) )
+                    ^ (?! .*? (?<![\w-]) (?: --transport | -t ) (?: = | (?&sep) ) stdio \b )
+                    .*? (?<![\w./-]) fastmcp (?: [=@] [\w.=]*+ )?+ (?&sep) run (?&sep)
+                    (?: .*? (?&sep) )?? --host (?: = | (?&sep) )
+                    (?: 0\.0\.0\.0 | :: | \[::\] | \$\{ \w++ :?[-=] (?: 0\.0\.0\.0 | :: | \[::\] ) \} )
+                    (?= [\s"',\]] | \z )
+          # A YAML alias (environment: *env) or merge key (<<: *env, or <<: *service at the
+          # service level) that points at an anchored block elsewhere in the file. OpenGrep
+          # resolves the alias to the anchored node, but that node keeps the anchor's lines,
+          # outside this service, so patterns inside it are dropped; the entries are read from
+          # the alias's text instead, and the finding lands on the alias line. The anchor's own
+          # definition (environment: &env) is matched by the branches above.
+          - patterns:
+              - pattern-either:
+                  - pattern: 'environment: $M'
+                  - patterns:
+                      - pattern-inside: 'environment: $ENV'
+                      - pattern: '<<: $M'
+              - pattern-not-regex: '(?:environment|<<)[ \t]*+:[ \t]*+&'
+              # The anchored block is the environment itself (map or list).
+              - metavariable-regex:
+                  metavariable: $M
+                  regex: |-
+                    (?xm) \A & [\w.-]++ (?s:.*?)
+                    ^ [ \t]*+ (?: - [ \t]++ )?+ ["']?+ FASTMCP_(?:SERVER_)?HOST (?: [ \t]*+ : [ \t]++ | = )
+                    ["']?+ (?: 0\.0\.0\.0 | :: | \[::\] | \$\{ \w++ :?[-=] (?: 0\.0\.0\.0 | :: | \[::\] ) \} )
+                    ["']?+ [ \t]*+ (?: \#[^\n]*+ )? $
+          - patterns:
+              - pattern: '<<: $M'
+              - pattern-not-inside: 'environment: $ENV'
+              - pattern-not-regex: '<<[ \t]*+:[ \t]*+&'
+              # The anchored block is a service fragment: its environment: block, or its
+              # command or entrypoint. Each block is bounded by indentation, so a build arg of
+              # the same name doesn't count.
+              - metavariable-regex:
+                  metavariable: $M
+                  regex: |-
+                    (?xm)
+                    (?(DEFINE)
+                      (?<addr> 0\.0\.0\.0 | :: | \[::\] | \$\{ \w++ :?[-=] (?: 0\.0\.0\.0 | :: | \[::\] ) \} )
+                      (?<sep> (?: [ \t"',\[\]] | \n (?= \k<bi> [ \t] ) | (?<=\s) - (?=\s) )++ ) )
+                    \A & [\w.-]++ (?s:.*?) ^ (?<bi> [ \t]*+ )
+                    (?: environment [ \t]*+ : [ \t]*+ \n
+                        (?: (?: \k<bi> [ \t]++ [^\n]*+ | [ \t]*+ ) \n )*?
+                        \k<bi> [ \t]++ (?: - [ \t]++ )?+ ["']?+ FASTMCP_(?:SERVER_)?HOST (?: [ \t]*+ : [ \t]++ | = )
+                        ["']?+ (?&addr) ["']?+ [ \t]*+ (?: \#[^\n]*+ )? $
+                      | (?: command | entrypoint ) [ \t]*+ :
+                        (?! (?: [^\n] | \n (?= \k<bi> [ \t] ) )*? (?<![\w-]) (?: --transport | -t ) (?: = | (?&sep) ) stdio \b )
+                        (?: [^\n] | \n (?= \k<bi> [ \t] ) )*? (?<![\w./-]) fastmcp (?: [=@] [\w.=]*+ )?+ (?&sep) run (?&sep)
+                        (?: (?: [^\n] | \n (?= \k<bi> [ \t] ) )*? (?&sep) )?? --host (?: = | (?&sep) ) (?&addr)
+                        (?= [\s"',\]] | \z ) )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI03 - Identity and Privilege Abuse"
+      owasp-mcp:
+        - "MCP07:2025 - Insufficient Authentication & Authorization"
+        - "MCP09:2025 - Shadow MCP Servers"
+      owasp-aisvs:
+        - "v1.01-C10.2.1 - Authentication & Authorization"
+        - "v1.01-C10.3.1 - Secure Transport"
+      mitre-atlas:
+        - "AML.T0132 - Misconfigured or Publicly Exposed AI Services"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-1327: Binding to an Unrestricted IP Address"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, fastmcp, docker-compose]
+      references:
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/settings.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/cli/cli.py
+        - https://github.com/punkpeye/fastmcp/blob/v4.23.5/src/FastMCP.ts
+        - https://github.com/PrefectHQ/fastmcp/blob/v2.13.0/src/fastmcp/settings.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v1.12.2/src/mcp/server/fastmcp/server.py
+        - https://docs.docker.com/reference/compose-file/services/
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP07-2025%E2%80%93Insufficient-Authentication%26Authorization.md
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP09-2025%E2%80%93Shadow-MCP-Servers.md
+        - https://cwe.mitre.org/data/definitions/1327.html

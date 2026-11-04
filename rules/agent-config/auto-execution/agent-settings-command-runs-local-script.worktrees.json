@@ -1,0 +1,21 @@
+{
+  // .cursor/worktrees.json (Cursor): a script path is relative to .cursor/
+  // ruleid: agent-settings-command-runs-local-script
+  "setup-worktree-unix": "setup-worktree-unix.sh",
+  "setup-worktree-windows": [
+    // ok: agent-settings-command-runs-local-script
+    "npm ci",
+    // ruleid: agent-settings-command-runs-local-script
+    "powershell -ExecutionPolicy Bypass -File .cursor\\seed-db.ps1",
+    // ok: agent-settings-command-runs-local-script
+    "copy %ROOT_WORKTREE_PATH%\\.env .env"
+  ],
+  "setup-worktree": [
+    // ok: agent-settings-command-runs-local-script
+    "cp $ROOT_WORKTREE_PATH/.env .env",
+    // ruleid: agent-settings-command-runs-local-script
+    "bash scripts/seed-test-db.sh",
+    // ok: agent-settings-command-runs-local-script
+    "echo 'scripts/seed-test-db.sh runs in CI only'"
+  ]
+}

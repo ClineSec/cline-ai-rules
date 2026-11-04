@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "migrations": {
+      // ruleid: project-mcp-server-no-prompt
+      "command": "uv",
+      "args": ["run", "--directory", "tools/migrations-mcp", "server.py"]
+    },
+    "issues": {
+      "type": "sse",
+      // ok: project-mcp-server-no-prompt
+      "url": "https://mcp.example.com/issues/sse"
+    }
+  }
+}

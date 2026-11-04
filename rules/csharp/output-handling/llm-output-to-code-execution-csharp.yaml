@@ -1,0 +1,615 @@
+rules:
+  - id: llm-output-to-code-execution-csharp
+    # The pattern-sources, pattern-propagators, and the first 9 pattern-sanitizers are shared with
+    # llm-output-to-sql-csharp and llm-output-to-html-csharp (build.py SHARED_BLOCKS
+    # "model-output sources (C#)", "lambda propagators (C#)", "value sanitizers (C#)",
+    # "model-output metadata sanitizer (C#)"; the propagators and value sanitizers also with
+    # user-input-in-system-prompt-csharp): edit them together.
+    languages: [csharp]
+    severity: ERROR
+    message: >-
+      Model output reaches a code or shell execution sink. Treat completions as untrusted
+      input: an attacker who can influence the prompt (directly or through retrieved content)
+      can choose what runs here, with this service's permissions. Parse the output into a
+      constrained structure (`GetResponseAsync<Plan>` with an enum of operations) and dispatch
+      to an allowlist of operations instead of executing it; a shell, Roslyn scripting, or a
+      PowerShell runspace is not a sandbox.
+    mode: taint
+    pattern-sources:
+      # Semantic Kernel (Microsoft.SemanticKernel 1.81.0): chat and text completion services and
+      # prompts run on the kernel, and everything read back from them (ChatMessageContent
+      # .Content and .Items, FunctionResult.GetValue<string>(), streaming chunks).
+      - pattern-either:
+          - pattern: $SVC.GetChatMessageContentAsync(...)
+          - pattern: $SVC.GetChatMessageContentsAsync(...)
+          - pattern: $SVC.GetStreamingChatMessageContentsAsync(...)
+          - pattern: $SVC.GetTextContentAsync(...)
+          - pattern: $SVC.GetTextContentsAsync(...)
+          - pattern: $SVC.GetStreamingTextContentsAsync(...)
+          - pattern: $SVC.InvokePromptAsync(...)
+          - pattern: $SVC.InvokePromptAsync<$T>(...)
+          - pattern: $SVC.InvokePromptStreamingAsync(...)
+          - pattern: $SVC.InvokePromptStreamingAsync<$T>(...)
+      # A prompt function created in this file (CreateFunctionFromPrompt,
+      # KernelFunctionFactory.CreateFromPrompt, KernelFunctionYaml.FromPromptYaml), held in a
+      # local or a field and invoked directly or through kernel.InvokeAsync. Native plugin
+      # functions are not sources.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $FT $FN = <... $KF.$CREATE(...) ...>;
+                  ...
+              - pattern-inside: |
+                  var $FN = <... $KF.$CREATE(...) ...>;
+                  ...
+              - pattern-inside: |
+                  $FN = <... $KF.$CREATE(...) ...>;
+                  ...
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    $FT $FN = <... $KF.$CREATE(...) ...>;
+                    ...
+                  }
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    $CTOR(...) {
+                      ...
+                      $FN = <... $KF.$CREATE(...) ...>;
+                      ...
+                    }
+                    ...
+                  }
+          - metavariable-regex:
+              metavariable: $CREATE
+              regex: ^(?:CreateFunctionFromPrompt\w*|CreateFromPrompt\w*|FromPromptYaml)$
+          - pattern-either:
+              - pattern: $FN.InvokeAsync(...)
+              - pattern: $FN.InvokeAsync<$T>(...)
+              - pattern: $FN.InvokeStreamingAsync(...)
+              - pattern: $K.InvokeAsync($FN, ...)
+              - pattern: $K.InvokeAsync<$T>($FN, ...)
+              - pattern: $K.InvokeStreamingAsync($FN, ...)
+      # Agents: Semantic Kernel agents and group chats (Microsoft.SemanticKernel.Agents.* 1.81.0)
+      # and Microsoft Agent Framework agents (Microsoft.Agents.AI 1.26.0), typed in this file,
+      # or named like an agent in a file that imports either framework.
+      - patterns:
+          - pattern-either:
+              - pattern: $AG.InvokeAsync(...)
+              - pattern: $AG.InvokeStreamingAsync(...)
+              - pattern: $AG.RunAsync(...)
+              - pattern: $AG.RunAsync<$T>(...)
+              - pattern: $AG.RunStreamingAsync(...)
+          - metavariable-type:
+              metavariable: $AG
+              types: [Agent, KernelAgent, ChatHistoryAgent, ChatCompletionAgent, OpenAIAssistantAgent, OpenAIResponseAgent, AzureAIAgent, AgentGroupChat, AgentChat, BedrockAgent, CopilotStudioAgent, AIAgent, ChatClientAgent]
+      - patterns:
+          - pattern-either:
+              - pattern: $AG.InvokeAsync(...)
+              - pattern: $AG.InvokeStreamingAsync(...)
+              - pattern: $AG.RunAsync(...)
+              - pattern: $AG.RunAsync<$T>(...)
+              - pattern: $AG.RunStreamingAsync(...)
+          - metavariable-regex:
+              metavariable: $AG
+              regex: (?i)^(?:this\.)?_?\w*agent$
+          - pattern-not-regex: '\A(?:(?![ \t]*+(?:global[ \t]++)?using[ \t]++Microsoft\.(?:SemanticKernel\.Agents|Agents\.AI)\b)[^\n]*+\n)*+(?![ \t]*+(?:global[ \t]++)?using[ \t]++Microsoft\.(?:SemanticKernel\.Agents|Agents\.AI)\b)[^\n]*+\z'
+      # Microsoft.Extensions.AI (10.11.0) IChatClient: GetResponseAsync (ChatResponse.Text,
+      # ChatResponse<T>.Result) and GetStreamingResponseAsync, on a receiver typed as a chat
+      # client or in a file that imports Microsoft.Extensions.AI (System.Net's
+      # WebRequest.GetResponseAsync has the same name).
+      - patterns:
+          - pattern-either:
+              - pattern: $CC.GetResponseAsync(...)
+              - pattern: $CC.GetResponseAsync<$T>(...)
+              - pattern: $CC.GetStreamingResponseAsync(...)
+          - metavariable-type:
+              metavariable: $CC
+              types: [IChatClient, DelegatingChatClient]
+      - patterns:
+          - pattern-either:
+              - pattern: $CC.GetResponseAsync(...)
+              - pattern: $CC.GetResponseAsync<$T>(...)
+              - pattern: $CC.GetStreamingResponseAsync(...)
+          - pattern-not-regex: '\A(?:(?![ \t]*+(?:global[ \t]++)?using[ \t]++Microsoft\.Extensions\.AI\b)[^\n]*+\n)*+(?![ \t]*+(?:global[ \t]++)?using[ \t]++Microsoft\.Extensions\.AI\b)[^\n]*+\z'
+      # OpenAI .NET (OpenAI 2.14.0; Azure.AI.OpenAI hands out the same clients): chat
+      # completions (ChatCompletion.Content[0].Text) and the Responses API
+      # (ResponseResult.GetOutputText(); OpenAIResponseClient before 2.8.0).
+      - pattern-either:
+          - pattern: $OC.CompleteChatAsync(...)
+          - pattern: $OC.CompleteChat(...)
+          - pattern: $OC.CompleteChatStreamingAsync(...)
+          - pattern: $OC.CompleteChatStreaming(...)
+      - patterns:
+          - pattern-either:
+              - pattern: $RC.CreateResponseAsync(...)
+              - pattern: $RC.CreateResponse(...)
+              - pattern: $RC.CreateResponseStreamingAsync(...)
+              - pattern: $RC.CreateResponseStreaming(...)
+          - metavariable-type:
+              metavariable: $RC
+              types: [ResponsesClient, OpenAIResponseClient]
+      - patterns:
+          - pattern-either:
+              - pattern: $RC.CreateResponseAsync(...)
+              - pattern: $RC.CreateResponse(...)
+              - pattern: $RC.CreateResponseStreamingAsync(...)
+              - pattern: $RC.CreateResponseStreaming(...)
+          - pattern-not-regex: '\A(?:(?![ \t]*+(?:global[ \t]++)?using[ \t]++OpenAI\.Responses\b)[^\n]*+\n)*+(?![ \t]*+(?:global[ \t]++)?using[ \t]++OpenAI\.Responses\b)[^\n]*+\z'
+    pattern-propagators:
+      # In --taint-intrafile mode OpenGrep drops taint through a call that takes a lambda
+      # (messages.Where(m => ...).Select(m => m.Text)), so carry it from the receiver to the
+      # call's result, and into the parameter of a callback over a tainted collection or task
+      # (`replies.ToList().ForEach(r => ...)`, `task.ContinueWith(t => ...)`).
+      - patterns:
+          - pattern: $CALL
+          - pattern-either:
+              - pattern: $R.$M(..., ($P) => $B, ...)
+              - pattern: $R.$M(..., ($P, $Q) => $B, ...)
+        from: $R
+        to: $CALL
+      - patterns:
+          - pattern-inside: $R.$M(($P) => $B)
+          - pattern: $P
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(?:Select|SelectMany|Where|ForEach|ContinueWith|Aggregate|Any|All|First|FirstOrDefault|Last|LastOrDefault|Single|SingleOrDefault|OrderBy|OrderByDescending|ThenBy|GroupBy|ToDictionary|ToLookup|TakeWhile|SkipWhile)$
+        from: $R
+        to: $P
+    pattern-sinks:
+      # System.Diagnostics.Process: the program the model picks (Process.Start's file name,
+      # ProcessStartInfo's FileName). Arguments after a fixed program are argument injection,
+      # not code execution, and are left out, except for a shell or interpreter given inline
+      # code (below).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: Process.Start($FILE, ...)
+              - pattern-inside: new ProcessStartInfo($FILE, ...)
+              - pattern-inside: 'new ProcessStartInfo { ..., FileName = $FILE, ... }'
+              - pattern-inside: 'new ProcessStartInfo(...) { ..., FileName = $FILE, ... }'
+              - pattern-inside: '$PSI.FileName = $FILE'
+          - pattern: $FILE
+          - pattern-not: '"$PROG"'
+          # Process.Start(startInfo) takes a whole ProcessStartInfo.
+          - pattern-not: (ProcessStartInfo $SI)
+          - pattern-not: new ProcessStartInfo(...)
+          - pattern-not: 'new ProcessStartInfo { ... }'
+          - pattern-not: 'new ProcessStartInfo(...) { ... }'
+      # A shell given a command line: Process.Start("bash", $"-c \"{cmd}\""),
+      # new ProcessStartInfo("cmd.exe", "/c " + cmd), or FileName = "pwsh" with
+      # Arguments = $"-Command {cmd}". The program may also be a string constant in this class.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: Process.Start("$SH", $ARGS)
+              - pattern-inside: new ProcessStartInfo("$SH", $ARGS)
+              - pattern-inside: 'new ProcessStartInfo { ..., FileName = "$SH", ..., Arguments = $ARGS, ... }'
+              - pattern-inside: 'new ProcessStartInfo { ..., Arguments = $ARGS, ..., FileName = "$SH", ... }'
+              - pattern-inside: 'new ProcessStartInfo("$SH") { ..., Arguments = $ARGS, ... }'
+              - pattern-inside: |
+                  $PSI.FileName = "$SH";
+                  ...
+                  $PSI.Arguments = $ARGS;
+              - patterns:
+                  - pattern-inside: |
+                      class $CLS {
+                        ...
+                        const string $SHC = "$SH";
+                        ...
+                      }
+                  - pattern-either:
+                      - pattern-inside: Process.Start($SHC, $ARGS)
+                      - pattern-inside: new ProcessStartInfo($SHC, $ARGS)
+                      - pattern-inside: 'new ProcessStartInfo { ..., FileName = $SHC, ..., Arguments = $ARGS, ... }'
+                      - pattern-inside: 'new ProcessStartInfo { ..., Arguments = $ARGS, ..., FileName = $SHC, ... }'
+                      - pattern-inside: 'new ProcessStartInfo($SHC) { ..., Arguments = $ARGS, ... }'
+          - metavariable-regex:
+              metavariable: $SH
+              regex: ^(?:[\w./\\:-]*[/\\])?(?:(?:ba|da|z|k|fi|c|tc)?sh|cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?)$
+          - metavariable-regex:
+              metavariable: $ARGS
+              regex: (?s)^(?:\$@?|@\$?)?(?:"{3,}|")\s*(?:-[a-zA-Z]*c[a-zA-Z]*|/[cCkK]|-(?i:command)|-(?i:noprofile)\s+-(?i:command))(?=[\s"\\{]|$)
+          - pattern: $ARGS
+      # ... or an argument list whose program is a shell or interpreter and whose next
+      # element after the inline-code flag is the code: Process.Start("bash", ["-c", cmd]),
+      # new ProcessStartInfo("python3", new[] { "-c", code }), or ArgumentList.Add("-c") then
+      # ArgumentList.Add(cmd).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: 'Process.Start("$BIN", [..., "$FLAG", $CODE, ...])'
+              - pattern-inside: 'Process.Start("$BIN", new[] { ..., "$FLAG", $CODE, ... })'
+              - pattern-inside: 'Process.Start("$BIN", new string[] { ..., "$FLAG", $CODE, ... })'
+              - pattern-inside: 'Process.Start("$BIN", new List<string> { ..., "$FLAG", $CODE, ... })'
+              - pattern-inside: 'new ProcessStartInfo("$BIN", [..., "$FLAG", $CODE, ...])'
+              - pattern-inside: 'new ProcessStartInfo("$BIN", new[] { ..., "$FLAG", $CODE, ... })'
+              - pattern-inside: 'new ProcessStartInfo("$BIN", new string[] { ..., "$FLAG", $CODE, ... })'
+              - pattern-inside: 'new ProcessStartInfo("$BIN", new List<string> { ..., "$FLAG", $CODE, ... })'
+              - pattern-inside: |
+                  $PT $PSI = new ProcessStartInfo("$BIN", ...);
+                  ...
+                  $PSI.ArgumentList.Add("$FLAG");
+                  $PSI.ArgumentList.Add($CODE);
+              - pattern-inside: |
+                  $PT $PSI = new ProcessStartInfo("$BIN", ...) { ... };
+                  ...
+                  $PSI.ArgumentList.Add("$FLAG");
+                  $PSI.ArgumentList.Add($CODE);
+              - pattern-inside: |
+                  $PT $PSI = new ProcessStartInfo { ..., FileName = "$BIN", ... };
+                  ...
+                  $PSI.ArgumentList.Add("$FLAG");
+                  $PSI.ArgumentList.Add($CODE);
+              - pattern-inside: |
+                  var $PSI = new ProcessStartInfo("$BIN", ...);
+                  ...
+                  $PSI.ArgumentList.Add("$FLAG");
+                  $PSI.ArgumentList.Add($CODE);
+              - pattern-inside: |
+                  var $PSI = new ProcessStartInfo("$BIN", ...) { ... };
+                  ...
+                  $PSI.ArgumentList.Add("$FLAG");
+                  $PSI.ArgumentList.Add($CODE);
+              - pattern-inside: |
+                  var $PSI = new ProcessStartInfo { ..., FileName = "$BIN", ... };
+                  ...
+                  $PSI.ArgumentList.Add("$FLAG");
+                  $PSI.ArgumentList.Add($CODE);
+          - metavariable-comparison:
+              comparison: >-
+                (re.match("^(?:[a-zA-Z0-9_./:-]*/)?(?:(?:ba|da|z|k|fi|c|tc)?sh|cmd|powershell|pwsh)(?:[.]exe)?$", str($BIN)) and re.match("^(?:-[a-zA-Z]*c[a-zA-Z]*|/[cCkK]|-[Cc]ommand)$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./:-]*/)?(?:python[0-9.]*|py)(?:[.]exe)?$", str($BIN)) and str($FLAG) == "-c")
+                or (re.match("^(?:[a-zA-Z0-9_./:-]*/)?(?:node|nodejs|bun|tsx|ts-node)(?:[.]exe)?$", str($BIN)) and re.match("^(?:-e|--eval|-p|--print|-pe)$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./:-]*/)?deno(?:[.]exe)?$", str($BIN)) and str($FLAG) == "eval")
+                or (re.match("^(?:[a-zA-Z0-9_./:-]*/)?(?:ruby|perl)(?:[.]exe)?$", str($BIN)) and re.match("^-[eE]$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./:-]*/)?php(?:[.]exe)?$", str($BIN)) and str($FLAG) == "-r")
+          - pattern: $CODE
+      # An interpreter given inline code as an argument string: Process.Start("python3",
+      # $"-c \"{code}\""), node -e, deno eval, ruby / perl -e, php -r. One sink per
+      # interpreter, so each is paired with its own inline-code flag (`node -c` only checks
+      # syntax).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: Process.Start("$BIN", $ARGS)
+              - pattern-inside: new ProcessStartInfo("$BIN", $ARGS)
+              - pattern-inside: 'new ProcessStartInfo { ..., FileName = "$BIN", ..., Arguments = $ARGS, ... }'
+              - pattern-inside: 'new ProcessStartInfo("$BIN") { ..., Arguments = $ARGS, ... }'
+          - metavariable-regex:
+              metavariable: $BIN
+              regex: ^(?:[\w./\\:-]*[/\\])?(?:python[0-9.]*|py)(?:\.exe)?$
+          - metavariable-regex:
+              metavariable: $ARGS
+              regex: (?s)^(?:\$@?|@\$?)?(?:"{3,}|")\s*-c(?=[\s"\\{]|$)
+          - pattern: $ARGS
+      - patterns:
+          - pattern-either:
+              - pattern-inside: Process.Start("$BIN", $ARGS)
+              - pattern-inside: new ProcessStartInfo("$BIN", $ARGS)
+              - pattern-inside: 'new ProcessStartInfo { ..., FileName = "$BIN", ..., Arguments = $ARGS, ... }'
+              - pattern-inside: 'new ProcessStartInfo("$BIN") { ..., Arguments = $ARGS, ... }'
+          - metavariable-regex:
+              metavariable: $BIN
+              regex: ^(?:[\w./\\:-]*[/\\])?(?:node|nodejs|bun|tsx|ts-node)(?:\.exe)?$
+          - metavariable-regex:
+              metavariable: $ARGS
+              regex: (?s)^(?:\$@?|@\$?)?(?:"{3,}|")\s*(?:-e|--eval|-p|--print|-pe)(?=[\s"\\{]|$)
+          - pattern: $ARGS
+      - patterns:
+          - pattern-either:
+              - pattern-inside: Process.Start("$BIN", $ARGS)
+              - pattern-inside: new ProcessStartInfo("$BIN", $ARGS)
+              - pattern-inside: 'new ProcessStartInfo { ..., FileName = "$BIN", ..., Arguments = $ARGS, ... }'
+              - pattern-inside: 'new ProcessStartInfo("$BIN") { ..., Arguments = $ARGS, ... }'
+          - metavariable-regex:
+              metavariable: $BIN
+              regex: ^(?:[\w./\\:-]*[/\\])?deno(?:\.exe)?$
+          - metavariable-regex:
+              metavariable: $ARGS
+              regex: (?s)^(?:\$@?|@\$?)?(?:"{3,}|")\s*eval(?=[\s"\\{]|$)
+          - pattern: $ARGS
+      - patterns:
+          - pattern-either:
+              - pattern-inside: Process.Start("$BIN", $ARGS)
+              - pattern-inside: new ProcessStartInfo("$BIN", $ARGS)
+              - pattern-inside: 'new ProcessStartInfo { ..., FileName = "$BIN", ..., Arguments = $ARGS, ... }'
+              - pattern-inside: 'new ProcessStartInfo("$BIN") { ..., Arguments = $ARGS, ... }'
+          - metavariable-regex:
+              metavariable: $BIN
+              regex: ^(?:[\w./\\:-]*[/\\])?(?:ruby|perl)(?:\.exe)?$
+          - metavariable-regex:
+              metavariable: $ARGS
+              regex: (?s)^(?:\$@?|@\$?)?(?:"{3,}|")\s*-[eE](?=[\s"\\{]|$)
+          - pattern: $ARGS
+      - patterns:
+          - pattern-either:
+              - pattern-inside: Process.Start("$BIN", $ARGS)
+              - pattern-inside: new ProcessStartInfo("$BIN", $ARGS)
+              - pattern-inside: 'new ProcessStartInfo { ..., FileName = "$BIN", ..., Arguments = $ARGS, ... }'
+              - pattern-inside: 'new ProcessStartInfo("$BIN") { ..., Arguments = $ARGS, ... }'
+          - metavariable-regex:
+              metavariable: $BIN
+              regex: ^(?:[\w./\\:-]*[/\\])?php(?:\.exe)?$
+          - metavariable-regex:
+              metavariable: $ARGS
+              regex: (?s)^(?:\$@?|@\$?)?(?:"{3,}|")\s*-r(?=[\s"\\{]|$)
+          - pattern: $ARGS
+      # Code written to a file and then run in the same method: File.WriteAllText(path, code),
+      # then Process.Start("python3", path) or a ProcessStartInfo for an interpreter or shell
+      # that names the file. Only the written contents count.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  File.$WRITE($PATH, $CODE, ...);
+                  ...
+                  Process.Start("$BIN", <... $PATH ...>);
+              - pattern-inside: |
+                  await File.$WRITE($PATH, $CODE, ...);
+                  ...
+                  Process.Start("$BIN", <... $PATH ...>);
+              - pattern-inside: |
+                  File.$WRITE($PATH, $CODE, ...);
+                  ...
+                  new ProcessStartInfo("$BIN", <... $PATH ...>);
+              - pattern-inside: |
+                  await File.$WRITE($PATH, $CODE, ...);
+                  ...
+                  new ProcessStartInfo("$BIN", <... $PATH ...>);
+          - metavariable-regex:
+              metavariable: $WRITE
+              regex: ^(?:WriteAllText|WriteAllTextAsync|WriteAllLines|WriteAllLinesAsync|AppendAllText|AppendAllTextAsync)$
+          - metavariable-regex:
+              metavariable: $BIN
+              regex: ^(?:[\w./\\:-]*[/\\])?(?:(?:python[0-9.]*|py|node|nodejs|bun|tsx|ts-node|deno|ruby|perl|php|dotnet)|(?:ba|da|z|k|fi|c|tc)?sh|pwsh|powershell|cmd)(?:\.exe)?$
+          - pattern-inside: File.$WRITE($PATH, $CODE, ...)
+          - pattern: $CODE
+      # In-process code: Roslyn scripting (Microsoft.CodeAnalysis.CSharp.Scripting 5.9.0:
+      # CSharpScript.EvaluateAsync / RunAsync / Create, ScriptState.ContinueWithAsync,
+      # Script.ContinueWith), and PowerShell (System.Management.Automation 7.6.8:
+      # PowerShell.AddScript, Pipeline.Commands.AddScript, Runspace.CreatePipeline,
+      # InvokeCommand.InvokeScript, ScriptBlock.Create). Only the code argument: globals and
+      # parameters are data.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: CSharpScript.$RUN($CODE, ...)
+              - pattern-inside: CSharpScript.$RUN<$T>($CODE, ...)
+          - metavariable-regex:
+              metavariable: $RUN
+              regex: ^(?:EvaluateAsync|RunAsync|Create)$
+          - pattern: $CODE
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $STATE.ContinueWithAsync($CODE, ...)
+              - pattern-inside: $STATE.ContinueWithAsync<$T>($CODE, ...)
+              - pattern-inside: $STATE.ContinueWith($CODE, ...)
+              - pattern-inside: $STATE.ContinueWith<$T>($CODE, ...)
+          - pattern: $CODE
+          - pattern-not: ($A) => $B
+          - pattern-not-regex: '\A(?:(?![ \t]*+(?:global[ \t]++)?using[ \t]++Microsoft\.CodeAnalysis\.(?:CSharp\.)?Scripting\b)[^\n]*+\n)*+(?![ \t]*+(?:global[ \t]++)?using[ \t]++Microsoft\.CodeAnalysis\.(?:CSharp\.)?Scripting\b)[^\n]*+\z'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $PS.AddScript($CODE, ...)
+              - pattern-inside: $RS.CreatePipeline($CODE, ...)
+              - pattern-inside: $CMDS.InvokeScript($CODE, ...)
+              - pattern-inside: ScriptBlock.Create($CODE)
+          - pattern: $CODE
+          - pattern-not-regex: '\A(?:(?![ \t]*+(?:global[ \t]++)?using[ \t]++System\.Management\.Automation\b)[^\n]*+\n)*+(?![ \t]*+(?:global[ \t]++)?using[ \t]++System\.Management\.Automation\b)[^\n]*+\z'
+      # JavaScript engines hosted in the process. Jint (4.17.0: Engine.Execute / Evaluate /
+      # ExecuteAsync / EvaluateAsync take the code first; Engine.Modules.Add(specifier, code)
+      # registers a module that Modules.Import runs). A script prepared with
+      # Engine.PrepareScript(code) carries the taint into Execute(prepared).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: (Engine $ENGINE).$RUN($CODE, ...)
+              - pattern-inside: (Jint.Engine $ENGINE).$RUN($CODE, ...)
+              - pattern-inside: new Engine(...).$RUN($CODE, ...)
+              - pattern-inside: new Engine(...). ... .$RUN($CODE, ...)
+              - patterns:
+                  - pattern-inside: $ENGINE.$RUN($CODE, ...)
+                  - metavariable-regex:
+                      metavariable: $ENGINE
+                      regex: (?i)^(?:this\.)?_?\w*(?:engine|js|interpreter)$
+                  - pattern-not-regex: '\A(?:(?![ \t]*+(?:global[ \t]++)?using[ \t]++Jint\b)[^\n]*+\n)*+(?![ \t]*+(?:global[ \t]++)?using[ \t]++Jint\b)[^\n]*+\z'
+                  # ClearScript engines take the code last.
+                  - pattern-not-inside: (V8ScriptEngine $V8).$RUN(...)
+                  - pattern-not-inside: (JScriptEngine $V8).$RUN(...)
+                  - pattern-not-inside: (ScriptEngine $V8).$RUN(...)
+                  - pattern-not-inside: (IScriptEngine $V8).$RUN(...)
+          - metavariable-regex:
+              metavariable: $RUN
+              regex: ^(?:Execute|Evaluate)(?:Async)?$
+          - pattern: $CODE
+      - patterns:
+          - pattern-either:
+              - pattern-inside: (Engine $ENGINE).Modules.Add($SPEC, $CODE)
+              - pattern-inside: (Jint.Engine $ENGINE).Modules.Add($SPEC, $CODE)
+          - pattern: $CODE
+      # ClearScript (Microsoft.ClearScript 7.5.1.1: ScriptEngine.Execute / Evaluate take the code
+      # last, after an optional document name or DocumentInfo; ExecuteCommand(command)). Covers
+      # V8ScriptEngine and the Windows JScriptEngine / VBScriptEngine. A V8Script compiled from
+      # model text carries the taint into Execute(script).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: ($CSTYPE $ENGINE).$RUN(..., $CODE)
+              - pattern-inside: new $CSTYPE(...).$RUN(..., $CODE)
+          - metavariable-regex:
+              metavariable: $CSTYPE
+              regex: ^(?:Microsoft\.ClearScript\.(?:V8\.|Windows\.(?:Core\.)?)?)?(?:V8ScriptEngine|JScriptEngine|VBScriptEngine|ScriptEngine|IScriptEngine)$
+          - metavariable-regex:
+              metavariable: $RUN
+              regex: ^(?:Execute|Evaluate|ExecuteCommand)$
+          - pattern: $CODE
+      - patterns:
+          - pattern-inside: $ENGINE.$RUN(..., $CODE)
+          - metavariable-regex:
+              metavariable: $ENGINE
+              regex: (?i)^(?:this\.)?_?\w*(?:engine|v8|js|script)$
+          - metavariable-regex:
+              metavariable: $RUN
+              regex: ^(?:Execute|Evaluate|ExecuteCommand)$
+          - pattern: $CODE
+          # A Jint engine in the same file takes the code first, not last.
+          - pattern-not-inside: (Engine $JINT).$RUN(...)
+          - pattern-not-inside: (Jint.Engine $JINT).$RUN(...)
+          - pattern-not-regex: '\A(?:(?![ \t]*+(?:global[ \t]++)?using[ \t]++Microsoft\.ClearScript\b)[^\n]*+\n)*+(?![ \t]*+(?:global[ \t]++)?using[ \t]++Microsoft\.ClearScript\b)[^\n]*+\z'
+      # Roslyn compile-and-load: model text parsed as a syntax tree in a method that also emits
+      # the compilation (CSharpCompilation.Emit, then Assembly.Load or an AssemblyLoadContext).
+      - patterns:
+          - pattern-inside: |
+              $RT $METHOD(...) {
+                ...
+                $COMP.Emit(...);
+                ...
+              }
+          - pattern-inside: CSharpSyntaxTree.ParseText($CODE, ...)
+          - pattern: $CODE
+    pattern-sanitizers:
+      # Values that can't carry text: numbers, booleans, GUIDs, dates, and enums parsed from the
+      # string (int.Parse(x), Guid.Parse(x), Enum.Parse<Tone>(x), Convert.ToInt32(x)), and LINQ
+      # counts and checks. The out
+      # value of TryParse is not tainted to begin with.
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $NUM.Parse(...)
+              - pattern: $NUM.ParseExact(...)
+          - metavariable-regex:
+              metavariable: $NUM
+              regex: ^(?:System\.)?(?:int|long|short|byte|uint|ulong|ushort|sbyte|double|float|decimal|bool|Int16|Int32|Int64|UInt16|UInt32|UInt64|Byte|SByte|Double|Single|Decimal|Boolean|Guid|DateTime|DateTimeOffset|DateOnly|TimeOnly|TimeSpan)$
+      - exact: true
+        pattern-either:
+          - pattern: Enum.Parse<$E>(...)
+          - pattern: Enum.Parse(...)
+      - exact: true
+        patterns:
+          - pattern: Convert.$TO(...)
+          - metavariable-regex:
+              metavariable: $TO
+              regex: ^To(?:Int16|Int32|Int64|UInt16|UInt32|UInt64|Byte|SByte|Double|Single|Decimal|Boolean|DateTime)$
+      # LINQ aggregates that return a number or a bool (replies.Count(r => ...), items.Any()).
+      - exact: true
+        patterns:
+          - pattern: $SEQ.$AGG(...)
+          - metavariable-regex:
+              metavariable: $AGG
+              regex: ^(?:Count|LongCount|Any|All|Sum|Average)$
+      # An allowlist lookup in a table held in a field or static member (`Personas[choice]`,
+      # `PromptLibrary.Personas[choice]`, `_commands.GetValueOrDefault(key)`); request
+      # collections (`Request.Query[...]`, `HttpContext.Items[...]`) don't count.
+      - patterns:
+          - pattern-either:
+              - pattern: $TABLE[$KEY]
+              - pattern: $TABLE.GetValueOrDefault($KEY, ...)
+          - metavariable-regex:
+              metavariable: $TABLE
+              regex: ^(?!(?:\w+\.)*(?:Request|HttpContext)\b)(?!.*\.(?:Query|Form|Headers|Cookies|RouteValues|Items|Session)$)(?:this\.|(?:[A-Z]\w*\.)+)?(?:[A-Z][A-Za-z0-9_]*|_[A-Za-z]\w*|s_\w+)$
+      # A check against such a set before use (`if (!AllowedTeams.Contains(team)) return ...;`,
+      # or use inside `if (Personas.ContainsKey(p)) { ... }`). OpenGrep 1.30.2 ignores
+      # by-side-effect sanitizers in C#, so the checked value is cleared in the code after the
+      # check instead.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$SET.$HAS($X)) return ...;
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($X)) return;
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($X)) throw ...;
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($X)) { ... }
+                  ...
+              - pattern-inside: |
+                  if ($SET.$HAS($X)) { ... }
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(?:Contains|ContainsKey)$
+          - metavariable-regex:
+              metavariable: $SET
+              regex: ^(?!(?:\w+\.)*(?:Request|HttpContext)\b)(?!.*\.(?:Query|Form|Headers|Cookies|RouteValues|Items|Session)$)(?:this\.|(?:[A-Z]\w*\.)+)?(?:[A-Z][A-Za-z0-9_]*|_[A-Za-z]\w*|s_\w+)$
+          - pattern: $X
+      # ... and against an anchored pattern (`Regex.IsMatch(x, "^[a-z-]+$")`, or a Regex field
+      # or [GeneratedRegex] method: `SlugRegex().IsMatch(x)`).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$RX.IsMatch($X)) return ...;
+                  ...
+              - pattern-inside: |
+                  if (!$RX.IsMatch($X)) throw ...;
+                  ...
+              - pattern-inside: |
+                  if (!$RX.IsMatch($X)) { ... }
+                  ...
+              - pattern-inside: |
+                  if ($RX.IsMatch($X)) { ... }
+          - metavariable-regex:
+              metavariable: $RX
+              regex: ^(?:this\.)?(?:_?\w*(?:Regex|Pattern|Re)|\w+\(\))$
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!Regex.IsMatch($X, "$RE", ...)) return ...;
+                  ...
+              - pattern-inside: |
+                  if (!Regex.IsMatch($X, "$RE", ...)) throw ...;
+                  ...
+              - pattern-inside: |
+                  if (!Regex.IsMatch($X, "$RE", ...)) { ... }
+                  ...
+              - pattern-inside: |
+                  if (Regex.IsMatch($X, "$RE", ...)) { ... }
+          - metavariable-regex:
+              metavariable: $RE
+              regex: (?s)^\^.*(?:\$|\\z)$
+          - pattern: $X
+      # Response metadata that can't carry the model's text: token usage, finish reasons, model
+      # IDs, and roles (`response.Usage`, `result.Metadata`, `reply.Role`).
+      - patterns:
+          - pattern: $OBJ.$META
+          - metavariable-regex:
+              metavariable: $META
+              regex: ^(?:Metadata|Usage|FinishReason|ModelId|Role|AuthorName|ResponseId|CreatedAt)$
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C7.1.1 - Output Format Enforcement"
+      mitre-atlas:
+        - "AML.T0051 - LLM Prompt Injection"
+        - "AML.T0050 - Command and Scripting Interpreter"
+      cwe:
+        - "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [semantic-kernel, microsoft-extensions-ai, agent-framework, openai, dotnet, roslyn, powershell, jint, clearscript]
+      # API shapes checked 2026-10-25 against source at release tags: semantic-kernel
+      # dotnet-1.81.0 (IChatCompletionService, ITextGenerationService, Kernel.InvokePromptAsync,
+      # KernelFunction.InvokeAsync, agent InvokeAsync), dotnet/extensions v10.11.0
+      # (IChatClient.GetResponseAsync, ChatResponse.Text, ChatResponse<T>.Result),
+      # agent-framework dotnet-1.26.0 (AIAgent.RunAsync, AgentResponse.Text), openai-dotnet
+      # OpenAI_2.14.0 (ChatClient.CompleteChat*, ResponsesClient.CreateResponse*; OpenAIResponseClient
+      # before OpenAI_2.8.0), and .NET 10 System.Diagnostics.Process / ProcessStartInfo
+      # (ArgumentList, the IEnumerable<string> Process.Start overload). Jint 4.17.0 and ClearScript
+      # 7.5.1.1 checked at their release tags the same day. Deliberately not sinks: arguments
+      # after a fixed program (argument injection), and reflection (Type.GetType /
+      # Activator.CreateInstance), which picks among types that already exist.
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md
+        - https://cwe.mitre.org/data/definitions/94.html
+        - https://github.com/microsoft/semantic-kernel/blob/dotnet-1.81.0/dotnet/src/SemanticKernel.Abstractions/AI/ChatCompletion/IChatCompletionService.cs
+        - https://github.com/dotnet/extensions/blob/v10.11.0/src/Libraries/Microsoft.Extensions.AI.Abstractions/ChatCompletion/IChatClient.cs
+        - https://github.com/openai/openai-dotnet/blob/OpenAI_2.14.0/OpenAI/src/Custom/Chat/ChatClient.cs
+        - https://learn.microsoft.com/dotnet/api/system.diagnostics.processstartinfo
+        - https://github.com/dotnet/roslyn/blob/main/docs/wiki/Scripting-API-Samples.md
+        - https://github.com/sebastienros/jint/blob/v4.17.0/Jint/Engine.cs
+        - https://github.com/microsoft/ClearScript/blob/7.5.1.1/ClearScript/ScriptEngine.cs

@@ -1,0 +1,90 @@
+{
+  // Every tunnel host has a first label longer than DNS allows; every IP is a documentation
+  // address.
+  "folders": [{ "path": "." }],
+  "settings": {
+    // ok: mcp-config-ephemeral-remote-host-workspace
+    "http.proxy": "http://proxy.example.com:3128",
+    "mcp": {
+      "inputs": [
+        {
+          "type": "promptString",
+          "id": "preview-url",
+          "description": "Preview server URL",
+          // ruleid: mcp-config-ephemeral-remote-host-workspace
+          "default": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.ngrok-free.app/mcp"
+        },
+        {
+          "type": "promptString",
+          "id": "docs-url",
+          // ok: mcp-config-ephemeral-remote-host-workspace
+          "default": "https://mcp.example.com/mcp"
+        }
+      ],
+      "servers": {
+        "productivity": {
+          "type": "http",
+          // ruleid: mcp-config-ephemeral-remote-host-workspace
+          "url": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.trycloudflare.com/mcp"
+        },
+        "status": {
+          "type": "sse",
+          // ruleid: mcp-config-ephemeral-remote-host-workspace
+          "url": "http://status.example.com/sse"
+        },
+        "bridge": {
+          "command": "npx",
+          // ruleid: mcp-config-ephemeral-remote-host-workspace
+          "args": ["-y", "mcp-remote@0.1.29", "http://kb.example.net/mcp", "--allow-http"]
+        },
+        "proxy": {
+          "command": "mcp-proxy",
+          "args": [
+            // ruleid: mcp-config-ephemeral-remote-host-workspace
+            "http://198.51.100.7:8080/sse"
+          ]
+        },
+        "wiki": {
+          "command": "uvx",
+          "args": ["example-org-wiki-mcp==1.0.0"],
+          "env": {
+            // ruleid: mcp-config-ephemeral-remote-host-workspace
+            "WIKI_API_URL": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.loca.lt/api",
+            // ok: mcp-config-ephemeral-remote-host-workspace
+            "WIKI_PROXY": "http://proxy.example.com:3128"
+          }
+        },
+        "vendor": {
+          "type": "http",
+          // ok: mcp-config-ephemeral-remote-host-workspace
+          "url": "https://mcp.example.com/mcp"
+        },
+        "local": {
+          "type": "http",
+          // ok: mcp-config-ephemeral-remote-host-workspace
+          "url": "http://localhost:8787/mcp"
+        },
+        "preview": {
+          "type": "http",
+          "url": "${input:preview-url}"
+        },
+        "wiki": {
+          // A commented-out bridge doesn't make the live command one.
+          // "command": "npx", "args": ["-y", "mcp-remote@0.1.29", "https://wiki.example.com/mcp"],
+          "command": "node",
+          // ok: mcp-config-ephemeral-remote-host-workspace
+          "args": ["./tools/wiki-server.js", "--upstream", "http://wiki.example.com/api"]
+        }
+        // ok: mcp-config-ephemeral-remote-host-workspace
+        // "old": { "type": "http", "url": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.trycloudflare.com/mcp" }
+      }
+    }
+  },
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      // ok: mcp-config-ephemeral-remote-host-workspace
+      { "name": "docs", "type": "chrome", "request": "launch", "url": "http://docs.example.com" }
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "telemetry": {
+    "enabled": true,
+    // ok: agent-settings-endpoint-override
+    "otlpEndpoint": "http://localhost:4317",
+    "logPrompts": false
+  },
+  "advanced": {
+    // ok: agent-settings-endpoint-override
+    "otlpEndpoint": "https://otel-collector.example.com:4317"
+  }
+}

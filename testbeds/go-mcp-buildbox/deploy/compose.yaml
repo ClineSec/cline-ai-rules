@@ -1,0 +1,51 @@
+# The build-host layout: the HTTP server for agents on the runner network, Postgres for build
+# history, and host metrics for the build dashboard.
+#   docker compose -f deploy/compose.yaml up -d
+name: buildbox
+
+services:
+  buildbox-http:
+    image: ghcr.io/example-org/buildbox-mcp:1.8.0
+    command: ["buildbox-http"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8931:8931"
+    environment:
+      BUILDBOX_DATABASE_URL: postgres://buildbox@db:5432/history
+      BUILDBOX_SHELL: /bin/bash
+    depends_on:
+      - db
+    volumes:
+      - /srv/buildbox/repo:/srv/buildbox/repo
+      # disk_usage measures the runner's work and cache folders, which move between hosts,
+      # so the whole host filesystem is mounted read-only under /host.
+      - type: bind
+        source: /
+        target: /host
+        read_only: true
+        bind:
+          propagation: rslave
+      - buildbox-logs:/var/log/buildbox
+
+  db:
+    image: postgres:17.6
+    environment:
+      POSTGRES_USER: buildbox
+      POSTGRES_DB: history
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      POSTGRES_PASSWORD_FILE: /run/secrets/buildbox-db
+    volumes:
+      - buildbox-db:/var/lib/postgresql/data
+
+  host-metrics:
+    image: prom/node-exporter:v1.9.1
+    container_name: buildbox-mcp-host-metrics
+    command: ["--path.rootfs=/host"]
+    pid: host
+    restart: unless-stopped
+    volumes:
+      - "/:/host:ro,rslave"
+
+volumes:
+  buildbox-db:
+  buildbox-logs:

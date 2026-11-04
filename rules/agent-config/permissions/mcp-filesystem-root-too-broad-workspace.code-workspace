@@ -1,0 +1,52 @@
+{
+  "folders": [{ "path": "." }],
+  "settings": {
+    // ok: mcp-filesystem-root-too-broad-workspace
+    "files.exclude": { "/": false },
+    "mcp": {
+      "servers": {
+        "home": {
+          "command": "npx",
+          // ruleid: mcp-filesystem-root-too-broad-workspace
+          "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${userHome}"]
+        },
+        "multiline": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-filesystem@2.0.0",
+            // ok: mcp-filesystem-root-too-broad-workspace
+            // "/",
+            "${workspaceFolder}",
+            // ruleid: mcp-filesystem-root-too-broad-workspace
+            "${env:HOME}/",
+          ]
+        },
+        "docker": {
+          "command": "docker",
+          "args": [
+            "run", "-i", "--rm",
+            // ruleid: mcp-filesystem-root-too-broad-workspace
+            "--mount", "type=bind,src=C:\\,dst=/projects/c",
+            "mcp/filesystem:1.0.2", "/projects"
+          ]
+        },
+        "shell": {
+          "command": "pwsh",
+          // ruleid: mcp-filesystem-root-too-broad-workspace
+          "args": ["-Command", "npx -y @modelcontextprotocol/server-filesystem@2.0.0 $env:USERPROFILE"]
+        },
+        "unexpanded": {
+          "command": "npx",
+          // ok: mcp-filesystem-root-too-broad-workspace
+          "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${HOME}", "$HOME"]
+        },
+        "project": {
+          "command": "npx",
+          // ok: mcp-filesystem-root-too-broad-workspace
+          "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${workspaceFolder}"]
+        }
+      }
+    }
+  }
+}

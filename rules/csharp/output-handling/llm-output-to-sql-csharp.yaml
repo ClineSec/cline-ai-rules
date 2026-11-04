@@ -1,0 +1,369 @@
+rules:
+  - id: llm-output-to-sql-csharp
+    # The pattern-sources, pattern-propagators, and the first 9 pattern-sanitizers are shared with
+    # llm-output-to-code-execution-csharp and llm-output-to-html-csharp (build.py SHARED_BLOCKS
+    # "model-output sources (C#)", "lambda propagators (C#)", "value sanitizers (C#)",
+    # "model-output metadata sanitizer (C#)"): edit them together.
+    languages: [csharp]
+    severity: ERROR
+    message: >-
+      Model output is run as SQL. Treat completions as untrusted input: anyone who can influence
+      the prompt, directly or through a document, web page, or tool result the model reads, can
+      make it write a statement that reads other tenants' rows, changes data, or drops tables.
+      Have the model fill a constrained structure instead (a metric and filter chosen from an
+      enum) and build the query yourself with parameters (`@p` placeholders, Dapper's anonymous
+      parameter objects, EF Core's `FromSql($"...")`, which turns interpolation holes into
+      parameters); map identifiers through an allowlist. If free-form SQL is the feature, run it
+      on a read-only connection limited to the views it may see.
+    mode: taint
+    pattern-sources:
+      # Semantic Kernel (Microsoft.SemanticKernel 1.81.0): chat and text completion services and
+      # prompts run on the kernel, and everything read back from them (ChatMessageContent
+      # .Content and .Items, FunctionResult.GetValue<string>(), streaming chunks).
+      - pattern-either:
+          - pattern: $SVC.GetChatMessageContentAsync(...)
+          - pattern: $SVC.GetChatMessageContentsAsync(...)
+          - pattern: $SVC.GetStreamingChatMessageContentsAsync(...)
+          - pattern: $SVC.GetTextContentAsync(...)
+          - pattern: $SVC.GetTextContentsAsync(...)
+          - pattern: $SVC.GetStreamingTextContentsAsync(...)
+          - pattern: $SVC.InvokePromptAsync(...)
+          - pattern: $SVC.InvokePromptAsync<$T>(...)
+          - pattern: $SVC.InvokePromptStreamingAsync(...)
+          - pattern: $SVC.InvokePromptStreamingAsync<$T>(...)
+      # A prompt function created in this file (CreateFunctionFromPrompt,
+      # KernelFunctionFactory.CreateFromPrompt, KernelFunctionYaml.FromPromptYaml), held in a
+      # local or a field and invoked directly or through kernel.InvokeAsync. Native plugin
+      # functions are not sources.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $FT $FN = <... $KF.$CREATE(...) ...>;
+                  ...
+              - pattern-inside: |
+                  var $FN = <... $KF.$CREATE(...) ...>;
+                  ...
+              - pattern-inside: |
+                  $FN = <... $KF.$CREATE(...) ...>;
+                  ...
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    $FT $FN = <... $KF.$CREATE(...) ...>;
+                    ...
+                  }
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    $CTOR(...) {
+                      ...
+                      $FN = <... $KF.$CREATE(...) ...>;
+                      ...
+                    }
+                    ...
+                  }
+          - metavariable-regex:
+              metavariable: $CREATE
+              regex: ^(?:CreateFunctionFromPrompt\w*|CreateFromPrompt\w*|FromPromptYaml)$
+          - pattern-either:
+              - pattern: $FN.InvokeAsync(...)
+              - pattern: $FN.InvokeAsync<$T>(...)
+              - pattern: $FN.InvokeStreamingAsync(...)
+              - pattern: $K.InvokeAsync($FN, ...)
+              - pattern: $K.InvokeAsync<$T>($FN, ...)
+              - pattern: $K.InvokeStreamingAsync($FN, ...)
+      # Agents: Semantic Kernel agents and group chats (Microsoft.SemanticKernel.Agents.* 1.81.0)
+      # and Microsoft Agent Framework agents (Microsoft.Agents.AI 1.26.0), typed in this file,
+      # or named like an agent in a file that imports either framework.
+      - patterns:
+          - pattern-either:
+              - pattern: $AG.InvokeAsync(...)
+              - pattern: $AG.InvokeStreamingAsync(...)
+              - pattern: $AG.RunAsync(...)
+              - pattern: $AG.RunAsync<$T>(...)
+              - pattern: $AG.RunStreamingAsync(...)
+          - metavariable-type:
+              metavariable: $AG
+              types: [Agent, KernelAgent, ChatHistoryAgent, ChatCompletionAgent, OpenAIAssistantAgent, OpenAIResponseAgent, AzureAIAgent, AgentGroupChat, AgentChat, BedrockAgent, CopilotStudioAgent, AIAgent, ChatClientAgent]
+      - patterns:
+          - pattern-either:
+              - pattern: $AG.InvokeAsync(...)
+              - pattern: $AG.InvokeStreamingAsync(...)
+              - pattern: $AG.RunAsync(...)
+              - pattern: $AG.RunAsync<$T>(...)
+              - pattern: $AG.RunStreamingAsync(...)
+          - metavariable-regex:
+              metavariable: $AG
+              regex: (?i)^(?:this\.)?_?\w*agent$
+          - pattern-not-regex: '\A(?:(?![ \t]*+(?:global[ \t]++)?using[ \t]++Microsoft\.(?:SemanticKernel\.Agents|Agents\.AI)\b)[^\n]*+\n)*+(?![ \t]*+(?:global[ \t]++)?using[ \t]++Microsoft\.(?:SemanticKernel\.Agents|Agents\.AI)\b)[^\n]*+\z'
+      # Microsoft.Extensions.AI (10.11.0) IChatClient: GetResponseAsync (ChatResponse.Text,
+      # ChatResponse<T>.Result) and GetStreamingResponseAsync, on a receiver typed as a chat
+      # client or in a file that imports Microsoft.Extensions.AI (System.Net's
+      # WebRequest.GetResponseAsync has the same name).
+      - patterns:
+          - pattern-either:
+              - pattern: $CC.GetResponseAsync(...)
+              - pattern: $CC.GetResponseAsync<$T>(...)
+              - pattern: $CC.GetStreamingResponseAsync(...)
+          - metavariable-type:
+              metavariable: $CC
+              types: [IChatClient, DelegatingChatClient]
+      - patterns:
+          - pattern-either:
+              - pattern: $CC.GetResponseAsync(...)
+              - pattern: $CC.GetResponseAsync<$T>(...)
+              - pattern: $CC.GetStreamingResponseAsync(...)
+          - pattern-not-regex: '\A(?:(?![ \t]*+(?:global[ \t]++)?using[ \t]++Microsoft\.Extensions\.AI\b)[^\n]*+\n)*+(?![ \t]*+(?:global[ \t]++)?using[ \t]++Microsoft\.Extensions\.AI\b)[^\n]*+\z'
+      # OpenAI .NET (OpenAI 2.14.0; Azure.AI.OpenAI hands out the same clients): chat
+      # completions (ChatCompletion.Content[0].Text) and the Responses API
+      # (ResponseResult.GetOutputText(); OpenAIResponseClient before 2.8.0).
+      - pattern-either:
+          - pattern: $OC.CompleteChatAsync(...)
+          - pattern: $OC.CompleteChat(...)
+          - pattern: $OC.CompleteChatStreamingAsync(...)
+          - pattern: $OC.CompleteChatStreaming(...)
+      - patterns:
+          - pattern-either:
+              - pattern: $RC.CreateResponseAsync(...)
+              - pattern: $RC.CreateResponse(...)
+              - pattern: $RC.CreateResponseStreamingAsync(...)
+              - pattern: $RC.CreateResponseStreaming(...)
+          - metavariable-type:
+              metavariable: $RC
+              types: [ResponsesClient, OpenAIResponseClient]
+      - patterns:
+          - pattern-either:
+              - pattern: $RC.CreateResponseAsync(...)
+              - pattern: $RC.CreateResponse(...)
+              - pattern: $RC.CreateResponseStreamingAsync(...)
+              - pattern: $RC.CreateResponseStreaming(...)
+          - pattern-not-regex: '\A(?:(?![ \t]*+(?:global[ \t]++)?using[ \t]++OpenAI\.Responses\b)[^\n]*+\n)*+(?![ \t]*+(?:global[ \t]++)?using[ \t]++OpenAI\.Responses\b)[^\n]*+\z'
+    pattern-propagators:
+      # In --taint-intrafile mode OpenGrep drops taint through a call that takes a lambda
+      # (messages.Where(m => ...).Select(m => m.Text)), so carry it from the receiver to the
+      # call's result, and into the parameter of a callback over a tainted collection or task
+      # (`replies.ToList().ForEach(r => ...)`, `task.ContinueWith(t => ...)`).
+      - patterns:
+          - pattern: $CALL
+          - pattern-either:
+              - pattern: $R.$M(..., ($P) => $B, ...)
+              - pattern: $R.$M(..., ($P, $Q) => $B, ...)
+        from: $R
+        to: $CALL
+      - patterns:
+          - pattern-inside: $R.$M(($P) => $B)
+          - pattern: $P
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(?:Select|SelectMany|Where|ForEach|ContinueWith|Aggregate|Any|All|First|FirstOrDefault|Last|LastOrDefault|Single|SingleOrDefault|OrderBy|OrderByDescending|ThenBy|GroupBy|ToDictionary|ToLookup|TakeWhile|SkipWhile)$
+        from: $R
+        to: $P
+    pattern-sinks:
+      # One sink for the execute calls, so a call that two branches cover is reported once.
+      # Only the statement text counts, never the bound parameters.
+      - patterns:
+          - pattern-either:
+              # ADO.NET (System.Data.Common, Microsoft.Data.SqlClient, Npgsql, MySqlConnector,
+              # Microsoft.Data.Sqlite, ...): command text given to a command or data adapter, set
+              # as CommandText, or passed to DbDataSource.CreateCommand(text).
+              - patterns:
+                  - pattern-either:
+                      - pattern: new $CMD($Q, ...)
+                      - pattern: 'new $CMD { ..., CommandText = $Q, ... }'
+                      - pattern: 'new $CMD(...) { ..., CommandText = $Q, ... }'
+                  - metavariable-regex:
+                      metavariable: $CMD
+                      regex: ^(?:[\w.]*\.)?(?:Sql|Npgsql|NpgsqlBatch|MySql|Sqlite|SQLite|Oracle|OleDb|Odbc|DB2|Fb|SnowflakeDb|DuckDB|ClickHouse|Db)(?:Command|DataAdapter)$
+              - pattern: $C.CommandText = $Q
+              - pattern: $DS.CreateCommand($Q)
+              # EF Core (10.0): the Raw methods take text as is (FromSql, ExecuteSql, and
+              # SqlQuery turn an interpolated string into parameters and are not sinks).
+              # ExecuteSqlCommand is EF Core 2.x / EF6.
+              - pattern: $DB.FromSqlRaw($Q, ...)
+              - pattern: $DB.ExecuteSqlRaw($Q, ...)
+              - pattern: $DB.ExecuteSqlRawAsync($Q, ...)
+              - pattern: $DB.SqlQueryRaw<$T>($Q, ...)
+              - pattern: $DB.ExecuteSqlCommand($Q, ...)
+              - pattern: $DB.ExecuteSqlCommandAsync($Q, ...)
+              # Dapper (2.1): the sql argument of the IDbConnection extensions and
+              # CommandDefinition, in a file that imports Dapper.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $CONN.$DAPPER($Q, ...)
+                      - pattern: '$CONN.$DAPPER(..., sql: $Q, ...)'
+                      - pattern: new CommandDefinition($Q, ...)
+                  - metavariable-regex:
+                      metavariable: $DAPPER
+                      regex: ^(?:Query|QueryAsync|QueryFirst|QueryFirstAsync|QueryFirstOrDefault|QueryFirstOrDefaultAsync|QuerySingle|QuerySingleAsync|QuerySingleOrDefault|QuerySingleOrDefaultAsync|QueryMultiple|QueryMultipleAsync|QueryUnbufferedAsync|Execute|ExecuteAsync|ExecuteScalar|ExecuteScalarAsync|ExecuteReader|ExecuteReaderAsync)(?:<.*>)?$
+                  - pattern-not-regex: '\A(?:(?![ \t]*+(?:global[ \t]++)?using[ \t]++Dapper\b)[^\n]*+\n)*+(?![ \t]*+(?:global[ \t]++)?using[ \t]++Dapper\b)[^\n]*+\z'
+          - focus-metavariable: $Q
+      # Entity Framework 6 (System.Data.Entity 6.5): Database.SqlQuery and DbSet.SqlQuery take
+      # raw text. EF Core's SqlQuery of the same name parameterizes, so only files that import
+      # System.Data.Entity count.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $DB.SqlQuery<$T>($Q, ...)
+              - pattern-inside: $DB.SqlQuery($Q, ...)
+          - pattern: $Q
+          - pattern-not-regex: '\A(?:(?![ \t]*+(?:global[ \t]++)?using[ \t]++System\.Data\.Entity\b)[^\n]*+\n)*+(?![ \t]*+(?:global[ \t]++)?using[ \t]++System\.Data\.Entity\b)[^\n]*+\z'
+      # SQL text built from model output (an interpolated string, a `+` concatenation, or
+      # string.Format whose text starts like an uppercase SQL statement) and handed to any call,
+      # such as the class's own run-query helper, so it is reported where it's built, in the
+      # default scan too. Logging, StringBuilder appends, and EF Core's parameterizing methods
+      # are skipped. Text assigned to a variable first is left to the sinks above.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $F(..., $Q, ...)
+              - pattern-inside: new $CLS(..., $Q, ...)
+          - pattern: $Q
+          - metavariable-regex:
+              metavariable: $Q
+              regex: (?s)^(?:string\.Format\(\s*|String\.Format\(\s*)?(?:\$@?|@\$?)?(?:"{3,}|")\s*(?:SELECT\b.*?\bFROM\b|WITH\s+\w+\s+AS\s*\(|INSERT\s+INTO\b|UPDATE\s+\w+\s+SET\b|DELETE\s+FROM\b)(?=.*?(?:"\s*\+|\+\s*"|(?<!\{)\{(?!\{)|\A[sS]tring\.Format\())
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(?!(?:[\w.]*\.)?(?:Log\w*|WriteLine|Write|Debug|Trace|Information|Warning|Error|Fatal|Verbose|Append\w*|Format|FromSql|FromSqlInterpolated|ExecuteSql|ExecuteSqlAsync|ExecuteSqlInterpolated|ExecuteSqlInterpolatedAsync|SqlQuery)$)
+    pattern-sanitizers:
+      # Values that can't carry text: numbers, booleans, GUIDs, dates, and enums parsed from the
+      # string (int.Parse(x), Guid.Parse(x), Enum.Parse<Tone>(x), Convert.ToInt32(x)), and LINQ
+      # counts and checks. The out
+      # value of TryParse is not tainted to begin with.
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $NUM.Parse(...)
+              - pattern: $NUM.ParseExact(...)
+          - metavariable-regex:
+              metavariable: $NUM
+              regex: ^(?:System\.)?(?:int|long|short|byte|uint|ulong|ushort|sbyte|double|float|decimal|bool|Int16|Int32|Int64|UInt16|UInt32|UInt64|Byte|SByte|Double|Single|Decimal|Boolean|Guid|DateTime|DateTimeOffset|DateOnly|TimeOnly|TimeSpan)$
+      - exact: true
+        pattern-either:
+          - pattern: Enum.Parse<$E>(...)
+          - pattern: Enum.Parse(...)
+      - exact: true
+        patterns:
+          - pattern: Convert.$TO(...)
+          - metavariable-regex:
+              metavariable: $TO
+              regex: ^To(?:Int16|Int32|Int64|UInt16|UInt32|UInt64|Byte|SByte|Double|Single|Decimal|Boolean|DateTime)$
+      # LINQ aggregates that return a number or a bool (replies.Count(r => ...), items.Any()).
+      - exact: true
+        patterns:
+          - pattern: $SEQ.$AGG(...)
+          - metavariable-regex:
+              metavariable: $AGG
+              regex: ^(?:Count|LongCount|Any|All|Sum|Average)$
+      # An allowlist lookup in a table held in a field or static member (`Personas[choice]`,
+      # `PromptLibrary.Personas[choice]`, `_commands.GetValueOrDefault(key)`); request
+      # collections (`Request.Query[...]`, `HttpContext.Items[...]`) don't count.
+      - patterns:
+          - pattern-either:
+              - pattern: $TABLE[$KEY]
+              - pattern: $TABLE.GetValueOrDefault($KEY, ...)
+          - metavariable-regex:
+              metavariable: $TABLE
+              regex: ^(?!(?:\w+\.)*(?:Request|HttpContext)\b)(?!.*\.(?:Query|Form|Headers|Cookies|RouteValues|Items|Session)$)(?:this\.|(?:[A-Z]\w*\.)+)?(?:[A-Z][A-Za-z0-9_]*|_[A-Za-z]\w*|s_\w+)$
+      # A check against such a set before use (`if (!AllowedTeams.Contains(team)) return ...;`,
+      # or use inside `if (Personas.ContainsKey(p)) { ... }`). OpenGrep 1.30.2 ignores
+      # by-side-effect sanitizers in C#, so the checked value is cleared in the code after the
+      # check instead.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$SET.$HAS($X)) return ...;
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($X)) return;
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($X)) throw ...;
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($X)) { ... }
+                  ...
+              - pattern-inside: |
+                  if ($SET.$HAS($X)) { ... }
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(?:Contains|ContainsKey)$
+          - metavariable-regex:
+              metavariable: $SET
+              regex: ^(?!(?:\w+\.)*(?:Request|HttpContext)\b)(?!.*\.(?:Query|Form|Headers|Cookies|RouteValues|Items|Session)$)(?:this\.|(?:[A-Z]\w*\.)+)?(?:[A-Z][A-Za-z0-9_]*|_[A-Za-z]\w*|s_\w+)$
+          - pattern: $X
+      # ... and against an anchored pattern (`Regex.IsMatch(x, "^[a-z-]+$")`, or a Regex field
+      # or [GeneratedRegex] method: `SlugRegex().IsMatch(x)`).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$RX.IsMatch($X)) return ...;
+                  ...
+              - pattern-inside: |
+                  if (!$RX.IsMatch($X)) throw ...;
+                  ...
+              - pattern-inside: |
+                  if (!$RX.IsMatch($X)) { ... }
+                  ...
+              - pattern-inside: |
+                  if ($RX.IsMatch($X)) { ... }
+          - metavariable-regex:
+              metavariable: $RX
+              regex: ^(?:this\.)?(?:_?\w*(?:Regex|Pattern|Re)|\w+\(\))$
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!Regex.IsMatch($X, "$RE", ...)) return ...;
+                  ...
+              - pattern-inside: |
+                  if (!Regex.IsMatch($X, "$RE", ...)) throw ...;
+                  ...
+              - pattern-inside: |
+                  if (!Regex.IsMatch($X, "$RE", ...)) { ... }
+                  ...
+              - pattern-inside: |
+                  if (Regex.IsMatch($X, "$RE", ...)) { ... }
+          - metavariable-regex:
+              metavariable: $RE
+              regex: (?s)^\^.*(?:\$|\\z)$
+          - pattern: $X
+      # Response metadata that can't carry the model's text: token usage, finish reasons, model
+      # IDs, and roles (`response.Usage`, `result.Metadata`, `reply.Role`).
+      - patterns:
+          - pattern: $OBJ.$META
+          - metavariable-regex:
+              metavariable: $META
+              regex: ^(?:Metadata|Usage|FinishReason|ModelId|Role|AuthorName|ResponseId|CreatedAt)$
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      # A model choosing the SQL a connection runs is the textbook tool-misuse case (a "run
+      # SQL" plugin, an agent's database step), even when the call isn't wrapped as a tool.
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C7.1.1 - Output Format Enforcement"
+      mitre-atlas:
+        - "AML.T0051 - LLM Prompt Injection"
+        - "AML.T0036 - Data from Information Repositories"
+      cwe:
+        - "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      # MEDIUM: text-to-SQL features run model SQL on purpose, often on a read-only role,
+      # which limits (but doesn't remove) the damage.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [semantic-kernel, microsoft-extensions-ai, agent-framework, openai, ado-net, ef-core, dapper]
+      # API shapes checked 2026-10-25: model-output sources as in
+      # llm-output-to-code-execution-csharp, plus efcore v10.0.105 (RelationalQueryableExtensions
+      # FromSqlRaw / FromSql, RelationalDatabaseFacadeExtensions ExecuteSqlRaw / ExecuteSql /
+      # SqlQueryRaw / SqlQuery), Dapper 2.1.89 (SqlMapper extension methods, CommandDefinition),
+      # and System.Data.Common in .NET 10 (DbCommand.CommandText, DbDataSource.CreateCommand).
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md
+        - https://cwe.mitre.org/data/definitions/89.html
+        - https://learn.microsoft.com/ef/core/querying/sql-queries
+        - https://github.com/DapperLib/Dapper/blob/2.1.89/Dapper/SqlMapper.cs
+        - https://cheatsheetseries.owasp.org/cheatsheets/Query_Parameterization_Cheat_Sheet.html

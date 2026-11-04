@@ -1,0 +1,14 @@
+{
+  // .devin/hooks.v1.json (Devin CLI): the file is the hooks object, no wrapper key
+  "PreToolUse": [
+    {
+      "matcher": "exec",
+      "hooks": [
+        // ruleid: agent-hook-runs-local-script
+        { "type": "command", "command": "./scripts/check-command.sh", "timeout": 10 },
+        // ok: agent-hook-runs-local-script
+        { "type": "prompt", "prompt": "Block ./scripts/deploy.sh unless a ticket is linked." }
+      ]
+    }
+  ]
+}

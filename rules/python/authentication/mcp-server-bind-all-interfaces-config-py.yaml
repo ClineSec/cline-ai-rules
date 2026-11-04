@@ -1,0 +1,188 @@
+rules:
+  - id: mcp-server-bind-all-interfaces-config-py
+    # Python twin of mcp-server-bind-all-interfaces-config: code that sets FASTMCP_HOST (or
+    # FASTMCP_SERVER_HOST) to every interface in the process environment or in an environment
+    # mapping, or that launches `fastmcp run ... --host 0.0.0.0` as a child process.
+    # Sources: PrefectHQ fastmcp 4.1.3 settings.py (env prefix FASTMCP_; the settings object is
+    # created once, when fastmcp is first imported, from 2.8.0 on, so a value set in this
+    # process after that import changes nothing; 2.0.0 to 2.7.x read FASTMCP_SERVER_HOST in the
+    # FastMCP constructor; checked v2.0.0, v2.7.1, v2.8.0, v2.13.3, v2.14.0, v3.0.0, v4.1.4;
+    # pydantic-settings reads os.environ, which os.putenv doesn't update) and cli/cli.py and
+    # cli/run.py (--host, no short form; --transport/-t; the host is dropped for stdio);
+    # fastmcp 2.0.0 to 2.13.x read FASTMCP_SERVER_HOST (FASTMCP_HOST from 2.8.0); MCP SDK
+    # FastMCP 1.2.0 to 1.12.2 read FASTMCP_HOST.
+    # Only literal addresses are reported (a module constant counts). Values read from the
+    # environment with a default (os.environ.get("FASTMCP_HOST", "0.0.0.0")) and passed to
+    # host= are reported by mcp-server-exposed-without-auth, which also checks auth. A mapping
+    # given to Docker as a container's environment= is container-internal and not reported.
+    # A launch or mapping that also sets the transport to stdio is not reported.
+    languages: [python]
+    severity: INFO
+    message: >-
+      This makes a fastmcp MCP server listen on every network interface of the machine it runs
+      on, so anyone who can reach that machine on the server's port can list and call its tools
+      and do whatever they can do. Nothing here shows whether the server requires auth, and
+      fastmcp has none by default. Use 127.0.0.1 (the default) for local use. For a server
+      other machines must reach, require auth in the server (fastmcp `auth=`) or put it
+      behind an authenticating proxy, and say so in a comment.
+    pattern-either:
+      # The environment: os.environ[...] = ..., setdefault, putenv, update, an env mapping's
+      # entry, or dict(..., FASTMCP_HOST=...).
+      - patterns:
+          - pattern-either:
+              # A mapping handed to a child process, or os.putenv (only children see it).
+              - patterns:
+                  - pattern: $ENV["$NAME"] = $H
+                  - pattern-not: os.environ["$NAME"] = $H
+              - pattern: os.putenv("$NAME", $H)
+              - pattern: dict(..., $NAME=$H, ...)
+              # This process's os.environ counts only where something can read it: a child
+              # process started later in the file (it inherits the environment); fastmcp
+              # imported later in the file and not before it (fastmcp reads its settings once,
+              # at its first import); or a module that imports no MCP server package itself (a
+              # launcher or settings module, which may run before another module imports
+              # fastmcp). A file that already imported fastmcp, or that serves the MCP SDK's
+              # FastMCP (from 1.12.3 its host argument wins over FASTMCP_HOST, as in
+              # mcp-server-exposed-without-auth), gets nothing from it.
+              - patterns:
+                  - pattern-either:
+                          - pattern: os.environ["$NAME"] = $H
+                          - pattern: os.environ.setdefault("$NAME", $H)
+                          - pattern: os.environ.update(..., $NAME=$H, ...)
+                  - pattern-either:
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  os.environ["$NAME"] = $H
+                                  ...
+                                  $SPAWN(...)
+                              - pattern-inside: |
+                                  os.environ.setdefault("$NAME", $H)
+                                  ...
+                                  $SPAWN(...)
+                              - pattern-inside: |
+                                  os.environ.update(..., $NAME=$H, ...)
+                                  ...
+                                  $SPAWN(...)
+                          - metavariable-regex:
+                              metavariable: $SPAWN
+                              regex: ^(?:subprocess\.\w+|asyncio\.(?:subprocess\.)?create_subprocess_\w+|os\.(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*)|anyio\.(?:run_process|open_process)|multiprocessing\.Process)$
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  os.environ["$NAME"] = $H
+                                  ...
+                                  import fastmcp
+                              - pattern-inside: |
+                                  os.environ.setdefault("$NAME", $H)
+                                  ...
+                                  import fastmcp
+                              - pattern-inside: |
+                                  os.environ.update(..., $NAME=$H, ...)
+                                  ...
+                                  import fastmcp
+                          - pattern-not-inside: |
+                              import fastmcp
+                              ...
+                      - patterns:
+                          - pattern-either:
+                              - pattern: os.environ["$NAME"] = $H
+                              - pattern: os.environ.setdefault("$NAME", $H)
+                              - pattern: os.environ.update(..., $NAME=$H, ...)
+                          - pattern-not-regex: (?s)\A(?=.*?^[ \t]*+(?:from|import)[ \t]++(?:fastmcp|mcp)\b).*
+              - patterns:
+                  - pattern-either:
+                      - pattern: '{..., "$NAME": $H, ...}'
+                      - pattern: '{**$BASE, ..., "$NAME": $H, ...}'
+                  - pattern-not-inside: $F(..., environment=$X, ...)
+                  - pattern-not-inside: '{..., "FASTMCP_TRANSPORT": "stdio", ...}'
+                  - pattern-not-inside: '{**$BASE, ..., "FASTMCP_TRANSPORT": "stdio", ...}'
+          - metavariable-regex:
+              metavariable: $NAME
+              regex: ^FASTMCP_(?:SERVER_)?HOST$
+          - metavariable-pattern:
+              metavariable: $H
+              patterns:
+                - pattern: '"=~/^(?:0\.0\.0\.0|::|\[::\])$/"'
+                - pattern-not-inside: $X == $Y
+                - pattern-not-inside: $X != $Y
+          - focus-metavariable: $H
+      # A child process running fastmcp run --host 0.0.0.0: an argv list or tuple, a shell
+      # string, or exec-style arguments. The argument text is read as words, so list items,
+      # tuple items, and a command string read the same.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: subprocess.$F($ARGV, ...)
+                      - pattern: asyncio.create_subprocess_shell($ARGV, ...)
+                      - pattern: anyio.run_process($ARGV, ...)
+                      - pattern: anyio.open_process($ARGV, ...)
+                      - pattern: os.system($ARGV)
+                      - pattern: os.popen($ARGV, ...)
+                  - focus-metavariable: $ARGV
+              # Exec-style calls take the words as separate arguments; the call is read whole.
+              - patterns:
+                  - pattern: $ARGV
+                  - pattern-either:
+                      - pattern: asyncio.create_subprocess_exec(...)
+                      - patterns:
+                          - pattern: os.$F(...)
+                          - metavariable-regex:
+                              metavariable: $F
+                              regex: ^(?:exec|spawn|posix_spawn)\w*$
+                  # $ARGV is the whole call, not one of its arguments.
+                  - metavariable-regex:
+                      metavariable: $ARGV
+                      regex: ^[\w.]+\s*\(
+              # An argv list kept in a variable or constant.
+              - patterns:
+                  - pattern: $V = $ARGV
+                  - metavariable-regex:
+                      metavariable: $ARGV
+                      regex: ^[\[(]
+                  - focus-metavariable: $ARGV
+          - metavariable-regex:
+              metavariable: $ARGV
+              regex: |-
+                (?xs)
+                (?(DEFINE)
+                  (?<sep> (?: [\s"',\[\]()] | \\n )++ )
+                  (?<addr> 0\.0\.0\.0 | :: | \[::\] ) )
+                # A run with --transport stdio never binds the host.
+                ^ (?! .*? (?<![\w-]) (?: --transport | -t ) (?: = | (?&sep) ) stdio \b )
+                .*? (?<![\w./-]) fastmcp (?: \.cli | [=@] [\w.=]*+ )?+ (?&sep) run (?&sep)
+                (?: .*? (?&sep) )?? --host (?: = | (?&sep) ) (?&addr) (?= [\s"',\])] | \z )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI03 - Identity and Privilege Abuse"
+      owasp-mcp:
+        - "MCP07:2025 - Insufficient Authentication & Authorization"
+        - "MCP09:2025 - Shadow MCP Servers"
+      owasp-aisvs:
+        - "v1.01-C10.2.1 - Authentication & Authorization"
+        - "v1.01-C10.3.1 - Secure Transport"
+      mitre-atlas:
+        - "AML.T0132 - Misconfigured or Publicly Exposed AI Services"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-1327: Binding to an Unrestricted IP Address"
+      confidence: LOW
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, fastmcp]
+      references:
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/settings.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/cli/cli.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/cli/run.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v2.13.0/src/fastmcp/settings.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v1.12.2/src/mcp/server/fastmcp/server.py
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP07-2025%E2%80%93Insufficient-Authentication%26Authorization.md
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP09-2025%E2%80%93Shadow-MCP-Servers.md
+        - https://cwe.mitre.org/data/definitions/1327.html

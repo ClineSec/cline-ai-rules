@@ -1,0 +1,382 @@
+// Several client config shapes in one file: "mcpServers" (Claude Code, Claude Desktop, Cursor,
+// Cline, Windsurf, Gemini CLI), "servers" (VS Code), and a dev container's VS Code block.
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["-y", "@example-org/mcp-filesystem", "/Users/dev/project"]
+    },
+    "no-yes-flag": {
+      // npx assumes --yes when stdin is not a terminal, which is how clients start servers.
+      "command": "npx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["example-org-mcp-tickets"]
+    },
+    "latest-tag": {
+      "command": "npx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["--yes", "example-org-mcp@latest"]
+    },
+    "caret-range": {
+      "command": "npx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["-y", "@example-org/mcp-search@^2.1.0"]
+    },
+    "dist-tag": {
+      "command": "npx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["-y", "--quiet", "@example-org/mcp-search@next"]
+    },
+    "package-option": {
+      "command": "npx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["-y", "--package", "@example-org/mcp-cli", "example-mcp", "--stdio"]
+    },
+    "package-equals": {
+      "command": "npx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["-y", "--package=@example-org/mcp-cli", "example-mcp"]
+    },
+    "second-package-floats": {
+      "command": "npx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["-p", "@example-org/mcp-core@1.4.0", "-p", "@example-org/mcp-plugin", "example-mcp"]
+    },
+    "registry-option": {
+      "command": "npx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["-y", "--registry", "https://npm.example.com/", "@example-org/mcp-internal"]
+    },
+    "github-branch": {
+      "command": "npx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["-y", "github:example-org/mcp-server#main"]
+    },
+    "github-shorthand": {
+      "command": "npx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["-y", "example-org/mcp-server"]
+    },
+    "multi-line": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y", // install without asking
+        // ruleid: mcp-config-unpinned-package
+        "@example-org/mcp-browser",
+        "--headless"
+      ]
+    },
+    "args-before-command": {
+      // ruleid: mcp-config-unpinned-package
+      "args": ["-y", "@example-org/mcp-memory"],
+      "command": "npx"
+    },
+    "full-path": {
+      "command": "/opt/homebrew/bin/npx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["-y", "@example-org/mcp-memory"]
+    },
+    "windows-wrapper": {
+      "command": "cmd",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["/c", "npx", "-y", "@example-org/mcp-memory"]
+    },
+    "bunx": {
+      "command": "bunx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["@example-org/mcp-memory"]
+    },
+    "npm-exec": {
+      "command": "npm",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["exec", "--yes", "--", "@example-org/mcp-memory"]
+    },
+    "pnpm-dlx": {
+      "command": "pnpm",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["--silent", "dlx", "@example-org/mcp-memory"]
+    },
+    "yarn-dlx": {
+      "command": "yarn",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["dlx", "@example-org/mcp-memory@1"]
+    },
+    "uvx": {
+      "command": "uvx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["example-org-mcp-fetch"]
+    },
+    "uvx-latest": {
+      "command": "uvx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["example-org-mcp-fetch@latest", "--ignore-robots-txt"]
+    },
+    "uvx-range": {
+      "command": "uvx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["--python", "3.12", "example-org-mcp-fetch>=1.2"]
+    },
+    "uvx-from-unpinned": {
+      "command": "uvx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["--from", "example-org-mcp-tools[git]", "example-mcp-git"]
+    },
+    "uvx-from-git-branch": {
+      "command": "uvx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["--from", "git+https://github.com/example-org/mcp-tools@main", "example-mcp"]
+    },
+    "uvx-with-floats": {
+      "command": "uvx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["--with", "example-org-mcp-plugin", "example-org-mcp-host==1.0.0"]
+    },
+    "uv-tool-run": {
+      "command": "uv",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["tool", "run", "example-org-mcp-fetch"]
+    },
+    "pipx-run": {
+      "command": "pipx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["run", "--spec", "example-org-mcp-tools", "example-mcp"]
+    },
+    "uv-run-with": {
+      "command": "uv",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["run", "--with", "example-org-fastmcp", "example-fastmcp", "run", "/srv/mcp/server.py"]
+    },
+    "docker-untagged": {
+      "command": "docker",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["run", "-i", "--rm", "-e", "API_TOKEN", "ghcr.io/example-org/mcp-server"]
+    },
+    "docker-latest": {
+      "command": "docker",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["run", "-i", "--rm", "--name", "mcp", "-v", "/tmp:/data", "example-org/mcp-server:latest", "--port", "8080"]
+    },
+    "shell-wrapper": {
+      "command": "bash",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["-lc", "source ~/.nvm/nvm.sh && npx -y @example-org/mcp-memory"]
+    },
+    "shell-wrapper-uvx": {
+      "command": "sh",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["-c", "cd /srv/mcp; exec uvx example-org-mcp-fetch"]
+    },
+
+    "pinned": {
+      "command": "npx",
+      // ok: mcp-config-unpinned-package
+      "args": ["-y", "@example-org/mcp-filesystem@2026.8.21", "/Users/dev/project"]
+    },
+    "pinned-prerelease": {
+      "command": "npx",
+      // ok: mcp-config-unpinned-package
+      "args": ["-y", "example-org-mcp@3.0.0-rc.2"]
+    },
+    "pinned-package-option": {
+      "command": "npx",
+      // ok: mcp-config-unpinned-package
+      "args": ["-y", "--package=@example-org/mcp-cli@1.4.0", "example-mcp", "latest"]
+    },
+    "pinned-github-sha": {
+      "command": "npx",
+      // ok: mcp-config-unpinned-package
+      "args": ["-y", "github:example-org/mcp-server#3f2a9c1d"]
+    },
+    "pinned-alias": {
+      "command": "npx",
+      // ok: mcp-config-unpinned-package
+      "args": ["-y", "mcp@npm:@example-org/mcp-server@1.2.3"]
+    },
+    "npx-before-date": {
+      // npm resolves every spec as of this date, so a later release is never picked up.
+      "command": "npx",
+      // ok: mcp-config-unpinned-package
+      "args": ["--before", "2026-09-01", "-y", "@example-org/mcp-memory"]
+    },
+    "npx-call": {
+      "command": "npx",
+      // ok: mcp-config-unpinned-package
+      "args": ["-p", "@example-org/mcp-cli@1.4.0", "-c", "example-mcp --stdio"]
+    },
+    "local-script": {
+      "command": "node",
+      // ok: mcp-config-unpinned-package
+      "args": ["./dist/server.js", "--stdio"]
+    },
+    "local-folder": {
+      "command": "npx",
+      // ok: mcp-config-unpinned-package
+      "args": ["-y", "./tools/mcp-server"]
+    },
+    "input-variable": {
+      "command": "npx",
+      // ok: mcp-config-unpinned-package
+      "args": ["-y", "${input:mcpPackage}"]
+    },
+    "npm-run": {
+      "command": "npm",
+      // ok: mcp-config-unpinned-package
+      "args": ["run", "mcp:serve"]
+    },
+    "pnpm-exec": {
+      // Runs the project's own installed binary.
+      "command": "pnpm",
+      // ok: mcp-config-unpinned-package
+      "args": ["exec", "example-mcp"]
+    },
+    "uvx-pinned": {
+      "command": "uvx",
+      // ok: mcp-config-unpinned-package
+      "args": ["example-org-mcp-fetch==2026.4.7"]
+    },
+    "uvx-pinned-at": {
+      "command": "uvx",
+      // ok: mcp-config-unpinned-package
+      "args": ["example-org-mcp-fetch@2026.4.7", "--ignore-robots-txt"]
+    },
+    "uvx-from-pinned": {
+      "command": "uvx",
+      // ok: mcp-config-unpinned-package
+      "args": ["--python", "3.12", "--from", "example-org-mcp-tools[git]==0.6.2", "example-mcp-git", "--repository", "/srv/repo"]
+    },
+    "uvx-git-sha": {
+      "command": "uvx",
+      // ok: mcp-config-unpinned-package
+      "args": ["--from", "git+https://github.com/example-org/mcp-tools@4b1c2d3e5f60718293a4b5c6d7e8f90123456789", "example-mcp"]
+    },
+    "npm-exec-pinned": {
+      "command": "npm",
+      // ok: mcp-config-unpinned-package
+      "args": ["exec", "--yes", "@example-org/mcp-memory@1.2.0"]
+    },
+    "pipx-run-pinned": {
+      "command": "pipx",
+      // ok: mcp-config-unpinned-package
+      "args": ["run", "example-org-mcp-tools==0.6.2"]
+    },
+    "uvx-option-values": {
+      // The values of --index-strategy and --config-settings-package are not packages.
+      "command": "uvx",
+      // ok: mcp-config-unpinned-package
+      "args": ["--index-strategy", "unsafe-best-match", "--config-settings-package", "example-org-native", "example-org-mcp-host==1.0.0"]
+    },
+    "uvx-option-equals": {
+      "command": "uvx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["--python=3.12", "example-org-mcp-fetch"]
+    },
+    "uvx-git-ssh-sha": {
+      "command": "uvx",
+      // ok: mcp-config-unpinned-package
+      "args": ["--from", "git+ssh://git@github.com/example-org/mcp-tools.git@4b1c2d3e5f60718293a4b5c6d7e8f90123456789", "example-mcp"]
+    },
+    "uvx-exclude-newer": {
+      "command": "uvx",
+      // ok: mcp-config-unpinned-package
+      "args": ["--with", "example-org-mcp-plugin", "--exclude-newer", "2026-09-01", "example-org-mcp-host"]
+    },
+    "uvx-local": {
+      "command": "uvx",
+      // ok: mcp-config-unpinned-package
+      "args": ["--from", ".", "example-mcp"]
+    },
+    "uv-run-project": {
+      // Runs the project's own script with its locked dependencies.
+      "command": "uv",
+      // ok: mcp-config-unpinned-package
+      "args": ["run", "--directory", "/srv/mcp", "example-mcp", "--with", "debug"]
+    },
+    "uv-run-with-pinned": {
+      "command": "uv",
+      // ok: mcp-config-unpinned-package
+      "args": ["run", "--with", "example-org-fastmcp==2.14.0", "example-fastmcp", "run", "/srv/mcp/server.py"]
+    },
+    "docker-version-tag": {
+      "command": "docker",
+      // ok: mcp-config-unpinned-package
+      "args": ["run", "-i", "--rm", "-e", "API_TOKEN", "ghcr.io/example-org/mcp-server:1.6.0"]
+    },
+    "docker-digest": {
+      "command": "docker",
+      // ok: mcp-config-unpinned-package
+      "args": ["run", "-i", "--rm", "example-org/mcp-server@sha256:9d2f0c4b7a1e3f5d6c8b9a0e1f2d3c4b5a6978e0f1d2c3b4a59687f0e1d2c3b4"]
+    },
+    "docker-registry-port": {
+      "command": "docker",
+      // ok: mcp-config-unpinned-package
+      "args": ["run", "-i", "--rm", "registry.example.com:5000/mcp-server:2.0.1", "serve"]
+    },
+    "docker-exec": {
+      "command": "docker",
+      // ok: mcp-config-unpinned-package
+      "args": ["exec", "-i", "mcp-server", "example-mcp"]
+    },
+    "shell-pinned": {
+      "command": "bash",
+      // ok: mcp-config-unpinned-package
+      "args": ["-lc", "source ~/.nvm/nvm.sh && npx -y @example-org/mcp-memory@1.2.0"]
+    },
+    "shell-echo": {
+      "command": "bash",
+      // ok: mcp-config-unpinned-package
+      "args": ["-c", "echo use npx -y example-org-mcp to try it"]
+    },
+    "switched-off": {
+      // Only some clients (Cline) honor "disabled"; Claude Code ignores the key and starts it.
+      "command": "npx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["-y", "@example-org/mcp-legacy"],
+      "disabled": true
+    },
+    "remote": {
+      "type": "http",
+      // ok: mcp-config-unpinned-package
+      "url": "https://mcp.example.com/mcp"
+    }
+  },
+  "servers": {
+    "vscode-format": {
+      "type": "stdio",
+      "command": "npx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["-y", "@example-org/mcp-playwright@latest"]
+    },
+    "vscode-pinned": {
+      "type": "stdio",
+      "command": "uvx",
+      // ok: mcp-config-unpinned-package
+      "args": ["example-org-mcp-time==2026.1.26"]
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "mcp": {
+        "servers": {
+          "in-container": {
+            "command": "uvx",
+            // ruleid: mcp-config-unpinned-package
+            "args": ["example-org-mcp-git"]
+          }
+        }
+      }
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          // Not an MCP server: hooks have their own rules.
+          // ok: mcp-config-unpinned-package
+          { "type": "command", "command": "npx", "args": ["-y", "@example-org/session-banner"] }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,745 @@
+rules:
+  - id: ai-cli-bypass-flag-invocation-ts
+    # JavaScript/TypeScript twin of ai-cli-bypass-flag-invocation (shell, CI, Makefile,
+    # package.json): the same CLIs and flags, here as separate argv elements (spawn,
+    # execFile, execa, Bun.spawn) or inside a command string (exec, execSync). Flags are
+    # verified against Claude Code 2.1.308, Codex 0.163, Gemini CLI 0.65, Qwen Code 0.26, Copilot
+    # CLI 1.0.102, Kiro CLI docs and q chat 1.19.7, Cursor CLI docs, Cline CLI 3.0.73, opencode 1.19.3, and goose
+    # 1.55 (2026-10-22).
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      This code starts a coding agent CLI with its approvals or sandbox turned off, so every
+      shell command and file edit the model decides on runs at once with this process's full
+      access: its files, network, and credentials. Agents launched from code usually work on
+      text other people control (a ticket, an issue, a pull request, a log), and a prompt
+      injection in that text can then run arbitrary commands. If this only ever runs in a
+      disposable container or VM with no secrets, that may be intended; otherwise allowlist the
+      tools the task needs (claude --permission-mode dontAsk --allowedTools ..., codex --sandbox
+      workspace-write, gemini --approval-mode auto_edit, copilot --allow-tool ... or --sandbox,
+      kiro-cli --trust-tools=..., GOOSE_MODE=smart_approve, cline --auto-approve false) or use the vendor SDK with a permission callback.
+    pattern-either:
+      # --- Claude Code: --dangerously-skip-permissions, --permission-mode bypassPermissions ---
+      - patterns:
+          - pattern-either:
+              # The program: a string (a module constant counts, through constant propagation),
+              # an expression that ends in one (which("claude"), X ?? "codex"), or a name that
+              # says which CLI it holds (CLAUDE_BIN). In a list, a name or call counts first,
+              # second, or anywhere after a known wrapper first, and a string anywhere: a free
+              # $PROG anywhere in a list pairs every element with every later one, which times out
+              # on lists of a few hundred elements and drops the file's findings.
+              - patterns:
+                  - pattern-either:
+                      - pattern: '[$PROG, ..., $FLAG, ...]'
+                      - pattern: '[$W, $PROG, ..., $FLAG, ...]'
+                      - pattern: '$F(..., $PROG, ..., $FLAG, ...)'
+                      - pattern: '$F(..., $PROG, ..., [..., $FLAG, ...], ...)'
+                      - pattern: |
+                          $ARGS = [..., $FLAG, ...];
+                          ...
+                          $F(..., $PROG, ..., $ARGS, ...);
+                      - pattern: |
+                          $ARGS = [..., $FLAG, ...];
+                          ...
+                          $F(..., [..., $PROG, ..., ...$ARGS, ...], ...);
+                  # The cheap flag test first, so the program test runs on few pairs.
+                  - metavariable-regex:
+                      metavariable: $FLAG
+                      regex: ^["'`](?:--dangerously-skip-permissions|bypassPermissions|--permission-mode=bypassPermissions)["'`]$
+                  - metavariable-pattern:
+                      metavariable: $PROG
+                      pattern-either:
+                        - pattern: '"=~/^(?:.*\/)?(?:claude|@anthropic-ai\/claude-code(?:@.*)?)$/"'
+                        - pattern-regex: (?i)^[\w.$]*claude\w*(?:\(\))?$
+              # After a known wrapper first (timeout, sudo, env, nice, uv run, ...), a name
+              # anywhere: the flag and the program are each found in one pass over the list and
+              # joined on it, so a long list never pairs its elements.
+              - patterns:
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $FLAG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $FLAG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $FLAG, ...], ...)'
+                      - metavariable-regex:
+                          metavariable: $FLAG
+                          regex: ^["'`](?:--dangerously-skip-permissions|bypassPermissions|--permission-mode=bypassPermissions)["'`]$
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $PROG, ...], ...)'
+                      - metavariable-pattern:
+                          metavariable: $PROG
+                          pattern-regex: (?i)^[\w.$]*claude\w*(?:\(\))?$
+              - pattern: '[..., "=~/^(?:.*\/)?(?:claude|@anthropic-ai\/claude-code(?:@.*)?)$/", ..., $FLAG, ...]'
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^["'`](?:--dangerously-skip-permissions|bypassPermissions|--permission-mode=bypassPermissions)["'`]$
+          - focus-metavariable: $FLAG
+      # --- Codex: --dangerously-bypass-approvals-and-sandbox / --yolo, danger-full-access ---
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: '[$PROG, ..., $FLAG, ...]'
+                      - pattern: '[$W, $PROG, ..., $FLAG, ...]'
+                      - pattern: '$F(..., $PROG, ..., $FLAG, ...)'
+                      - pattern: '$F(..., $PROG, ..., [..., $FLAG, ...], ...)'
+                      - pattern: |
+                          $ARGS = [..., $FLAG, ...];
+                          ...
+                          $F(..., $PROG, ..., $ARGS, ...);
+                      - pattern: |
+                          $ARGS = [..., $FLAG, ...];
+                          ...
+                          $F(..., [..., $PROG, ..., ...$ARGS, ...], ...);
+                  # The cheap flag test first, so the program test runs on few pairs.
+                  - metavariable-regex:
+                      metavariable: $FLAG
+                      regex: ^["'`](?:--dangerously-bypass-approvals-and-sandbox|--yolo|danger-full-access|--sandbox=danger-full-access|(?:sandbox_mode|default_permissions)\s*=\s*\\?["']?:?danger-full-access\\?["']?)["'`]$
+                  - metavariable-pattern:
+                      metavariable: $PROG
+                      pattern-either:
+                        - pattern: '"=~/^(?:.*\/)?(?:codex|@openai\/codex(?:@.*)?)$/"'
+                        - pattern-regex: (?i)^[\w.$]*codex\w*(?:\(\))?$
+              # After a known wrapper first (timeout, sudo, env, nice, uv run, ...), a name
+              # anywhere: the flag and the program are each found in one pass over the list and
+              # joined on it, so a long list never pairs its elements.
+              - patterns:
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $FLAG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $FLAG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $FLAG, ...], ...)'
+                      - metavariable-regex:
+                          metavariable: $FLAG
+                          regex: ^["'`](?:--dangerously-bypass-approvals-and-sandbox|--yolo|danger-full-access|--sandbox=danger-full-access|(?:sandbox_mode|default_permissions)\s*=\s*\\?["']?:?danger-full-access\\?["']?)["'`]$
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $PROG, ...], ...)'
+                      - metavariable-pattern:
+                          metavariable: $PROG
+                          pattern-regex: (?i)^[\w.$]*codex\w*(?:\(\))?$
+              - pattern: '[..., "=~/^(?:.*\/)?(?:codex|@openai\/codex(?:@.*)?)$/", ..., $FLAG, ...]'
+          - metavariable-regex:
+              metavariable: $FLAG
+              # danger-full-access alone is the value of -s/--sandbox; the -c forms set
+              # sandbox_mode or default_permissions.
+              regex: ^["'`](?:--dangerously-bypass-approvals-and-sandbox|--yolo|danger-full-access|--sandbox=danger-full-access|(?:sandbox_mode|default_permissions)\s*=\s*\\?["']?:?danger-full-access\\?["']?)["'`]$
+          - focus-metavariable: $FLAG
+      # --- Gemini CLI and Qwen Code (a fork, 0.26): --yolo / -y / --approval-mode yolo, unless
+      # --sandbox / -s is on ---
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: '[$PROG, ..., $FLAG, ...]'
+                      - pattern: '[$W, $PROG, ..., $FLAG, ...]'
+                      - pattern: '$F(..., $PROG, ..., $FLAG, ...)'
+                      - pattern: '$F(..., $PROG, ..., [..., $FLAG, ...], ...)'
+                      - pattern: |
+                          $ARGS = [..., $FLAG, ...];
+                          ...
+                          $F(..., $PROG, ..., $ARGS, ...);
+                      - pattern: |
+                          $ARGS = [..., $FLAG, ...];
+                          ...
+                          $F(..., [..., $PROG, ..., ...$ARGS, ...], ...);
+                  # The cheap flag test first, so the program test runs on few pairs.
+                  - metavariable-regex:
+                      metavariable: $FLAG
+                      regex: ^["'`](?:--yolo|--yolo=true|-y|--approval-mode=yolo)["'`]$
+                  - metavariable-pattern:
+                      metavariable: $PROG
+                      pattern-either:
+                        - pattern: '"=~/^(?:.*\/)?(?:gemini|@google\/gemini-cli(?:@.*)?|qwen|@qwen-code\/qwen-code(?:@.*)?)$/"'
+                        - pattern-regex: (?i)^[\w.$]*(?:gemini|qwen)\w*(?:\(\))?$
+              # After a known wrapper first (timeout, sudo, env, nice, uv run, ...), a name
+              # anywhere: the flag and the program are each found in one pass over the list and
+              # joined on it, so a long list never pairs its elements.
+              - patterns:
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $FLAG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $FLAG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $FLAG, ...], ...)'
+                      - metavariable-regex:
+                          metavariable: $FLAG
+                          regex: ^["'`](?:--yolo|--yolo=true|-y|--approval-mode=yolo)["'`]$
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $PROG, ...], ...)'
+                      - metavariable-pattern:
+                          metavariable: $PROG
+                          pattern-regex: (?i)^[\w.$]*(?:gemini|qwen)\w*(?:\(\))?$
+              - pattern: '[..., "=~/^(?:.*\/)?(?:gemini|@google\/gemini-cli(?:@.*)?|qwen|@qwen-code\/qwen-code(?:@.*)?)$/", ..., $FLAG, ...]'
+          - pattern-not-inside: '[..., "--sandbox", ...]'
+          - pattern-not-inside: '[..., "-s", ...]'
+          - pattern-not-inside: '$F(..., "--sandbox", ...)'
+          - pattern-not-inside: '$F(..., [..., "--sandbox", ...], ...)'
+          - pattern-not-inside: '$F(..., "-s", ...)'
+          - pattern-not-inside: '$F(..., [..., "-s", ...], ...)'
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^["'`](?:--yolo|--yolo=true|-y|--approval-mode=yolo)["'`]$
+          - focus-metavariable: $FLAG
+      # "--approval-mode", "yolo" as two elements.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: '[$PROG, ..., "--approval-mode", $FLAG, ...]'
+                      - pattern: '[$W, $PROG, ..., "--approval-mode", $FLAG, ...]'
+                      - pattern: '$F(..., $PROG, ..., "--approval-mode", $FLAG, ...)'
+                      - pattern: '$F(..., $PROG, ..., [..., "--approval-mode", $FLAG, ...], ...)'
+                  # The cheap flag test first, so the program test runs on few pairs.
+                  - metavariable-regex:
+                      metavariable: $FLAG
+                      regex: ^["'`]yolo["'`]$
+                  - metavariable-pattern:
+                      metavariable: $PROG
+                      pattern-either:
+                        - pattern: '"=~/^(?:.*\/)?(?:gemini|@google\/gemini-cli(?:@.*)?|qwen|@qwen-code\/qwen-code(?:@.*)?)$/"'
+                        - pattern-regex: (?i)^[\w.$]*(?:gemini|qwen)\w*(?:\(\))?$
+              # After a known wrapper first (timeout, sudo, env, nice, uv run, ...), a name
+              # anywhere: the flag and the program are each found in one pass over the list and
+              # joined on it, so a long list never pairs its elements.
+              - patterns:
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., "--approval-mode", $FLAG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., "--approval-mode", $FLAG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., "--approval-mode", $FLAG, ...], ...)'
+                      - metavariable-regex:
+                          metavariable: $FLAG
+                          regex: ^["'`]yolo["'`]$
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $PROG, ...], ...)'
+                      - metavariable-pattern:
+                          metavariable: $PROG
+                          pattern-regex: (?i)^[\w.$]*(?:gemini|qwen)\w*(?:\(\))?$
+              - pattern: '[..., "=~/^(?:.*\/)?(?:gemini|@google\/gemini-cli(?:@.*)?|qwen|@qwen-code\/qwen-code(?:@.*)?)$/", ..., "--approval-mode", $FLAG, ...]'
+          - pattern-not-inside: '[..., "--sandbox", ...]'
+          - pattern-not-inside: '[..., "-s", ...]'
+          - pattern-not-inside: '$F(..., "--sandbox", ...)'
+          - pattern-not-inside: '$F(..., [..., "--sandbox", ...], ...)'
+          - pattern-not-inside: '$F(..., "-s", ...)'
+          - pattern-not-inside: '$F(..., [..., "-s", ...], ...)'
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^["'`]yolo["'`]$
+          - focus-metavariable: $FLAG
+      # --- Copilot CLI: --allow-all-tools / --allow-all / --yolo, unless --sandbox is on ---
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: '[$PROG, ..., $FLAG, ...]'
+                      - pattern: '[$W, $PROG, ..., $FLAG, ...]'
+                      - pattern: '$F(..., $PROG, ..., $FLAG, ...)'
+                      - pattern: '$F(..., $PROG, ..., [..., $FLAG, ...], ...)'
+                      - pattern: |
+                          $ARGS = [..., $FLAG, ...];
+                          ...
+                          $F(..., $PROG, ..., $ARGS, ...);
+                      - pattern: |
+                          $ARGS = [..., $FLAG, ...];
+                          ...
+                          $F(..., [..., $PROG, ..., ...$ARGS, ...], ...);
+                  # The cheap flag test first, so the program test runs on few pairs.
+                  - metavariable-regex:
+                      metavariable: $FLAG
+                      regex: ^["'`](?:--allow-all-tools|--allow-all|--yolo)["'`]$
+                  - metavariable-pattern:
+                      metavariable: $PROG
+                      pattern-either:
+                        - pattern: '"=~/^(?:.*\/)?(?:copilot|@github\/copilot(?:@.*)?)$/"'
+                        - pattern-regex: (?i)^[\w.$]*copilot\w*(?:\(\))?$
+              # After a known wrapper first (timeout, sudo, env, nice, uv run, ...), a name
+              # anywhere: the flag and the program are each found in one pass over the list and
+              # joined on it, so a long list never pairs its elements.
+              - patterns:
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $FLAG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $FLAG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $FLAG, ...], ...)'
+                      - metavariable-regex:
+                          metavariable: $FLAG
+                          regex: ^["'`](?:--allow-all-tools|--allow-all|--yolo)["'`]$
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $PROG, ...], ...)'
+                      - metavariable-pattern:
+                          metavariable: $PROG
+                          pattern-regex: (?i)^[\w.$]*copilot\w*(?:\(\))?$
+              - pattern: '[..., "=~/^(?:.*\/)?(?:copilot|@github\/copilot(?:@.*)?)$/", ..., $FLAG, ...]'
+          - pattern-not-inside: '[..., "--sandbox", ...]'
+          - pattern-not-inside: '$F(..., "--sandbox", ...)'
+          - pattern-not-inside: '$F(..., [..., "--sandbox", ...], ...)'
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^["'`](?:--allow-all-tools|--allow-all|--yolo)["'`]$
+          - focus-metavariable: $FLAG
+      # --- opencode 1.19: --auto and its hidden aliases --yolo, --dangerously-skip-permissions ---
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: '[$PROG, ..., $FLAG, ...]'
+                      - pattern: '[$W, $PROG, ..., $FLAG, ...]'
+                      - pattern: '$F(..., $PROG, ..., $FLAG, ...)'
+                      - pattern: '$F(..., $PROG, ..., [..., $FLAG, ...], ...)'
+                      - pattern: |
+                          $ARGS = [..., $FLAG, ...];
+                          ...
+                          $F(..., $PROG, ..., $ARGS, ...);
+                      - pattern: |
+                          $ARGS = [..., $FLAG, ...];
+                          ...
+                          $F(..., [..., $PROG, ..., ...$ARGS, ...], ...);
+                  # The cheap flag test first, so the program test runs on few pairs.
+                  - metavariable-regex:
+                      metavariable: $FLAG
+                      regex: ^["'`](?:--auto|--yolo|--dangerously-skip-permissions)["'`]$
+                  - metavariable-pattern:
+                      metavariable: $PROG
+                      pattern-either:
+                        - pattern: '"=~/^(?:.*\/)?(?:opencode|opencode-ai(?:@.*)?)$/"'
+                        - pattern-regex: (?i)^[\w.$]*opencode\w*(?:\(\))?$
+              # After a known wrapper first (timeout, sudo, env, nice, uv run, ...), a name
+              # anywhere: the flag and the program are each found in one pass over the list and
+              # joined on it, so a long list never pairs its elements.
+              - patterns:
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $FLAG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $FLAG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $FLAG, ...], ...)'
+                      - metavariable-regex:
+                          metavariable: $FLAG
+                          regex: ^["'`](?:--auto|--yolo|--dangerously-skip-permissions)["'`]$
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $PROG, ...], ...)'
+                      - metavariable-pattern:
+                          metavariable: $PROG
+                          pattern-regex: (?i)^[\w.$]*opencode\w*(?:\(\))?$
+              - pattern: '[..., "=~/^(?:.*\/)?(?:opencode|opencode-ai(?:@.*)?)$/", ..., $FLAG, ...]'
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^["'`](?:--auto|--yolo|--dangerously-skip-permissions)["'`]$
+          - focus-metavariable: $FLAG
+      # --- Kiro CLI and q chat: --trust-all-tools (and -a in q chat), unless --sandbox ---
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      # The program by name or call first or second in the argv or anywhere after a
+                      # known wrapper first, or as a string (a constant counts) anywhere in it. A free
+                      # $PROG anywhere in a list pairs every element with every later one, which times
+                      # out on long lists.
+                      - patterns:
+                          - pattern-either:
+                              - pattern: '[$PROG, ..., $FLAG, ...]'
+                              - pattern: '[$W, $PROG, ..., $FLAG, ...]'
+                              - pattern: '$F(..., $PROG, ..., $FLAG, ...)'
+                              - pattern: '$F(..., $PROG, ..., [..., $FLAG, ...], ...)'
+                              - pattern: |
+                                  $ARGS = [..., $FLAG, ...];
+                                  ...
+                                  $F(..., $PROG, ..., $ARGS, ...);
+                              - pattern: |
+                                  $ARGS = [..., $FLAG, ...];
+                                  ...
+                                  $F(..., [..., $PROG, ..., ...$ARGS, ...], ...);
+                          # The cheap flag test first, so the program test runs on few pairs.
+                          - metavariable-regex:
+                              metavariable: $FLAG
+                              regex: ^["'`]--trust-all-tools["'`]$
+                          - metavariable-pattern:
+                              metavariable: $PROG
+                              pattern-either:
+                                - pattern: '"=~/^(?:.*\/)?(?:kiro-cli|kiro)$/"'
+                                - pattern-regex: (?i)^[\w.$]*kiro\w*(?:\(\))?$
+                      # After a known wrapper first (timeout, sudo, env, nice, uv run, ...), a name
+                      # anywhere: the flag and the program are each found in one pass over the list and
+                      # joined on it, so a long list never pairs its elements.
+                      - patterns:
+                          - patterns:
+                              - pattern-either:
+                                  - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $FLAG, ...]'
+                                  - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $FLAG, ...)'
+                                  - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $FLAG, ...], ...)'
+                              - metavariable-regex:
+                                  metavariable: $FLAG
+                                  regex: ^["'`]--trust-all-tools["'`]$
+                          - patterns:
+                              - pattern-either:
+                                  - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...]'
+                                  - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...)'
+                                  - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $PROG, ...], ...)'
+                              - metavariable-pattern:
+                                  metavariable: $PROG
+                                  pattern-regex: (?i)^[\w.$]*kiro\w*(?:\(\))?$
+                      - pattern: '[..., "=~/^(?:.*\/)?(?:kiro-cli|kiro)$/", ..., $FLAG, ...]'
+                  - metavariable-regex:
+                      metavariable: $FLAG
+                      regex: ^["'`]--trust-all-tools["'`]$
+              - patterns:
+                  - pattern-either:
+                      - pattern: '[..., "q", "chat", ..., $FLAG, ...]'
+                      - pattern: '$F(..., "q", "chat", ..., $FLAG, ...)'
+                      - pattern: '$F(..., "q", ..., ["chat", ..., $FLAG, ...], ...)'
+                  - metavariable-regex:
+                      metavariable: $FLAG
+                      regex: ^["'`](?:--trust-all-tools|-a)["'`]$
+          - pattern-not-inside: '[..., "--sandbox", ...]'
+          - pattern-not-inside: '$F(..., "--sandbox", ...)'
+          - pattern-not-inside: '$F(..., [..., "--sandbox", ...], ...)'
+          - focus-metavariable: $FLAG
+      # --- Cursor CLI: --force / -f / --yolo, or --sandbox disabled ---
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: '[$PROG, ..., $FLAG, ...]'
+                      - pattern: '[$W, $PROG, ..., $FLAG, ...]'
+                      - pattern: '$F(..., $PROG, ..., $FLAG, ...)'
+                      - pattern: '$F(..., $PROG, ..., [..., $FLAG, ...], ...)'
+                      - pattern: |
+                          $ARGS = [..., $FLAG, ...];
+                          ...
+                          $F(..., $PROG, ..., $ARGS, ...);
+                      - pattern: |
+                          $ARGS = [..., $FLAG, ...];
+                          ...
+                          $F(..., [..., $PROG, ..., ...$ARGS, ...], ...);
+                      - pattern: '[$PROG, ..., "--sandbox", $FLAG, ...]'
+                      - pattern: '[$W, $PROG, ..., "--sandbox", $FLAG, ...]'
+                      - pattern: '$F(..., $PROG, ..., "--sandbox", $FLAG, ...)'
+                      - pattern: '$F(..., $PROG, ..., [..., "--sandbox", $FLAG, ...], ...)'
+                  # The cheap flag test first, so the program test runs on few pairs.
+                  - metavariable-regex:
+                      metavariable: $FLAG
+                      regex: ^["'`](?:--force|-f|--yolo|--sandbox=disabled|disabled)["'`]$
+                  - metavariable-pattern:
+                      metavariable: $PROG
+                      pattern-either:
+                        - pattern: '"=~/^(?:.*\/)?cursor-agent$/"'
+                        - pattern-regex: (?i)^[\w.$]*cursor\w*(?:\(\))?$
+              # After a known wrapper first (timeout, sudo, env, nice, uv run, ...), a name
+              # anywhere: the flag and the program are each found in one pass over the list and
+              # joined on it, so a long list never pairs its elements.
+              - patterns:
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $FLAG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $FLAG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $FLAG, ...], ...)'
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., "--sandbox", $FLAG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., "--sandbox", $FLAG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., "--sandbox", $FLAG, ...], ...)'
+                      - metavariable-regex:
+                          metavariable: $FLAG
+                          regex: ^["'`](?:--force|-f|--yolo|--sandbox=disabled|disabled)["'`]$
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $PROG, ...], ...)'
+                      - metavariable-pattern:
+                          metavariable: $PROG
+                          pattern-regex: (?i)^[\w.$]*cursor\w*(?:\(\))?$
+              - pattern: '[..., "=~/^(?:.*\/)?cursor-agent$/", ..., $FLAG, ...]'
+              - pattern: '[..., "=~/^(?:.*\/)?cursor-agent$/", ..., "--sandbox", $FLAG, ...]'
+          - pattern-not-inside: '[..., "--sandbox", "enabled", ...]'
+          - pattern-not-inside: '$F(..., "--sandbox", "enabled", ...)'
+          - pattern-not-inside: '$F(..., [..., "--sandbox", "enabled", ...], ...)'
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^["'`](?:--force|-f|--yolo|--sandbox=disabled|disabled)["'`]$
+          - focus-metavariable: $FLAG
+      # Cursor's binary is also installed as "agent", a generic name, so it counts only with
+      # -p / --print in the same argv.
+      - patterns:
+          - pattern-either:
+              # The program as a string, matched in place in a list so long lists stay
+              # linear (a free $PROG pairs every element with every later one).
+              - patterns:
+                  - pattern-either:
+                      - pattern: '$F(..., $PROG, ..., $FLAG, ...)'
+                      - pattern: '$F(..., $PROG, ..., [..., $FLAG, ...], ...)'
+                      - pattern: |
+                          $ARGS = [..., $FLAG, ...];
+                          ...
+                          $F(..., $PROG, ..., $ARGS, ...);
+                      - pattern: |
+                          $ARGS = [..., $FLAG, ...];
+                          ...
+                          $F(..., [..., $PROG, ..., ...$ARGS, ...], ...);
+                      - pattern: '$F(..., $PROG, ..., "--sandbox", $FLAG, ...)'
+                      - pattern: '$F(..., $PROG, ..., [..., "--sandbox", $FLAG, ...], ...)'
+                  - metavariable-regex:
+                      metavariable: $PROG
+                      regex: ^["'`](?:[^"'`\n]*/)?agent["'`]$
+              - pattern: '[..., "=~/^(?:.*\/)?agent$/", ..., $FLAG, ...]'
+              - pattern: '[..., "=~/^(?:.*\/)?agent$/", ..., "--sandbox", $FLAG, ...]'
+          - pattern-either:
+              - pattern-inside: '[..., "-p", ...]'
+              - pattern-inside: '[..., "--print", ...]'
+              - pattern-inside: '$F(..., "-p", ...)'
+              - pattern-inside: '$F(..., [..., "-p", ...], ...)'
+              - pattern-inside: '$F(..., "--print", ...)'
+              - pattern-inside: '$F(..., [..., "--print", ...], ...)'
+          - pattern-not-inside: '[..., "--sandbox", "enabled", ...]'
+          - pattern-not-inside: '$F(..., "--sandbox", "enabled", ...)'
+          - pattern-not-inside: '$F(..., [..., "--sandbox", "enabled", ...], ...)'
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^["'`](?:--force|-f|--yolo|--sandbox=disabled|disabled)["'`]$
+          - focus-metavariable: $FLAG
+      # --- Cline CLI 3.0.73: --yolo / -y or --auto-approve true. A run with neither is
+      # ai-cli-default-auto-approve-ts (Cline's default). ---
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: '[$PROG, ..., $FLAG, ...]'
+                      - pattern: '[$W, $PROG, ..., $FLAG, ...]'
+                      - pattern: '$F(..., $PROG, ..., $FLAG, ...)'
+                      - pattern: '$F(..., $PROG, ..., [..., $FLAG, ...], ...)'
+                      - pattern: |
+                          $ARGS = [..., $FLAG, ...];
+                          ...
+                          $F(..., $PROG, ..., $ARGS, ...);
+                  # The cheap flag test first, so the program test runs on few pairs.
+                  - metavariable-regex:
+                      metavariable: $FLAG
+                      regex: ^["'`](?:--yolo|-y|--auto-approve=true)["'`]$
+                  - metavariable-pattern:
+                      metavariable: $PROG
+                      pattern-either:
+                        - pattern: '"=~/^(?:.*\/)?(?:cline|@cline\/cli(?:@.*)?)$/"'
+                        - pattern-regex: (?i)^[\w.$]*cline\w*(?:\(\))?$
+              # After a known wrapper first (timeout, sudo, env, nice, uv run, ...), a name
+              # anywhere: the flag and the program are each found in one pass over the list and
+              # joined on it, so a long list never pairs its elements.
+              - patterns:
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $FLAG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $FLAG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $FLAG, ...], ...)'
+                      - metavariable-regex:
+                          metavariable: $FLAG
+                          regex: ^["'`](?:--yolo|-y|--auto-approve=true)["'`]$
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $PROG, ...], ...)'
+                      - metavariable-pattern:
+                          metavariable: $PROG
+                          pattern-regex: (?i)^[\w.$]*cline\w*(?:\(\))?$
+              - pattern: '[..., "=~/^(?:.*\/)?(?:cline|@cline\/cli(?:@.*)?)$/", ..., $FLAG, ...]'
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^["'`](?:--yolo|-y|--auto-approve=true)["'`]$
+          - focus-metavariable: $FLAG
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: '[$PROG, ..., "--auto-approve", $FLAG, ...]'
+                      - pattern: '[$W, $PROG, ..., "--auto-approve", $FLAG, ...]'
+                      - pattern: '$F(..., $PROG, ..., "--auto-approve", $FLAG, ...)'
+                      - pattern: '$F(..., $PROG, ..., [..., "--auto-approve", $FLAG, ...], ...)'
+                  # The cheap flag test first, so the program test runs on few pairs.
+                  - metavariable-regex:
+                      metavariable: $FLAG
+                      regex: ^["'`]true["'`]$
+                  - metavariable-pattern:
+                      metavariable: $PROG
+                      pattern-either:
+                        - pattern: '"=~/^(?:.*\/)?(?:cline|@cline\/cli(?:@.*)?)$/"'
+                        - pattern-regex: (?i)^[\w.$]*cline\w*(?:\(\))?$
+              # After a known wrapper first (timeout, sudo, env, nice, uv run, ...), a name
+              # anywhere: the flag and the program are each found in one pass over the list and
+              # joined on it, so a long list never pairs its elements.
+              - patterns:
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., "--auto-approve", $FLAG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., "--auto-approve", $FLAG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., "--auto-approve", $FLAG, ...], ...)'
+                      - metavariable-regex:
+                          metavariable: $FLAG
+                          regex: ^["'`]true["'`]$
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...]'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $PROG, ...], ...)'
+                      - metavariable-pattern:
+                          metavariable: $PROG
+                          pattern-regex: (?i)^[\w.$]*cline\w*(?:\(\))?$
+              - pattern: '[..., "=~/^(?:.*\/)?(?:cline|@cline\/cli(?:@.*)?)$/", ..., "--auto-approve", $FLAG, ...]'
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^["'`]true["'`]$
+          - focus-metavariable: $FLAG
+      # --- A bypass flag appended to an argv list built elsewhere. Only flags no other
+      # common tool uses, since the program is not in view. ---
+      - patterns:
+          - pattern-either:
+              - pattern: $ARGV.push(..., $FLAG, ...)
+              - pattern: $ARGV.unshift(..., $FLAG, ...)
+              - pattern: $ARGV.concat(..., [..., $FLAG, ...], ...)
+              - pattern: '[..., ...$ARGV, ..., $FLAG, ...]'
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^["'`](?:--dangerously-skip-permissions|--permission-mode=bypassPermissions|--dangerously-bypass-approvals-and-sandbox|--sandbox=danger-full-access|--approval-mode=yolo|--allow-all-tools|--trust-all-tools)["'`]$
+          - focus-metavariable: $FLAG
+      # --- A flag-only array (a per-agent flag table, a constant spread into argv later).
+      # The program is not in view, so only flags no other tool uses, and only in an array
+      # that starts with a flag: one that starts with a program is left to the branches
+      # above. Membership tests and arrays named like a block list are guards. ---
+      - patterns:
+          - pattern: '[$FIRST, ...]'
+          - metavariable-regex:
+              metavariable: $FIRST
+              regex: ^["'`]-
+          - pattern-either:
+              - patterns:
+                  - pattern: '[..., $FLAG, ...]'
+                  - metavariable-regex:
+                      metavariable: $FLAG
+                      regex: ^["'`](?:--dangerously-skip-permissions|--permission-mode=bypassPermissions|--dangerously-bypass-approvals-and-sandbox|--sandbox=danger-full-access|--approval-mode=yolo|--allow-all-tools|--trust-all-tools)["'`]$
+              - patterns:
+                  - pattern: '[..., $OPT, $FLAG, ...]'
+                  - metavariable-regex:
+                      metavariable: $OPT
+                      regex: ^["'`]--(?:approval-mode|permission-mode|sandbox)["'`]$
+                  - metavariable-regex:
+                      metavariable: $FLAG
+                      regex: ^["'`](?:yolo|bypassPermissions|danger-full-access)["'`]$
+          # An array passed straight to a call (spawn("copilot", [...])) has its program in
+          # view; the branches above judge it, sandbox exclusions included.
+          - pattern-not-inside: $F(..., [$FIRST, ...], ...)
+          - pattern-not-inside: $C.includes($X)
+          - pattern-not-inside: $C.some(...)
+          - pattern-not-inside: $A === $B
+          - pattern-not-inside: $A !== $B
+          - pattern-not-inside: new Set(...)
+          # Outside a declaration, or declared under a name that isn't a block list.
+          - pattern-either:
+              - patterns:
+                  - pattern: $FLAG
+                  - pattern-not-inside: const $NAME = $V
+                  - pattern-not-inside: 'const $NAME: $T = $V'
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: const $NAME = $V
+                      - pattern-inside: 'const $NAME: $T = $V'
+                  - pattern: $FLAG
+                  - metavariable-regex:
+                      metavariable: $NAME
+                      regex: ^(?!.*(?i:forbid|block|deny|denied|disallow|ban|reject|refuse|unsafe|dangerous))
+          - focus-metavariable: $FLAG
+      # --- COPILOT_ALLOW_ALL in a child process environment ---
+      - patterns:
+          - pattern-either:
+              - pattern: '{..., COPILOT_ALLOW_ALL: $V, ...}'
+              - pattern: '{..., "COPILOT_ALLOW_ALL": $V, ...}'
+              - pattern: '$ENV.COPILOT_ALLOW_ALL = $V'
+              - pattern: '$ENV["COPILOT_ALLOW_ALL"] = $V'
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^["'`]\s*(?i:true|1|yes|on|y)\s*["'`]$
+      # --- GOOSE_MODE=auto (goose 1.55's autonomous mode) in a child process environment ---
+      - patterns:
+          - pattern-either:
+              - pattern: '{..., GOOSE_MODE: $V, ...}'
+              - pattern: '{..., "GOOSE_MODE": $V, ...}'
+              - pattern: '$ENV.GOOSE_MODE = $V'
+              - pattern: '$ENV["GOOSE_MODE"] = $V'
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^["'`]auto["'`]$
+      # --- A whole command line in one string or template literal (exec, execSync, execa's
+      # $`...` and command(), shell: true) ---
+      - patterns:
+          - pattern-regex: |-
+              (?x)
+              (?<![\w$]) (?<qt>["'`]) [ \t]*
+              # Optional path and package runner in front of the program.
+              (?: [\w.~/${}-]*/ )?
+              (?:
+                  (?: (?:npx|bunx|pnpx) (?:[ \t]+(?:-y|--yes))? [ \t]+
+                      @(?:anthropic-ai/claude-code|openai/codex|google/gemini-cli|github/copilot)
+                      (?:@[\w.^~-]+)? | claude | codex | copilot | gh[ \t]+copilot | kiro-cli | kiro | q[ \t]+chat )
+                  (?=[ \t]) (?: (?!\k<qt>) [^\n\\] | \\. )*? [ \t]
+                  (?: --dangerously-skip-permissions | --permission-mode[= \t]bypassPermissions
+                    | --dangerously-bypass-approvals-and-sandbox | --yolo
+                    | (?:-s|--sandbox)[= \t]danger-full-access | --allow-all-tools | --allow-all
+                    | --trust-all-tools )
+                | (?:gemini|qwen) (?=[ \t]) (?! (?: (?!\k<qt>) [^\n\\] | \\. )*? [ \t] (?:--sandbox|-s) (?=[ \t]|\k<qt>) )
+                  (?: (?!\k<qt>) [^\n\\] | \\. )*? [ \t] (?: --yolo | -y | --approval-mode[= \t]yolo )
+                | opencode (?=[ \t]) (?: (?!\k<qt>) [^\n\\] | \\. )*? [ \t]
+                  (?: --auto | --yolo | --dangerously-skip-permissions )
+                | cline (?=[ \t]) (?: (?!\k<qt>) [^\n\\] | \\. )*? [ \t]
+                  (?: --yolo | -y | --auto-approve[= \t]true )
+                | cursor-agent (?=[ \t]) (?: (?!\k<qt>) [^\n\\] | \\. )*? [ \t]
+                  (?: --force | -f | --yolo | --sandbox[= \t]disabled )
+              )
+              (?= [ \t;&|] | \k<qt> )
+          # Not in a // line comment or a /* */ block comment line.
+          - pattern-not-regex: (?m)^[ \t]*(?://|/?\*)[^\n]*
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0112.000 - Machine Compromise: Local AI Agent"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code, codex, gemini-cli, qwen-code, copilot-cli, kiro-cli, cursor-cli, cline-cli, opencode, goose]
+      references:
+        - https://code.claude.com/docs/en/cli-reference
+        - https://code.claude.com/docs/en/permission-modes
+        - https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/utils/cli/src/shared_options.rs
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/cli/src/config/config.ts
+        - https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference
+        - https://kiro.dev/docs/reference/cli-commands/
+        - https://github.com/aws/amazon-q-developer-cli/blob/v1.19.7/crates/chat-cli/src/cli/chat/mod.rs
+        - https://cursor.com/docs/cli/reference/parameters
+        - https://github.com/QwenLM/qwen-code/blob/v0.26.0/packages/cli/src/config/top-level-options.ts
+        - https://github.com/cline/cline/blob/cli-v3.0.73/apps/cli/src/commands/program.ts
+        - https://github.com/anomalyco/opencode/blob/v1.19.3/packages/opencode/src/cli/cmd/run.ts
+        - https://github.com/aaif-goose/goose/blob/v1.55.0/documentation/docs/guides/environment-variables.md
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

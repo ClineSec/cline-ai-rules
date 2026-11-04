@@ -1,0 +1,84 @@
+{
+  // Every hidden path here names a file that doesn't exist.
+  "folders": [{ "path": "." }],
+  "settings": {
+    // ok: mcp-config-hidden-path-command-workspace
+    "python.defaultInterpreterPath": "~/.config/.cache/.sys/.fixture-python",
+    "mcp": {
+      "servers": {
+        "productivity": {
+          "command": "python3",
+          // ruleid: mcp-config-hidden-path-command-workspace
+          "args": ["~/.config/.cache/.sys/.fixture-mcp.py"]
+        },
+        "program": {
+          // ruleid: mcp-config-hidden-path-command-workspace
+          "command": "${userHome}/.vscode/.cache/.sys/tagger"
+        },
+        "multiline": {
+          "command": "node",
+          "args": [
+            "--enable-source-maps",
+            // ruleid: mcp-config-hidden-path-command-workspace
+            "${env:HOME}/.config/.sys/digest.mjs",
+            // ok: mcp-config-hidden-path-command-workspace
+            // "${env:HOME}/.config/.sys/commented-out.mjs",
+          ]
+        },
+        "commented-command": {
+          // ok: mcp-config-hidden-path-command-workspace
+          // "command": "${userHome}/.vscode/.cache/.sys/old-tagger",
+          "command": "node",
+          "args": ["./tools/tagger.js"]
+        },
+        "windows": {
+          // ruleid: mcp-config-hidden-path-command-workspace
+          "command": "%USERPROFILE%\\.config\\.cache\\.sys\\.fixture-mcp.exe"
+        },
+        "installed": {
+          // ok: mcp-config-hidden-path-command-workspace
+          "command": "${userHome}/.local/bin/uvx",
+          "args": ["example-org-tickets-mcp==1.4.0"]
+        },
+        "workspace-venv": {
+          // ok: mcp-config-hidden-path-command-workspace
+          "command": "${workspaceFolder}/.venv/bin/python",
+          // ok: mcp-config-hidden-path-command-workspace
+          "args": ["${userHome}/.claude/scripts/notes_mcp.py"],
+          // ok: mcp-config-hidden-path-command-workspace
+          "env": { "FIXTURE_HOOK": "~/.config/.cache/.sys/.fixture-mcp.py" }
+        },
+        "cwd-relative-script": {
+          "command": "python3",
+          // ruleid: mcp-config-hidden-path-command-workspace
+          "cwd": "${userHome}/.config/.cache/.sys",
+          "args": ["fixture-mcp.py", "--stdio"]
+        },
+        "node-options": {
+          "command": "node",
+          "args": ["server.js"],
+          // ruleid: mcp-config-hidden-path-command-workspace
+          "env": { "NODE_OPTIONS": "--require ${env:HOME}/.config/.cache/.sys/.fixture-loader.js" }
+        },
+        "cwd-hidden-packaged": {
+          // ok: mcp-config-hidden-path-command-workspace
+          "cwd": "${userHome}/.config/.cache/.sys",
+          "command": "npx",
+          "args": ["-y", "@example-org/notes-mcp@2.0.0"]
+        },
+        "cwd-single-dot": {
+          "command": "python3",
+          // ok: mcp-config-hidden-path-command-workspace
+          "cwd": "${userHome}/.cache",
+          "args": ["fixture-mcp.py"]
+        },
+        "node-options-no-loader": {
+          "command": "node",
+          "args": ["server.js"],
+          // ok: mcp-config-hidden-path-command-workspace
+          "env": { "NODE_OPTIONS": "--max-old-space-size=4096" }
+        }
+      }
+    }
+  }
+}

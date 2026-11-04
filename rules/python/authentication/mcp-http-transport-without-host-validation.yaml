@@ -1,0 +1,164 @@
+rules:
+  - id: mcp-http-transport-without-host-validation
+    # Sources: MCP Python SDK v2.3.0 and v1.30.0 (StreamableHTTPSessionManager and
+    # SseServerTransport take security_settings=None, and TransportSecurityMiddleware(None)
+    # turns the check off; MCPServer, FastMCP and the low-level app factories turn it on
+    # themselves only for a 127.0.0.1 / localhost / ::1 host; TransportSecuritySettings(
+    # enable_dns_rebinding_protection=False) turns it off) and PrefectHQ fastmcp 4.1.3
+    # (settings.http_host_origin_protection defaults to False, and False removes both
+    # fastmcp's Host/Origin guard and the SDK's; run(), run_http_async() and http_app() take
+    # host_origin_protection=True | "auto"). CVE-2025-66416 (GHSA-9h52-p55h-vw2f).
+    # FASTMCP_HTTP_HOST_ORIGIN_PROTECTION in the environment can't be seen here. Servers bound
+    # to every interface are reported by mcp-server-exposed-without-auth, including a fastmcp
+    # server whose FASTMCP_HOST is set to one in this file before fastmcp is imported.
+    languages: [python]
+    severity: WARNING
+    message: >-
+      This MCP HTTP server runs with no Host or Origin check and the file sets up no
+      authentication, so any web page the user opens can reach it through DNS rebinding: the
+      page's own hostname is re-pointed at 127.0.0.1, and the browser then sends the page's
+      requests to this server and hands the responses back to it, which lets the page call the
+      server's tools. Keep the SDK's check on (pass `security_settings=TransportSecuritySettings(
+      allowed_hosts=[...], allowed_origins=[...])`, don't set
+      `enable_dns_rebinding_protection=False`), pass `host_origin_protection="auto"` (or True
+      with `allowed_hosts`) to fastmcp, or require auth on the server.
+    patterns:
+      - pattern-either:
+          # The SDK's session manager and SSE transport, used directly.
+          - patterns:
+              - pattern-either:
+                  - patterns:
+                      - pattern: $CLS(...)
+                      - pattern-not: $CLS(..., security_settings=$SEC, ...)
+                  - pattern: $CLS(..., security_settings=None, ...)
+              - metavariable-pattern:
+                  metavariable: $CLS
+                  pattern-either:
+                    - pattern: mcp.server.streamable_http_manager.StreamableHTTPSessionManager
+                    - pattern: mcp.server.sse.SseServerTransport
+          # The SDK's check switched off by hand, on a server that isn't also bound to every
+          # interface (that one is reported by mcp-server-exposed-without-auth).
+          - patterns:
+              - pattern: mcp.server.transport_security.TransportSecuritySettings(..., enable_dns_rebinding_protection=False, ...)
+              - pattern-not-inside: $K(..., host="=~/^(0\.0\.0\.0|::|\[::\])$/", ...)
+          # Standalone fastmcp served over HTTP without host_origin_protection.
+          - patterns:
+              - pattern-inside: |
+                  $S = $FCLS(...)
+                  ...
+              - metavariable-pattern:
+                  metavariable: $FCLS
+                  pattern-either:
+                    - pattern: fastmcp.FastMCP
+                    - pattern: fastmcp.server.FastMCP
+                    - pattern: fastmcp.server.server.FastMCP
+              - pattern-not-inside: |
+                  $S = $FCLS(..., auth=$A, ...)
+                  ...
+              - pattern-not-inside: |
+                  $S.auth = $A
+                  ...
+              - pattern-not-inside: |
+                  fastmcp.settings.http_host_origin_protection = $V
+                  ...
+              - pattern-either:
+                  - pattern: $S.run("=~/^(http|sse|streamable-http)$/", ...)
+                  - pattern: $S.run(..., transport="=~/^(http|sse|streamable-http)$/", ...)
+                  - pattern: $S.run_async("=~/^(http|sse|streamable-http)$/", ...)
+                  - pattern: $S.run_async(..., transport="=~/^(http|sse|streamable-http)$/", ...)
+                  - pattern: $S.run_http_async(...)
+                  - pattern: $S.http_app(...)
+              # Protection asked for (any value but False).
+              - pattern-either:
+                  - patterns:
+                      - pattern: $S.$M(...)
+                      - pattern-not: $S.$M(..., host_origin_protection=$HOP, ...)
+                  - pattern: $S.$M(..., host_origin_protection=False, ...)
+              # Only a loopback or default host: an all-interfaces one is reported by
+              # mcp-server-exposed-without-auth, and any other host is left alone.
+              - pattern-either:
+                  - patterns:
+                      - pattern: $S.$M(...)
+                      - pattern-not: $S.$M(..., host=$HOST, ...)
+                      # FASTMCP_HOST set to every interface before fastmcp is first
+                      # imported (fastmcp reads it then, 2.8.0 to 4.1.4), and no host=
+                      # overrides it: mcp-server-exposed-without-auth reports that one.
+                      - pattern-not-inside:
+                          patterns:
+                            - pattern-either:
+                                - pattern-inside: |
+                                    os.environ["FASTMCP_HOST"] = $ALLH
+                                    ...
+                                    import fastmcp
+                                    ...
+                                - pattern-inside: |
+                                    os.environ.setdefault("FASTMCP_HOST", $ALLH)
+                                    ...
+                                    import fastmcp
+                                    ...
+                                - pattern-inside: |
+                                    os.environ.update(..., FASTMCP_HOST=$ALLH, ...)
+                                    ...
+                                    import fastmcp
+                                    ...
+                                - pattern-inside: |
+                                    os.environ.update({..., "FASTMCP_HOST": $ALLH, ...}, ...)
+                                    ...
+                                    import fastmcp
+                                    ...
+                            # Not when fastmcp was already imported above it (its settings
+                            # were read then), even if another fastmcp import follows.
+                            - pattern-not-inside: |
+                                import fastmcp
+                                ...
+                            - metavariable-pattern:
+                                metavariable: $ALLH
+                                pattern: '"=~/^(0\.0\.0\.0|::|\[::\])$/"'
+                  - pattern: $S.$M(..., host="=~/^(127\.0\.0\.1|localhost|::1)$/", ...)
+              - pattern-not-inside: uvicorn.$U(..., host="=~/^(0\.0\.0\.0|::|\[::\])$/", ...)
+              - pattern-not-inside: |
+                  $APP = $S.http_app(...)
+                  ...
+                  uvicorn.$U($APP, ..., host="=~/^(0\.0\.0\.0|::|\[::\])$/", ...)
+      # No authentication anywhere in the file: an SDK verifier or provider, the SDK's auth
+      # middleware, fastmcp's auth=, a middleware whose name says auth, JWT, bearer, or API
+      # key, or a check of the Authorization or X-API-Key header. One simple regex per signal
+      # (a single alternation scanned from the start of the file hits PCRE's match limit).
+      - pattern-not-regex: (?s)\A(?=.*?\b(?:token_verifier|auth_server_provider)\s*=).*
+      - pattern-not-regex: (?s)\A(?=.*?\b(?:RequireAuthMiddleware|BearerAuthBackend|AuthenticationMiddleware)\b).*
+      - pattern-not-regex: (?s)\A(?=.*?\bauth\s*=\s*(?!None\b)).*
+      - pattern-not-regex: (?s)\A(?=.*?(?:add_middleware|Middleware)\s*\(\s*[\w.]*(?i:auth|jwt|bearer|api_?key)).*
+      - pattern-not-regex: (?s)\A(?=.*?(?i:headers\s*(?:\.get\s*\(|\[)\s*["'](?:authorization|x-api-key)["'])).*
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI03 - Identity and Privilege Abuse"
+      owasp-mcp:
+        - "MCP07:2025 - Insufficient Authentication & Authorization"
+      owasp-aisvs:
+        - "v1.01-C10.3.3 - Secure Transport"
+        - "v1.01-C10.2.1 - Authentication & Authorization"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-346: Origin Validation Error"
+        - "CWE-1188: Initialization of a Resource with an Insecure Default"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, fastmcp, starlette]
+      references:
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/streamable_http_manager.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/sse.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/transport_security.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v1.30.0/src/mcp/server/streamable_http_manager.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/server/http.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/settings.py
+        - https://github.com/modelcontextprotocol/python-sdk/security/advisories/GHSA-9h52-p55h-vw2f
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP07-2025%E2%80%93Insufficient-Authentication%26Authorization.md
+        - https://cwe.mitre.org/data/definitions/346.html

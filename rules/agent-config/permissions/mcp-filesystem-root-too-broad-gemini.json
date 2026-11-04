@@ -1,0 +1,25 @@
+// Gemini CLI's format (.gemini/settings.json, gemini-extension.json): $VAR and ${VAR} expand.
+{
+  "mcpServers": {
+    "home": {
+      "command": "npx",
+      // ruleid: mcp-filesystem-root-too-broad-gemini
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "$HOME/"]
+    },
+    "default": {
+      "command": "npx",
+      // ruleid: mcp-filesystem-root-too-broad-gemini
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${HOME:-/home/fixture-user}"]
+    },
+    "user": {
+      "command": "npx",
+      // ruleid: mcp-filesystem-root-too-broad-gemini
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "/home/$USER"]
+    },
+    "unexpanded": {
+      "command": "npx",
+      // ok: mcp-filesystem-root-too-broad-gemini
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${userHome}", "${env:HOME}", "$HOME/src/fixture-app"]
+    }
+  }
+}

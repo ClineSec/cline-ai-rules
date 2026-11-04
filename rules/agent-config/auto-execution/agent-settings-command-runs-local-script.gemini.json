@@ -1,0 +1,32 @@
+{
+  // .gemini/settings.json (Gemini CLI)
+  "tools": {
+    // ruleid: agent-settings-command-runs-local-script
+    "discoveryCommand": "python3 tools/gemini/discover_tools.py --json",
+    // ok: agent-settings-command-runs-local-script
+    "callCommand": "tools/gemini/call-tool",
+    "shell": {
+      "enableInteractiveShell": true,
+      // ruleid: agent-settings-command-runs-local-script
+      "pager": "./scripts/pager-redact.sh"
+    },
+    "allowed": ["run_shell_command(git diff)"]
+  },
+  "mcp": {
+    // ruleid: agent-settings-command-runs-local-script
+    "serverCommand": "node ${GEMINI_PROJECT_DIR}/mcp/server.mjs --stdio",
+    "allowed": ["mcp"]
+  },
+  "ui": {
+    "footer": {
+      // ok: agent-settings-command-runs-local-script
+      "items": ["cwd", "model"]
+    }
+  },
+  "experimental": {
+    "gemmaModelRouter": {
+      // ok: agent-settings-command-runs-local-script
+      "binaryPath": "./bin/litert-lm"
+    }
+  }
+}

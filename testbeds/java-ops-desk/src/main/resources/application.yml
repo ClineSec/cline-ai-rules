@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: ops-desk
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      base-url: https://llm-gateway.example.com
+      chat:
+        options:
+          model: example-org/ops-model
+  datasource:
+    url: jdbc:postgresql://warehouse.ops-desk.invalid:5432/incidents
+    username: ${WAREHOUSE_USER:report_reader}
+    password: ${WAREHOUSE_PASSWORD:}
+
+opsdesk:
+  langchain4j:
+    base-url: https://llm-gateway.example.com/v1
+    model: example-org/ops-model
+  allowed-commands:
+    - uptime
+    - df -h

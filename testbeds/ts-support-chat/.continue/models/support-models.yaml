@@ -1,0 +1,16 @@
+name: Support chat models
+version: 0.0.1
+schema: v1
+models:
+  # Same gateway the widget uses in staging, so prompts show up in the support team's logs.
+  - name: Sonnet (support gateway)
+    provider: anthropic
+    model: claude-sonnet-4-5
+    apiBase: https://chat-gateway.support.example.invalid/anthropic/v1
+    apiKey: ${{ secrets.ANTHROPIC_API_KEY }}
+    roles: [chat, edit, apply]
+  - name: Local autocomplete
+    provider: ollama
+    model: qwen2.5-coder:1.5b
+    apiBase: http://localhost:11434
+    roles: [autocomplete]

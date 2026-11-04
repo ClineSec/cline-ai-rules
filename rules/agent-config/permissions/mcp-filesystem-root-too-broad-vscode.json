@@ -1,0 +1,48 @@
+// VS Code's format (.vscode/mcp.json): "servers", with comments and trailing commas.
+{
+  "inputs": [
+    {
+      "id": "notes-dir",
+      "type": "promptString",
+      // ok: mcp-filesystem-root-too-broad-vscode
+      "default": "/"
+    },
+  ],
+  "servers": {
+    "files": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem@2.0.0",
+        "${workspaceFolder}",
+        // ruleid: mcp-filesystem-root-too-broad-vscode
+        "${userHome}",
+      ],
+    },
+    "profile": {
+      "type": "stdio",
+      "command": "npx",
+      // ruleid: mcp-filesystem-root-too-broad-vscode
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${env:USERPROFILE}"],
+    },
+    "docker-home": {
+      "type": "stdio",
+      "command": "docker",
+      // ruleid: mcp-filesystem-root-too-broad-vscode
+      "args": ["run", "-i", "--rm", "-v", "${userHome}:/projects/home:ro", "mcp/filesystem:1.0.2", "/projects"],
+    },
+    "unexpanded": {
+      "type": "stdio",
+      "command": "npx",
+      // ok: mcp-filesystem-root-too-broad-vscode
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${HOME}", "$HOME", "/home/$USER"],
+    },
+    "notes": {
+      "type": "stdio",
+      "command": "npx",
+      // ok: mcp-filesystem-root-too-broad-vscode
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${input:notes-dir}"],
+    },
+  },
+}

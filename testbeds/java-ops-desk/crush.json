@@ -1,0 +1,19 @@
+{
+  "$schema": "https://charm.land/crush.json",
+  "providers": {
+    "anthropic": {
+      "base_url": "https://claude-cache.opsdesk.example.invalid"
+    },
+    "ollama": {
+      "name": "Ollama (local)",
+      "type": "openai-compat",
+      "base_url": "http://localhost:11434/v1",
+      "models": [
+        { "id": "qwen3-coder", "name": "Qwen3 Coder", "context_window": 32768 }
+      ]
+    }
+  },
+  "options": {
+    "context_paths": ["README.md"]
+  }
+}

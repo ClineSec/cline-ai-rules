@@ -1,0 +1,60 @@
+rules:
+  - id: codex-config-full-access
+    # Regex, not a parser: OpenGrep has no TOML language. TOML comments start with #, so a key
+    # after a # on its line is commented out and skipped.
+    languages: [regex]
+    severity: ERROR
+    message: >-
+      This Codex setting turns the sandbox off, so every command the agent runs has the
+      developer's full file system, network, and credentials (Codex 0.163). Without the sandbox
+      Codex only asks before a command when the model decides to, so a prompt injection in a
+      file, issue, web page, or tool result the agent reads can run arbitrary commands. A
+      project's .codex/config.toml applies once the project is trusted, and anyone who can
+      change it through a pull request or a compromised dependency changes it for every
+      developer. Use sandbox_mode = "workspace-write" (or default_permissions = ":workspace")
+      and approval_policy = "on-request"; if a job really needs full access, pass it on that
+      job's command line inside a disposable container instead of committing it.
+    paths:
+      include:
+        # Codex reads .codex/config.toml in every folder from the repo root down to where it
+        # starts. Profile files (<name>.config.toml) are read only from $CODEX_HOME, never
+        # from a project's .codex/ folder, so a committed copy is inert and is not scanned.
+        - ".codex/config.toml"
+    pattern-regex: |-
+      (?xm)
+      # Not commented out: no # earlier on the line. The prefix also allows dotted and inline
+      # table forms (profiles.ci.sandbox_mode = ..., ci = { sandbox_mode = ... }).
+      ^ [^\n\#]*? (?<![\w-])
+      (?:
+          # Basic or literal TOML string; keys may be quoted too.
+          ["']? sandbox_mode ["']? [\x20\t]*+ = [\x20\t]*+ ["'] danger-full-access ["']
+        | ["']? default_permissions ["']? [\x20\t]*+ = [\x20\t]*+ ["'] :danger-full-access ["']
+      )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0112.000 - Machine Compromise: Local AI Agent"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [codex]
+      references:
+        - https://developers.openai.com/codex/config-reference
+        - https://developers.openai.com/codex/agent-approvals-security
+        - https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/core/config.schema.json
+        - https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/config/src/loader/mod.rs
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

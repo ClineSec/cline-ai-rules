@@ -1,0 +1,1008 @@
+rules:
+  - id: llm-markdown-remote-image-render-py
+    # The pattern-sources and pattern-propagators are shared with llm-output-rendered-as-html,
+    # and so are the last ten pattern-sanitizers entries (build.py SHARED_BLOCKS
+    # "model-output ... (Python, rendering)"): edit them with their group.
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Model output is rendered as Markdown here with nothing restricting image URLs. The
+      renderer turns `![x](https://host/?q=...)` into an `<img>` that the browser fetches as soon
+      as the answer appears, so anyone who can steer the model (through a web page, document,
+      ticket, or tool result it reads) can make it put conversation data, retrieved documents,
+      or secrets into an image URL on their own server, with no click (EchoLeak-style
+      exfiltration). In an email, the reader's mail client can make the same request.
+      Streamlit, Gradio, Chainlit, NiceGUI, and Dash have no setting that limits image hosts
+      (Streamlit only blocks javascript: URLs, and Gradio's sanitizer keeps `img src`), so
+      remove or rewrite images in the model's text before showing it: replace `![alt](url)`
+      with its alt text or a plain link and drop `<img>` tags, or keep only images on hosts you
+      allow. When you convert Markdown to HTML yourself (Python-Markdown, markdown-it-py,
+      mistune), turn images off (markdown-it-py: `md.disable("image")`), override the image
+      renderer, or clean the HTML with `bleach.clean`, whose default tags drop `img` (nh3's
+      defaults keep it). A Content-Security-Policy `img-src` allowlist on the page also stops
+      the fetch, but this rule can't see your CSP: if one is in place, treat the finding as
+      covered.
+    mode: taint
+    pattern-sources:
+      - pattern: $CLIENT.chat.completions.create(...)
+      - pattern: $CLIENT.responses.create(...)
+      - pattern: $CLIENT.messages.create(...)
+      - pattern: litellm.completion(...)
+      - pattern: litellm.acompletion(...)
+      - pattern: $LLM.invoke(...)
+      - pattern: $LLM.ainvoke(...)
+      # Agent SDKs (claude-agent-sdk 0.2.173, openai-agents 0.24.0): Claude Agent SDK query()
+      # and ClaudeSDKClient messages (`message.result`), and OpenAI Agents Runner results
+      # (`result.final_output`).
+      - pattern: claude_agent_sdk.query(...)
+      - patterns:
+          - pattern-inside: |
+              async with claude_agent_sdk.ClaudeSDKClient(...) as $SDK:
+                  ...
+          - pattern-either:
+              - pattern: $SDK.receive_response(...)
+              - pattern: $SDK.receive_messages(...)
+      - pattern: agents.Runner.run(...)
+      - pattern: agents.Runner.run_sync(...)
+      - pattern: agents.Runner.run_streamed(...)
+      # Streaming and the Google Gen AI SDK (google-genai 2.33.0): Chat Completions and
+      # Messages streams, generate_content / generate_content_stream (also `client.aio`), and
+      # chat sessions.
+      - pattern: $CLIENT.chat.completions.stream(...)
+      - pattern: $CLIENT.messages.stream(...)
+      - pattern: $CLIENT.models.generate_content(...)
+      - pattern: $CLIENT.models.generate_content_stream(...)
+      - patterns:
+          - pattern-inside: |
+              $CHAT = $CLIENT.chats.create(...)
+              ...
+          - pattern-either:
+              - pattern: $CHAT.send_message(...)
+              - pattern: $CHAT.send_message_stream(...)
+      # LangChain / LangGraph runnables streamed or batched (`for chunk in llm.stream(q)`).
+      # `.stream` is a common method name (a Panel chat feed has one), so require a LangChain
+      # or LangGraph import in the file or a receiver named like a model, chain, or graph.
+      - patterns:
+          - pattern-either:
+              - pattern: $RUNNABLE.stream(...)
+              - pattern: $RUNNABLE.astream(...)
+              - pattern: $RUNNABLE.batch(...)
+              - pattern: $RUNNABLE.abatch(...)
+          - pattern-either:
+              - patterns:
+                  - pattern: $RUNNABLE.$M(...)
+                  - pattern-not-regex: '\A(?:(?![ \t]*+(?:import|from)[ \t]++(?:langchain\w*|langgraph)\b)[^\n]*+\n)*+(?![ \t]*+(?:import|from)[ \t]++(?:langchain\w*|langgraph)\b)[^\n]*+\z'
+              - patterns:
+                  - pattern: $RUNNABLE.$M(...)
+                  - metavariable-regex:
+                      metavariable: $RUNNABLE
+                      regex: (?i)^(?:\w+\.)*\w*(?:llm|model|chain|agent|graph|runnable)$
+      # --- Sources of this rule only. ---
+      # Agent frameworks (agno 3.1.11, CrewAI 1.15.33, pydantic-ai 2.63.0, smolagents 1.26.0,
+      # AG2 0.14 `autogen`, autogen-agentchat 0.7.5): what an agent, team, or crew run returns
+      # (`agent.run(q).content`, `crew.kickoff().raw`, `chat.summary`, `result.output`,
+      # pydantic-ai `run_stream()` text). `.run` is a common method name, so require one of
+      # these frameworks imported in the file (not asyncio.run or subprocess.run), or a receiver
+      # named like an agent, crew, or team.
+      - patterns:
+          - pattern: $AGENT.$RUN(...)
+          - metavariable-regex:
+              metavariable: $RUN
+              regex: ^(?:a?_?run|run_sync|run_stream|run_stream_sync|kickoff|kickoff_async|kickoff_for_each|kickoff_for_each_async|a?_?initiate_chats?)$
+          - pattern-either:
+              - patterns:
+                  - pattern: $AGENT.$RUN(...)
+                  - pattern-not-regex: '\A(?:(?![ \t]*+(?:import|from)[ \t]++(?:agno|crewai|pydantic_ai|smolagents|autogen|autogen_agentchat)\b)[^\n]*+\n)*+(?![ \t]*+(?:import|from)[ \t]++(?:agno|crewai|pydantic_ai|smolagents|autogen|autogen_agentchat)\b)[^\n]*+\z'
+                  - metavariable-regex:
+                      metavariable: $AGENT
+                      regex: ^(?!(?:asyncio|subprocess|trio|anyio|uvicorn|loop)$)
+              - patterns:
+                  - pattern: $AGENT.$RUN(...)
+                  - metavariable-regex:
+                      metavariable: $AGENT
+                      regex: (?i)^(?:\w+\.)*\w*(?:agent|crew|team)$
+      # A generator in this file that streams such a run out (`async def stream_answer(q):`
+      # around `agent.run_stream(q)`), wherever it is called; --taint-intrafile isn't needed.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async def $GEN(...):
+                      $...BODY
+                  ...
+              - pattern-inside: |
+                  def $GEN(...):
+                      $...BODY
+                  ...
+              # Defined below its caller, which then has to be a function itself.
+              - pattern-inside: |
+                  async def $CALLER(...):
+                      ...
+                  ...
+                  async def $GEN(...):
+                      $...BODY
+              - pattern-inside: |
+                  def $CALLER(...):
+                      ...
+                  ...
+                  def $GEN(...):
+                      $...BODY
+          - pattern: $GEN(...)
+          - pattern-not-inside: |
+              async def $GEN(...):
+                  ...
+          - pattern-not-inside: |
+              def $GEN(...):
+                  ...
+          - metavariable-pattern:
+              metavariable: $...BODY
+              pattern-either:
+                - pattern: yield $Y
+                - pattern: yield from $Y
+          - metavariable-pattern:
+              metavariable: $...BODY
+              patterns:
+                - pattern: $AGENT.$RUN(...)
+                - metavariable-regex:
+                    metavariable: $RUN
+                    regex: ^(?:a?_?run|run_sync|run_stream|run_stream_sync|kickoff|kickoff_async|a?_?initiate_chat)$
+          - pattern-either:
+              - patterns:
+                  - pattern: $GEN(...)
+                  - pattern-not-regex: '\A(?:(?![ \t]*+(?:import|from)[ \t]++(?:agno|crewai|pydantic_ai|smolagents|autogen|autogen_agentchat)\b)[^\n]*+\n)*+(?![ \t]*+(?:import|from)[ \t]++(?:agno|crewai|pydantic_ai|smolagents|autogen|autogen_agentchat)\b)[^\n]*+\z'
+              - patterns:
+                  - pattern: $GEN(...)
+                  - metavariable-pattern:
+                      metavariable: $...BODY
+                      patterns:
+                        - pattern: $AGENT.$RUN(...)
+                        - metavariable-regex:
+                            metavariable: $RUN
+                            regex: ^(?:a?_?run|run_sync|run_stream|run_stream_sync|kickoff|kickoff_async|a?_?initiate_chat)$
+                        - metavariable-regex:
+                            metavariable: $AGENT
+                            regex: (?i)^(?:\w+\.)*\w*(?:agent|crew|team)$
+      # A pydantic-ai message part the model wrote (`if part.part_kind == "text":` or
+      # `isinstance(part, TextPart)`, then `part.content`), in the branch itself, not its else.
+      - patterns:
+          - pattern: $PART.content
+          - pattern-not-regex: '\A(?:(?![ \t]*+(?:import|from)[ \t]++pydantic_ai\b)[^\n]*+\n)*+(?![ \t]*+(?:import|from)[ \t]++pydantic_ai\b)[^\n]*+\z'
+          - patterns:
+              - pattern-either:
+                  - pattern: |
+                      if $PART.part_kind == "text":
+                          $...THEN
+                  - patterns:
+                      - pattern: |
+                          if isinstance($PART, $TEXTPART):
+                              $...THEN
+                      - metavariable-regex:
+                          metavariable: $TEXTPART
+                          regex: ^(?:\w+\.)*TextPart$
+              - focus-metavariable: $...THEN
+      # A Streamlit chat app keeps the conversation, model replies included, in session state
+      # and renders all of it again on every rerun, so a chat-history key is model output. A
+      # game's move log (`move_history`) isn't a chat.
+      - patterns:
+          - pattern-either:
+              - pattern: streamlit.session_state.$KEY
+              - pattern: streamlit.session_state[$KEY]
+              - pattern: streamlit.session_state.get($KEY, ...)
+          - metavariable-regex:
+              metavariable: $KEY
+              regex: (?i)^["']?(?!moves?_)\w*(?:messages|history|chat|conversation|transcript|answer|response|reply|completion)\w*["']?$
+    pattern-propagators:
+      # A reply appended to a chat history list taints the list (`history.append({...})`,
+      # then `return "", history` to a Gradio Chatbot).
+      - pattern: $L.append($X)
+        from: $X
+        to: $L
+      - pattern: $L.extend($X)
+        from: $X
+        to: $L
+      - pattern: $L.insert($I, $X)
+        from: $X
+        to: $L
+    pattern-sinks:
+      # Streamlit 1.66.1: st.markdown, st.caption, st.write, st.write_stream, the st.info /
+      # success / warning / error bodies, and st.toast render Markdown with react-markdown and a
+      # urlTransform that blocks only javascript: and vbscript:, so https images load, with or
+      # without `unsafe_allow_html`. On `st`, `st.sidebar`, `st.chat_message(...)`, or a
+      # container named here (`box = st.empty()`, `left, right = st.columns(2)`,
+      # `for col, item in zip(st.columns(3), items)`, `with st.chat_message("assistant") as
+      # turn`). Escaped text inside a `<pre>` or `<textarea>` block isn't parsed as Markdown.
+      - patterns:
+          - pattern-either:
+              - pattern: streamlit.$M(...)
+              - pattern: streamlit.$C.$M(...)
+              - pattern: streamlit.$F(...).$M(...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $DG = streamlit.$F(...)
+                          ...
+                      - pattern-inside: |
+                          (..., $DG, ...) = streamlit.$F(...)
+                          ...
+                      - pattern-inside: |
+                          with streamlit.$F(...) as $DG:
+                              ...
+                      - pattern-inside: |
+                          for $DG in streamlit.$F(...):
+                              ...
+                      - pattern-inside: |
+                          for (..., $DG, ...) in zip(..., streamlit.$F(...), ...):
+                              ...
+                      - pattern-inside: |
+                          for (..., $DG, ...) in enumerate(streamlit.$F(...), ...):
+                              ...
+                  - pattern: $DG.$M(...)
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(?:markdown|caption|write|write_stream|info|success|warning|error|toast)$
+          # Any argument of st.write, but not a dict or list, which it shows with st.json
+          # (streamlit 1.66.1 elements/write.py). One pattern-either binds $MD for both
+          # cases: a second one re-matching every call made the rule about 20% slower.
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: $DG.$M($MD, ...)
+                      - pattern: $DG.$M(..., body=$MD, ...)
+                  - metavariable-regex:
+                      metavariable: $M
+                      regex: ^(?!write$)
+              - patterns:
+                  - pattern: $DG.write(..., $MD, ...)
+                  - metavariable-regex:
+                      metavariable: $MD
+                      regex: ^(?![\[{])
+                  - pattern-not-inside: |
+                      $MD = {...}
+                      ...
+                  - pattern-not-inside: |
+                      $MD = [...]
+                      ...
+          # Not in the user's own chat bubble.
+          - pattern-not-inside: |
+              with streamlit.chat_message("=~/^(?:user|human)$/", ...):
+                  ...
+          - pattern-not-inside: streamlit.chat_message("=~/^(?:user|human)$/", ...).$W(...)
+          - metavariable-regex:
+              metavariable: $MD
+              regex: (?s)^(?!f["']{1,3}\s*<(?:pre|textarea)\b(?:[^{}]|\{\s*(?:html\.|markupsafe\.)?escape\([^{}]*\)\s*\})*["']{1,3}$)
+          - focus-metavariable: $MD
+      # Gradio 6.30.0: gr.Markdown and gr.Chatbot render Markdown with marked and then sanitize
+      # with amuchina, which keeps `img src` over https; `sanitize_html=False` and
+      # `render_markdown=False` don't change that (a Chatbot without Markdown still shows an
+      # `<img>` tag).
+      - patterns:
+          - pattern-either:
+              - pattern: gradio.Markdown($MD, ...)
+              - pattern: gradio.Markdown(..., value=$MD, ...)
+              - pattern: gradio.Chatbot($MD, ...)
+              - pattern: gradio.Chatbot(..., value=$MD, ...)
+          - focus-metavariable: $MD
+      # What a gr.ChatInterface function returns or yields goes to its Chatbot.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  import gradio
+                  ...
+                  <... gradio.ChatInterface($FN, ...) ...>
+              - pattern-inside: |
+                  import gradio
+                  ...
+                  <... gradio.ChatInterface(..., fn=$FN, ...) ...>
+          - pattern-inside: |
+              def $FN(...):
+                  ...
+          - pattern-either:
+              - pattern: return $MD
+              - pattern: yield $MD
+          - focus-metavariable: $MD
+      # A Gradio event handler's return or yield value, when the output it fills is a Markdown
+      # or Chatbot given inline (`outputs=gr.Markdown()`, the "markdown" and "chatbot"
+      # shortcuts). With a list of outputs, the returned tuple is matched by position (the first
+      # three outputs).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  import gradio
+                  ...
+                  <... gradio.Interface($FN, $IN, $OUT, ...) ...>
+              - pattern-inside: |
+                  import gradio
+                  ...
+                  <... gradio.Interface($FN, ..., outputs=$OUT, ...) ...>
+              - pattern-inside: |
+                  import gradio
+                  ...
+                  <... gradio.Interface(..., fn=$FN, ..., outputs=$OUT, ...) ...>
+              - patterns:
+                  - pattern-inside: |
+                      import gradio
+                      ...
+                      <... $T.$EV($FN, $IN, $OUT, ...) ...>
+                  - metavariable-regex:
+                      metavariable: $EV
+                      regex: ^(?:click|submit|change|input|select|upload|release|blur|focus|load|then|success|on|stream|tick|like|retry|undo|edit|clear|key_up|double_click|apply|example_select|option_select|play|pause|stop|end|expand|collapse|copy|delete|download|start_recording|stop_recording|pause_recording)$
+              - patterns:
+                  - pattern-inside: |
+                      import gradio
+                      ...
+                      <... $T.$EV($FN, ..., outputs=$OUT, ...) ...>
+                  - metavariable-regex:
+                      metavariable: $EV
+                      regex: ^(?:click|submit|change|input|select|upload|release|blur|focus|load|then|success|on|stream|tick|like|retry|undo|edit|clear|key_up|double_click|apply|example_select|option_select|play|pause|stop|end|expand|collapse|copy|delete|download|start_recording|stop_recording|pause_recording)$
+              - patterns:
+                  - pattern-inside: |
+                      import gradio
+                      ...
+                      <... $T.$EV(..., fn=$FN, ..., outputs=$OUT, ...) ...>
+                  - metavariable-regex:
+                      metavariable: $EV
+                      regex: ^(?:click|submit|change|input|select|upload|release|blur|focus|load|then|success|on|stream|tick|like|retry|undo|edit|clear|key_up|double_click|apply|example_select|option_select|play|pause|stop|end|expand|collapse|copy|delete|download|start_recording|stop_recording|pause_recording)$
+              - patterns:
+                  - pattern-inside: |
+                      @$T.$EV(..., outputs=$OUT, ...)
+                      def $FN(...):
+                          ...
+                  - metavariable-regex:
+                      metavariable: $EV
+                      regex: ^(?:click|submit|change|input|select|upload|release|blur|focus|load|then|success|on|stream|tick|like|retry|undo|edit|clear|key_up|double_click|apply|example_select|option_select|play|pause|stop|end|expand|collapse|copy|delete|download|start_recording|stop_recording|pause_recording)$
+          - pattern-inside: |
+              def $FN(...):
+                  ...
+          - metavariable-regex:
+              metavariable: $OUT
+              regex: (?s)(?:.*\b(?:Markdown|Chatbot)\(|^["'](?:markdown|chatbot)["']$)
+          - pattern-either:
+              - pattern: return $RET
+              - pattern: yield $RET
+          - pattern-either:
+              - pattern: return $MD
+              - pattern: yield $MD
+              - pattern: return ($MD, ...)
+              - pattern: yield ($MD, ...)
+              - pattern: return ($R0, $MD, ...)
+              - pattern: yield ($R0, $MD, ...)
+              - pattern: return ($R0, $R1, $MD, ...)
+              - pattern: yield ($R0, $R1, $MD, ...)
+          - metavariable-pattern:
+              metavariable: $OUT
+              pattern-either:
+                - patterns:
+                    - pattern: $USE
+                    - metavariable-comparison:
+                        comparison: str($USE) == str($OUT) and str($MD) == str($RET)
+                    - metavariable-regex:
+                        metavariable: $USE
+                        regex: ^(?:["'](?:markdown|chatbot)["']|(?:(?:gr|gradio)\.)?(?:Markdown|Chatbot)\()
+                - patterns:
+                    - pattern: '[$USE]'
+                    - metavariable-comparison:
+                        comparison: str($MD) == str($RET)
+                    - metavariable-regex:
+                        metavariable: $USE
+                        regex: ^(?:["'](?:markdown|chatbot)["']|(?:(?:gr|gradio)\.)?(?:Markdown|Chatbot)\()
+                - patterns:
+                    - pattern: '[$USE, $U1, ...]'
+                    - metavariable-regex:
+                        metavariable: $USE
+                        regex: ^(?:["'](?:markdown|chatbot)["']|(?:(?:gr|gradio)\.)?(?:Markdown|Chatbot)\()
+                    - metavariable-pattern:
+                        metavariable: $RET
+                        patterns:
+                          - pattern: ($P0, $P1, ...)
+                          - metavariable-comparison:
+                              comparison: str($P0) == str($MD)
+                - patterns:
+                    - pattern: '[$U0, $USE, ...]'
+                    - metavariable-regex:
+                        metavariable: $USE
+                        regex: ^(?:["'](?:markdown|chatbot)["']|(?:(?:gr|gradio)\.)?(?:Markdown|Chatbot)\()
+                    - metavariable-pattern:
+                        metavariable: $RET
+                        patterns:
+                          - pattern: ($P0, $P1, ...)
+                          - metavariable-comparison:
+                              comparison: str($P1) == str($MD)
+                - patterns:
+                    - pattern: '[$U0, $U1, $USE, ...]'
+                    - metavariable-regex:
+                        metavariable: $USE
+                        regex: ^(?:["'](?:markdown|chatbot)["']|(?:(?:gr|gradio)\.)?(?:Markdown|Chatbot)\()
+                    - metavariable-pattern:
+                        metavariable: $RET
+                        patterns:
+                          - pattern: ($P0, $P1, $P2, ...)
+                          - metavariable-comparison:
+                              comparison: str($P2) == str($MD)
+          - focus-metavariable: $MD
+      # The same, when the output is a Markdown or Chatbot assigned to a name in this file
+      # (`notes = gr.Markdown()`, before or after the handler, then `btn.click(fn, q, notes)`).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  import gradio
+                  ...
+                  $NAME = gradio.Markdown(...)
+              - pattern-inside: |
+                  $NAME = gradio.Markdown(...)
+                  ...
+              - pattern-inside: |
+                  import gradio
+                  ...
+                  $NAME = gradio.Chatbot(...)
+              - pattern-inside: |
+                  $NAME = gradio.Chatbot(...)
+                  ...
+          - pattern-either:
+              - pattern-inside: |
+                  import gradio
+                  ...
+                  <... gradio.Interface($FN, $IN, $OUT, ...) ...>
+              - pattern-inside: |
+                  import gradio
+                  ...
+                  <... gradio.Interface($FN, ..., outputs=$OUT, ...) ...>
+              - pattern-inside: |
+                  import gradio
+                  ...
+                  <... gradio.Interface(..., fn=$FN, ..., outputs=$OUT, ...) ...>
+              - patterns:
+                  - pattern-inside: |
+                      import gradio
+                      ...
+                      <... $T.$EV($FN, $IN, $OUT, ...) ...>
+                  - metavariable-regex:
+                      metavariable: $EV
+                      regex: ^(?:click|submit|change|input|select|upload|release|blur|focus|load|then|success|on|stream|tick|like|retry|undo|edit|clear|key_up|double_click|apply|example_select|option_select|play|pause|stop|end|expand|collapse|copy|delete|download|start_recording|stop_recording|pause_recording)$
+              - patterns:
+                  - pattern-inside: |
+                      import gradio
+                      ...
+                      <... $T.$EV($FN, ..., outputs=$OUT, ...) ...>
+                  - metavariable-regex:
+                      metavariable: $EV
+                      regex: ^(?:click|submit|change|input|select|upload|release|blur|focus|load|then|success|on|stream|tick|like|retry|undo|edit|clear|key_up|double_click|apply|example_select|option_select|play|pause|stop|end|expand|collapse|copy|delete|download|start_recording|stop_recording|pause_recording)$
+              - patterns:
+                  - pattern-inside: |
+                      import gradio
+                      ...
+                      <... $T.$EV(..., fn=$FN, ..., outputs=$OUT, ...) ...>
+                  - metavariable-regex:
+                      metavariable: $EV
+                      regex: ^(?:click|submit|change|input|select|upload|release|blur|focus|load|then|success|on|stream|tick|like|retry|undo|edit|clear|key_up|double_click|apply|example_select|option_select|play|pause|stop|end|expand|collapse|copy|delete|download|start_recording|stop_recording|pause_recording)$
+              - patterns:
+                  - pattern-inside: |
+                      @$T.$EV(..., outputs=$OUT, ...)
+                      def $FN(...):
+                          ...
+                  - metavariable-regex:
+                      metavariable: $EV
+                      regex: ^(?:click|submit|change|input|select|upload|release|blur|focus|load|then|success|on|stream|tick|like|retry|undo|edit|clear|key_up|double_click|apply|example_select|option_select|play|pause|stop|end|expand|collapse|copy|delete|download|start_recording|stop_recording|pause_recording)$
+          # Keep only components named in this wiring's outputs.
+          - metavariable-comparison:
+              comparison: str($NAME) in str($OUT)
+          - pattern-inside: |
+              def $FN(...):
+                  ...
+          - pattern-either:
+              - pattern: return $RET
+              - pattern: yield $RET
+          - pattern-either:
+              - pattern: return $MD
+              - pattern: yield $MD
+              - pattern: return ($MD, ...)
+              - pattern: yield ($MD, ...)
+              - pattern: return ($R0, $MD, ...)
+              - pattern: yield ($R0, $MD, ...)
+              - pattern: return ($R0, $R1, $MD, ...)
+              - pattern: yield ($R0, $R1, $MD, ...)
+          - metavariable-pattern:
+              metavariable: $OUT
+              pattern-either:
+                - patterns:
+                    - pattern: $USE
+                    - metavariable-comparison:
+                        comparison: str($USE) == str($OUT) and str($USE) == str($NAME) and str($MD) == str($RET)
+                - patterns:
+                    - pattern: '[$USE]'
+                    - metavariable-comparison:
+                        comparison: str($USE) == str($NAME) and str($MD) == str($RET)
+                - patterns:
+                    - pattern: '[$USE, $U1, ...]'
+                    - metavariable-comparison:
+                        comparison: str($USE) == str($NAME)
+                    - metavariable-pattern:
+                        metavariable: $RET
+                        patterns:
+                          - pattern: ($P0, $P1, ...)
+                          - metavariable-comparison:
+                              comparison: str($P0) == str($MD)
+                - patterns:
+                    - pattern: '[$U0, $USE, ...]'
+                    - metavariable-comparison:
+                        comparison: str($USE) == str($NAME)
+                    - metavariable-pattern:
+                        metavariable: $RET
+                        patterns:
+                          - pattern: ($P0, $P1, ...)
+                          - metavariable-comparison:
+                              comparison: str($P1) == str($MD)
+                - patterns:
+                    - pattern: '[$U0, $U1, $USE, ...]'
+                    - metavariable-comparison:
+                        comparison: str($USE) == str($NAME)
+                    - metavariable-pattern:
+                        metavariable: $RET
+                        patterns:
+                          - pattern: ($P0, $P1, $P2, ...)
+                          - metavariable-comparison:
+                              comparison: str($P2) == str($MD)
+          - focus-metavariable: $MD
+      # Chainlit 2.12.0: message and step content is rendered with react-markdown, whose `img`
+      # override passes any src through (a `language` only wraps the text in a code fence when
+      # it doesn't already start with one). Messages built here, tokens streamed into a message
+      # or step, content or output set on one, and what a @cl.step function returns.
+      - patterns:
+          - pattern-either:
+              - pattern: chainlit.$KIND($MD, ...)
+              - pattern: chainlit.$KIND(..., content=$MD, ...)
+          - metavariable-regex:
+              metavariable: $KIND
+              regex: ^(?:Message|ErrorMessage|AskUserMessage|AskActionMessage|AskFileMessage|AskElementMessage)$
+          - focus-metavariable: $MD
+      - patterns:
+          - pattern-not-regex: '\A(?:(?![ \t]*+(?:import|from)[ \t]++chainlit\b)[^\n]*+\n)*+(?![ \t]*+(?:import|from)[ \t]++chainlit\b)[^\n]*+\z'
+          - pattern-either:
+              - pattern: $MSG.stream_token($MD, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $MSG.content = $MD
+                      - pattern: $MSG.content += $MD
+                      - pattern: $MSG.output = $MD
+                      - pattern: $MSG.output += $MD
+                  - pattern-either:
+                      - pattern-inside: |
+                          $MSG = chainlit.$KIND(...)
+                          ...
+                      - pattern-inside: |
+                          async with chainlit.Step(...) as $MSG:
+                              ...
+                      - pattern-inside: |
+                          with chainlit.Step(...) as $MSG:
+                              ...
+          - focus-metavariable: $MD
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @chainlit.step(...)
+                  def $FN(...):
+                      ...
+              - pattern-inside: |
+                  @chainlit.step
+                  def $FN(...):
+                      ...
+          - pattern: return $MD
+          - focus-metavariable: $MD
+      # NiceGUI 3.18.0: ui.markdown converts with markdown2 and sanitizes in the browser, which
+      # keeps `img src` (also a later `.content =` or `set_content` on it).
+      - patterns:
+          - pattern-either:
+              - pattern: nicegui.ui.markdown($MD, ...)
+              - pattern: nicegui.ui.markdown(..., content=$MD, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $EL = nicegui.ui.markdown(...)
+                          ...
+                      - pattern-inside: |
+                          with nicegui.ui.markdown(...) as $EL:
+                              ...
+                  - pattern-either:
+                      - pattern: $EL.content = $MD
+                      - pattern: $EL.content += $MD
+                      - pattern: $EL.set_content($MD)
+          - focus-metavariable: $MD
+      # Dash 4.4.1: dcc.Markdown (react-markdown 4, no image URL transform), and a callback whose
+      # single Output is the `children` of a dcc.Markdown in this file's layout.
+      - patterns:
+          - pattern-either:
+              - pattern: dash.dcc.Markdown($MD, ...)
+              - pattern: dash.dcc.Markdown(..., children=$MD, ...)
+          - focus-metavariable: $MD
+      - patterns:
+          - pattern-either:
+              - pattern: return $MD
+              - pattern: return [$MD]
+          - pattern-inside: |
+              $LAYOUT = <... dash.dcc.Markdown(..., id=$ID, ...) ...>
+              ...
+          - pattern-either:
+              - pattern-inside: |
+                  @$APP.callback(dash.Output($ID, "children"), ...)
+                  def $FN(...):
+                      ...
+              - pattern-inside: |
+                  @$APP.callback(dash.dependencies.Output($ID, "children"), ...)
+                  def $FN(...):
+                      ...
+              - pattern-inside: |
+                  @$APP.callback(output=dash.Output($ID, "children"), ...)
+                  def $FN(...):
+                      ...
+          - focus-metavariable: $MD
+      # Markdown converted to HTML here (Python-Markdown 3.11.2, markdown-it-py 4.2.0, mistune
+      # 3.4.0 all emit `<img src>` for any http(s) URL; mistune's `escape` only escapes raw
+      # HTML), in a file that serves or emails HTML or shows it in a UI. Quiet when the HTML is
+      # passed to bleach.clean (its default tags drop img) or to nh3.clean with its own tags,
+      # unless those tags list img; when the file turns off markdown-it-py's image rule or
+      # Python-Markdown's image patterns; for markdown-it-py's "zero" preset (no image rule);
+      # and for mistune with an AST renderer or an image renderer defined in this file.
+      - patterns:
+          - pattern-not-regex: '\A(?:(?![ \t]*+(?:import|from)[ \t]++(?:flask|fastapi|starlette|django|quart|aiohttp|tornado|sanic|litestar|bottle|pyramid|falcon|smtplib|email|sendgrid|resend|postmarker|jinja2|markupsafe|streamlit|gradio|nicegui|panel|dash|chainlit|IPython)\b)[^\n]*+\n)*+(?![ \t]*+(?:import|from)[ \t]++(?:flask|fastapi|starlette|django|quart|aiohttp|tornado|sanic|litestar|bottle|pyramid|falcon|smtplib|email|sendgrid|resend|postmarker|jinja2|markupsafe|streamlit|gradio|nicegui|panel|dash|chainlit|IPython)\b)[^\n]*+\z'
+          - pattern-either:
+              # Python-Markdown
+              - patterns:
+                  - pattern-either:
+                      - pattern: markdown.markdown($MD, ...)
+                      - pattern: markdown.markdown(..., text=$MD, ...)
+                      - pattern: markdown.Markdown(...).convert($MD)
+                      - patterns:
+                          - pattern-inside: |
+                              $CONV = markdown.Markdown(...)
+                              ...
+                          - pattern: $CONV.convert($MD)
+                  - pattern-not-regex: (?s)\A(?=.*?\.deregister\(\s*["']image_(?:link|reference)["']).*
+              # markdown-it-py, any preset but "zero"
+              - patterns:
+                  - pattern-either:
+                      - pattern: markdown_it.MarkdownIt(...).render($MD, ...)
+                      - pattern: markdown_it.MarkdownIt(...).$A(...).render($MD, ...)
+                      - pattern: markdown_it.MarkdownIt(...).$A(...).$B(...).render($MD, ...)
+                      - patterns:
+                          - pattern-inside: |
+                              $CONV = <... markdown_it.MarkdownIt(...) ...>
+                              ...
+                          - pattern-not-inside: |
+                              $CONV = <... markdown_it.MarkdownIt("zero", ...) ...>
+                              ...
+                          - pattern: $CONV.render($MD, ...)
+                  - pattern-not-inside: markdown_it.MarkdownIt("zero", ...).render(...)
+                  - pattern-not-regex: (?s)\A(?=.*?(?:\.disable\(\s*(?:\[[^\]]*?)?["']image["']|add_render_rule\(\s*["']image["']|\.rules\[\s*["']image["']\s*\]\s*=|\.validateLink\s*=)).*
+              # mistune
+              - patterns:
+                  - pattern-either:
+                      - pattern: mistune.markdown($MD, ...)
+                      - pattern: mistune.html($MD)
+                      - patterns:
+                          - pattern-inside: |
+                              $CONV = mistune.create_markdown(...)
+                              ...
+                          - pattern-not-inside: |
+                              $CONV = mistune.create_markdown(..., renderer=None, ...)
+                              ...
+                          - pattern-not-inside: |
+                              $CONV = mistune.create_markdown(..., renderer="ast", ...)
+                              ...
+                          - pattern: $CONV($MD, ...)
+                      - patterns:
+                          - pattern-inside: |
+                              $CONV = mistune.Markdown(...)
+                              ...
+                          - pattern: $CONV($MD, ...)
+                  - pattern-not: mistune.markdown(..., renderer=None, ...)
+                  - pattern-not: mistune.markdown(..., renderer="ast", ...)
+                  - pattern-not-regex: (?s)\A(?=.*?\bdef[ \t]+image[ \t]*\().*
+          # The HTML cleaned of images: bleach.clean (default tags have no img) or nh3.clean
+          # with a tags argument; still reported when that tags argument lists img.
+          - pattern-either:
+              - patterns:
+                  - pattern: $CONVERTER(...)
+                  - pattern-not-inside: bleach.clean(...)
+                  - pattern-not-inside: nh3.clean(..., tags=$TAGS, ...)
+                  - pattern-not-inside: |
+                      $HTML = $CONVERT(...)
+                      ...
+                      <... bleach.clean($HTML, ...) ...>
+                  - pattern-not-inside: |
+                      $HTML = $CONVERT(...)
+                      ...
+                      <... nh3.clean($HTML, ..., tags=$TAGS, ...) ...>
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: bleach.clean(..., tags=$TAGS, ...)
+                      - pattern-inside: nh3.clean(..., tags=$TAGS, ...)
+                      - pattern-inside: |
+                          $HTML = $CONVERT(...)
+                          ...
+                          <... bleach.clean($HTML, ..., tags=$TAGS, ...) ...>
+                      - pattern-inside: |
+                          $HTML = $CONVERT(...)
+                          ...
+                          <... nh3.clean($HTML, ..., tags=$TAGS, ...) ...>
+                  - metavariable-regex:
+                      metavariable: $TAGS
+                      regex: (?s)^(?!.*-\s*\{[^}]*["']img["']).*(?:["']img["']|\bnh3\.ALLOWED_TAGS\b)
+          - focus-metavariable: $MD
+    pattern-sanitizers:
+      # Images removed from the model's text first: a helper named for it (`strip_images`,
+      # `remove_markdown_images`, `without_images`, `proxy_images`), or a re.sub / str.replace
+      # aimed at `![` or `<img` (or with a pattern named for images).
+      - exact: true
+        patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: $STRIP(...)
+                  - metavariable-regex:
+                      metavariable: $STRIP
+                      regex: (?i)^(?:\w+\.)*(?:\w+_)?(?:strip|remove|drop|block|without|no|filter|neutrali[sz]e|defang|proxy|rewrite|safe)(?:_?\w+)?_?(?:images?|imgs?)(?:_\w+)?$
+              - pattern: re.sub("=~/!.{0,2}\[|<img/", ...)
+              - pattern: $TEXT.replace("=~/^(?:!.{0,2}\[|<img)/", ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern: re.sub($PAT, ...)
+                      - pattern: $PAT.sub(...)
+                  - metavariable-regex:
+                      metavariable: $PAT
+                      regex: (?i)^(?:\w+\.)*\w*(?:image|img)\w*$
+              - patterns:
+                  - pattern-inside: |
+                      $PAT = re.compile("=~/!.{0,2}\[|<img/", ...)
+                      ...
+                  - pattern: $PAT.sub(...)
+      # --- Values next to model output that the model didn't write. These ten entries are
+      # shared with the other rule (build.py SHARED_BLOCKS "model-output non-model-value
+      # sanitizers (Python, rendering)"): edit them together. ---
+      # The user's own chat turn: fields of the turn read in the body of the branch that
+      # handles it (`if turn["role"] == "user":`, or a pydantic-ai message part with
+      # `part.part_kind == "user-prompt"` or `isinstance(part, UserPromptPart)`), and the app's
+      # own system prompt part. Only that body: the `else` or `elif` that follows handles the
+      # model's turn.
+      - patterns:
+          - pattern-either:
+              - pattern: $T[$KEY]
+              - pattern: $T.$FIELD
+              - pattern: $T.get(...)
+          - patterns:
+              - pattern-either:
+                  - pattern: |
+                      if $T["role"] == "user":
+                          ...
+                          $STMT
+                          ...
+                  - pattern: |
+                      if $T.get("role") == "user":
+                          ...
+                          $STMT
+                          ...
+                  - pattern: |
+                      if $T.role == "user":
+                          ...
+                          $STMT
+                          ...
+                  - pattern: |
+                      if $T.part_kind == "=~/^(?:user|system)-prompt$/":
+                          ...
+                          $STMT
+                          ...
+                  - patterns:
+                      - pattern: |
+                          if isinstance($T, $PART):
+                              ...
+                              $STMT
+                              ...
+                      - metavariable-regex:
+                          metavariable: $PART
+                          regex: ^(?:\w+\.)*(?:UserPromptPart|SystemPromptPart)$
+              - focus-metavariable: $STMT
+      # A value just checked against the app's own list or table (`if db_type in COLLECTIONS:`,
+      # `if tone in ("formal", "casual"):`), in the body of that check only.
+      - patterns:
+          - pattern: $X
+          - metavariable-regex:
+              metavariable: $X
+              regex: ^\w+$
+          - patterns:
+              - pattern: |
+                  if $X in $C:
+                      ...
+                      $STMT
+                      ...
+              - metavariable-regex:
+                  metavariable: $C
+                  regex: ^(?:(?:\w+\.)*[A-Z][A-Z0-9_]*|[\[({].*)$
+              - focus-metavariable: $STMT
+      # The index of `for i, turn in enumerate(history)`.
+      - patterns:
+          - pattern-inside: |
+              for ($I, $ITEM) in enumerate(...):
+                  ...
+          - pattern: $I
+      # The question half of a (question, answer) pair from the session's chat history.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  for ($Q, $A) in $HIST:
+                      ...
+              - pattern-inside: |
+                  for ($I, ($Q, $A)) in enumerate($HIST, ...):
+                      ...
+          - metavariable-regex:
+              metavariable: $HIST
+              regex: ^(?:\w+\.)?session_state\b
+          - pattern: $Q
+          - metavariable-regex:
+              metavariable: $Q
+              regex: (?i)^(?:q|question|query|prompt|user(?:_\w+)?)$
+      # The keys of a dict literal the app wrote with string keys (`{"Tone": data.get("tone")}`),
+      # read with `.items()`; assigned once, or in both branches of an if.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $D = $LIT
+                      ...
+                      for ($K, $V) in $D.items():
+                          ...
+                  - metavariable-regex:
+                      metavariable: $LIT
+                      regex: (?s)^\{\s*["'](?!.*[{,]\s*(?:\*\*|(?![\s"'}\]])[^:,{}"']*:))
+              - patterns:
+                  - pattern-inside: |
+                      if $C:
+                          ...
+                          $D = $LIT
+                          ...
+                      else:
+                          ...
+                          $D = $LIT2
+                          ...
+                      ...
+                      for ($K, $V) in $D.items():
+                          ...
+                  - metavariable-regex:
+                      metavariable: $LIT
+                      regex: (?s)^\{\s*["'](?!.*[{,]\s*(?:\*\*|(?![\s"'}\]])[^:,{}"']*:))
+                  - metavariable-regex:
+                      metavariable: $LIT2
+                      regex: (?s)^\{\s*["'](?!.*[{,]\s*(?:\*\*|(?![\s"'}\]])[^:,{}"']*:))
+          - pattern: $K
+      # A slot that holds a string literal in every tuple of a list the app wrote, read in a
+      # loop (`for icon, label, reply in [("🔍", "Research", st.session_state.answer), ...]`):
+      # the first slot, or the first two when both are literals.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $L = $LIT
+                          ...
+                          for ($X, ...) in $L:
+                              ...
+                      - pattern-inside: |
+                          for ($X, ...) in $LIT:
+                              ...
+                  - metavariable-regex:
+                      metavariable: $LIT
+                      regex: '(?s)^\[\s*(?:\(\s*[rRuU]?(?:"[^"\n]*"|''[^''\n]*'')\s*,[^()]*(?:\([^()]*\)[^()]*)*\)\s*,?\s*)+\]$'
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $L = $LIT
+                          ...
+                          for ($A, $X, ...) in $L:
+                              ...
+                      - pattern-inside: |
+                          for ($A, $X, ...) in $LIT:
+                              ...
+                  - metavariable-regex:
+                      metavariable: $LIT
+                      regex: '(?s)^\[\s*(?:\(\s*[rRuU]?(?:"[^"\n]*"|''[^''\n]*'')\s*,\s*[rRuU]?(?:"[^"\n]*"|''[^''\n]*'')\s*,[^()]*(?:\([^()]*\)[^()]*)*\)\s*,?\s*)+\]$'
+          - pattern: $X
+      # A name already divided by a number earlier in the block (`st.progress(score / 5)`,
+      # also inside a `with column:` block): a string would have raised there.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  <... $X / $N ...>
+                  ...
+              - pattern-inside: |
+                  with $CTX:
+                      ...
+                      <... $X / $N ...>
+                  ...
+          - pattern: $X
+          - metavariable-regex:
+              metavariable: $X
+              regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $N
+              regex: ^\d+(?:\.\d+)?$
+      # Numeric format specs: `f"{score:.2f}"`, `f"{ratio:.0%}"`, `"%.1f of %d" % (a, b)`, and
+      # `"{:.1f}".format(x)` with every field numeric. A width or `s` spec alone isn't numeric.
+      - patterns:
+          - pattern-inside: f"..."
+          - pattern-regex: \{[^{}:!]+(?:![rsa])?:(?:.?[<>=^])?[-+ ]?z?#?0?\d*[_,]?(?:\.\d+)?[bcdeEfFgGnoxX%]\}
+      - exact: true
+        pattern-either:
+          - pattern: '"=~/^(?:[^%]|%%|%(?:\([^)]*\))?[-+ #0]*\d*(?:\.\d+)?[diouxXeEfFgGc])*$/" % $ARGS'
+          - pattern: '"=~/^(?:[^{}]|\{\{|\}\})*(?:\{[^{}:!]*(?:![rsa])?:(?:.?[<>=^])?[-+ ]?z?#?0?\d*[_,]?(?:\.\d+)?[bcdeEfFgGnoxX%]\}(?:[^{}]|\{\{|\}\})*)+$/".format(...)'
+      # Numbers, and metadata fields that can't carry markup: counts, IDs, roles, finish
+      # reasons, timestamps, error fields, a retrieved document's metadata, an agent run's
+      # citations (search results) and audio, and an HTTP response's status and headers. Also
+      # an entry of a table the file defines as a constant (`COLLECTIONS[db_type].name`).
+      - exact: true
+        pattern-either:
+          - pattern: int(...)
+          - pattern: float(...)
+          - pattern: len(...)
+          - patterns:
+              - pattern: $OBJ.$FIELD
+              - metavariable-regex:
+                  metavariable: $FIELD
+                  regex: ^(?:usage|id|model|created|role|finish_reason|stop_reason|num_turns|total_cost_usd|duration_ms|total_tokens|prompt_tokens|completion_tokens|input_tokens|output_tokens|metadata|response_metadata|usage_metadata|timestamp|created_at|time|error|citations|audio|status_code|headers)$
+          - patterns:
+              - pattern-either:
+                  - pattern: $OBJ[$KEY]
+                  - pattern: $OBJ.get($KEY, ...)
+              - metavariable-regex:
+                  metavariable: $KEY
+                  regex: ^["'](?:usage|id|model|created|role|finish_reason|stop_reason|metadata|timestamp|created_at|time|error)["']$
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $C = {...}
+                      ...
+                  - pattern-inside: |
+                      $C: $TY = {...}
+                      ...
+              - pattern: $C[$K]
+              - metavariable-regex:
+                  metavariable: $C
+                  regex: ^[A-Z][A-Z0-9_]*$
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-aisvs:
+        - "v1.01-C7.3.3 - Output Safety"
+      mitre-atlas:
+        - "AML.T0077 - LLM Response Rendering"
+        - "AML.T0051 - LLM Prompt Injection"
+      cwe:
+        - "CWE-201: Insertion of Sensitive Information Into Sent Data"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [openai, anthropic, litellm, langchain, google-genai, claude-agent-sdk, openai-agents, agno, crewai, pydantic-ai, smolagents, autogen, streamlit, gradio, chainlit, nicegui, dash, python-markdown, markdown-it-py, mistune, bleach, nh3]
+      # Renderer behavior checked 2026-10-23 from source: streamlit 1.66.1 (frontend at tag
+      # 1.66.1: StreamlitMarkdown's transformLinkUri blocks only javascript: and vbscript:, its
+      # img renderer keeps src, alerts and toasts render their body with it, write_stream
+      # writes through st.markdown; config.py has no image or CSP option), gradio 6.30.0
+      # (MarkdownCode.svelte: marked, then amuchina 1.0.12, whose defaults allow img and src
+      # and block only script and data: URLs; render_markdown=False still sanitizes and
+      # inserts the HTML), chainlit 2.12.0 (Markdown.tsx: react-markdown with an img override
+      # that keeps the src; assistant messages always render Markdown; a `language` fence is
+      # skipped when the text starts with one), nicegui 3.18.0 (markdown2, then setHTML /
+      # DOMPurify in the browser), dash 4.4.1 (react-markdown 4.3.1 with no
+      # transformImageUri), markdown 3.11.2, markdown-it-py 4.2.0 (the "zero" preset has no
+      # image rule), mistune 3.4.0 (sanitize_url allows http and https; `escape` only escapes
+      # raw HTML), bleach 6.4.0 (img not in ALLOWED_TAGS), and nh3 0.3.7
+      # (ammonia 4.1.4: img with src allowed by default). Panel isn't listed here:
+      # llm-output-rendered-as-html already reports every model-text write to a Panel
+      # Markdown pane or chat.
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md
+        - https://github.com/OWASP/AISVS/blob/v1.01/1.01/en/0x10-C07-Model-Behavior.md
+        - https://cwe.mitre.org/data/definitions/201.html
+        - https://simonwillison.net/2025/Jun/11/echoleak/
+        - https://docs.streamlit.io/develop/api-reference/text/st.markdown
+        - https://www.gradio.app/docs/gradio/chatbot
+        - https://docs.chainlit.io/api-reference/message
+        - https://markdown-it-py.readthedocs.io/en/latest/using.html
+        - https://bleach.readthedocs.io/en/latest/clean.html

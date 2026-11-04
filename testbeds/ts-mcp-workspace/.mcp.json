@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "workspace": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["dist/src/index.js"],
+      "env": { "WORKSPACE_ROOT": "${CLAUDE_PROJECT_DIR:-.}" }
+    },
+    "fixtures-fs": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem@2.0.0",
+        "${CLAUDE_PROJECT_DIR:-.}/test/fixtures",
+        "/tmp/workspace-mcp"
+      ]
+    }
+  }
+}

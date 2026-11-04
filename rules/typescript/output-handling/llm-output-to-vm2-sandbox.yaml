@@ -1,0 +1,340 @@
+rules:
+  - id: llm-output-to-vm2-sandbox
+    # Model output run in vm2, the in-process sandbox. Reported at WARNING by decision
+    # (docs: 2026-10-22): the team did sandbox the code, but vm2 keeps being escaped (about 30
+    # advisories in Aug-Sep 2026) and its README advises stronger isolation for code from
+    # untrusted sources, which model output is. NodeVM with `nesting: true` grants the sandbox
+    # the host's trust and is an ERROR in llm-output-to-code-execution-ts, so it is left out
+    # here. Shared blocks (build.py SHARED_BLOCKS): pattern-sources, pattern-propagators and
+    # pattern-sanitizers are identical to llm-output-to-code-execution-ts; edit them together.
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      Model output runs inside a vm2 sandbox. Anyone who can influence the prompt, directly or
+      through a page, document, or tool result the model reads, chooses this code, and vm2
+      shares this Node.js process: it has a long record of sandbox escapes, and its own README
+      says it should not be the only defense for code from untrusted sources. An escape runs
+      with this process's credentials and files. Prefer a constrained output (a schema with
+      enums dispatched to an allowlist of operations). If model-written code must run, use a
+      separate isolate or process (isolated-vm, a container, or a microVM) with no secrets or
+      network, and keep vm2 updated if it stays as an extra layer.
+    mode: taint
+    pattern-sources:
+      # Vercel AI SDK (server): the result object and every field of it (`text`, `steps`,
+      # `textStream`, `content`, `object`).
+      - pattern: generateText(...)
+      - pattern: streamText(...)
+      - pattern: generateObject(...)
+      - pattern: streamObject(...)
+      # AI SDK agents: `agent.generate()` / `agent.stream()` on a ToolLoopAgent built in this
+      # file, or on a receiver named like an agent.
+      - patterns:
+          - pattern-inside: |
+              $AGENT = new $CLASS(...);
+              ...
+          - metavariable-regex:
+              metavariable: $CLASS
+              regex: ^(?:ToolLoopAgent|Experimental_Agent)$
+          - pattern-either:
+              - pattern: $AGENT.generate(...)
+              - pattern: $AGENT.stream(...)
+      - patterns:
+          - pattern-either:
+              - pattern: $AGENT.generate(...)
+              - pattern: $AGENT.stream(...)
+          - metavariable-regex:
+              metavariable: $AGENT
+              regex: (?i)^(?:[\w$]+\.)*[\w$]*agent$
+      # AI SDK (client): messages, completions, and streamed objects from the React hooks.
+      - pattern: useChat(...)
+      - pattern: useCompletion(...)
+      - pattern: useObject(...)
+      - pattern: experimental_useObject(...)
+      # A value typed as an AI SDK chat message or text part (a message component's props).
+      - pattern: '($M : UIMessage)'
+      - pattern: '($M : TextUIPart)'
+      - pattern: '($M : UIMessage[])'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: 'function $F({..., $P, ...}: $TY, ...) {...}'
+              - pattern-inside: '({..., $P, ...}: $TY, ...) => $BODY'
+              - pattern-inside: '({..., $P, ...}: $TY, ...) => {...}'
+          - metavariable-regex:
+              metavariable: $TY
+              regex: (?s)^\{.*:\s*(?:Array<|ReadonlyArray<)?(?:UIMessage|TextUIPart)\b
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      type $TY = $DEF;
+                      ...
+                  - metavariable-regex:
+                      metavariable: $DEF
+                      regex: (?s)^\{.*:\s*(?:Array<|ReadonlyArray<)?(?:UIMessage|TextUIPart)\b
+              - patterns:
+                  - pattern-inside: |
+                      interface $TY { $K: $DEF }
+                      ...
+                  - metavariable-regex:
+                      metavariable: $DEF
+                      regex: ^(?:Array<|ReadonlyArray<)?(?:UIMessage|TextUIPart)\b
+          - pattern-either:
+              - pattern-inside: 'function $F({..., $P, ...}: $TY, ...) {...}'
+              - pattern-inside: '({..., $P, ...}: $TY, ...) => $BODY'
+              - pattern-inside: '({..., $P, ...}: $TY, ...) => {...}'
+          - pattern: $P
+      # OpenAI Node: Chat Completions (also legacy Completions) and Responses.
+      - patterns:
+          - pattern: $CLIENT.completions.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:create|parse|stream|runTools)$
+      - patterns:
+          - pattern: $CLIENT.responses.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:create|parse|stream|retrieve)$
+      # Anthropic TypeScript SDK (also `client.beta.messages`).
+      - patterns:
+          - pattern: $CLIENT.messages.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:create|parse|stream|toolRunner)$
+      # Google Gen AI SDK.
+      - patterns:
+          - pattern: $CLIENT.models.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:generateContent|generateContentStream)$
+      - patterns:
+          - pattern-inside: |
+              $CHAT = $CLIENT.chats.create(...);
+              ...
+          - pattern-either:
+              - pattern: $CHAT.sendMessage(...)
+              - pattern: $CHAT.sendMessageStream(...)
+      # LangChain.js / LangGraph.js runnables. `.invoke` is a common method name (Electron's
+      # ipcRenderer.invoke), so require a LangChain import in the file or a receiver named like
+      # a model, chain, agent, or graph.
+      - patterns:
+          - pattern-either:
+              - pattern: $RUNNABLE.invoke(...)
+              - pattern: $RUNNABLE.stream(...)
+              - pattern: $RUNNABLE.batch(...)
+          - pattern-either:
+              - pattern-inside: |
+                  import $IMPORT from "=~/^@?langchain(?:\/|$)/";
+                  ...
+              - pattern-inside: |
+                  import {...} from "=~/^@?langchain(?:\/|$)/";
+                  ...
+              - patterns:
+                  - pattern: $RUNNABLE.invoke(...)
+                  - metavariable-regex:
+                      metavariable: $RUNNABLE
+                      regex: (?i)^(?:[\w$]+\.)*[\w$]*(?:llm|model|chain|agent|graph|runnable)$
+      # Agent SDKs: the messages of the Claude Agent SDK's query() (`message.result`) and the
+      # result of the OpenAI Agents SDK's run() and Runner.run() (`result.finalOutput`). Gated
+      # on the import, since query and run are common names.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      import { $NAME } from "$MOD";
+                      ...
+                  - pattern: $NAME(...)
+              - patterns:
+                  - pattern-inside: |
+                      import { $NAME as $ALIAS } from "$MOD";
+                      ...
+                  - pattern: $ALIAS(...)
+          - metavariable-comparison:
+              comparison: >-
+                (str($MOD) == "@anthropic-ai/claude-agent-sdk" and str($NAME) == "query")
+                or (re.match("^@openai/agents(?:-core)?$", str($MOD)) and str($NAME) == "run")
+      - patterns:
+          - pattern-inside: |
+              import {...} from "=~/^@openai\/agents(?:-core)?$/";
+              ...
+          - pattern-inside: |
+              $RUNNER = new Runner(...);
+              ...
+          - pattern: $RUNNER.run(...)
+    pattern-propagators:
+      # Array callbacks over tainted messages (`messages.map((m) => ...)`, then
+      # `m.parts.map((p) => ...)`) taint the callback's element parameter.
+      - patterns:
+          - pattern-either:
+              - pattern: $XS.$METHOD(($X, ...) => $BODY)
+              - pattern: $XS.$METHOD(($X, ...) => {...})
+              - pattern: $XS.$METHOD(function ($X, ...) {...})
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:map|flatMap|forEach|filter|find|findLast|reduce)$
+        from: $XS
+        to: $X
+      # Stream event listeners: `stream.on("text", (delta, snapshot) => ...)` (Anthropic) and
+      # `stream.on("content", ...)` (OpenAI).
+      - patterns:
+          - pattern-either:
+              - pattern: $XS.on($EVENT, ($X, ...) => $BODY)
+              - pattern: $XS.on($EVENT, ($X, ...) => {...})
+              - pattern: $XS.on($EVENT, ($A, $X, ...) => $BODY)
+              - pattern: $XS.on($EVENT, ($A, $X, ...) => {...})
+        from: $XS
+        to: $X
+      # In --taint-intrafile mode, OpenGrep drops taint from the result of an array method that
+      # takes a callback (`const part = message.parts.find((p) => p.type === "text")`); carry it
+      # when the result is assigned. Default mode doesn't need this.
+      - patterns:
+          - pattern: $R = $XS.$METHOD($CALLBACK)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:find|findLast|filter)$
+        from: $XS
+        to: $R
+    pattern-sanitizers:
+      # Values that can't carry code: a lookup in a constant table (`RECIPES[choice]`,
+      # `COMMANDS.get(choice)`), which is the allowlist dispatch the message recommends, and
+      # metadata fields (counts, IDs, roles, finish reasons).
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: $TABLE[$KEY]
+                      - pattern: $TABLE.get($KEY)
+                  - metavariable-regex:
+                      metavariable: $TABLE
+                      regex: ^(?:[\w$]+\.)*[A-Z][A-Z0-9_]*$
+              - patterns:
+                  - pattern: $OBJ.$FIELD
+                  - metavariable-regex:
+                      metavariable: $FIELD
+                      regex: ^(usage|id|role|type|model|created|length|status|finish_reason|finishReason|stop_reason|stopReason|totalUsage|duration_ms|num_turns|total_cost_usd)$
+      # An allowlist check before use: /^...$/.test(value).
+      - by-side-effect: true
+        patterns:
+          - pattern: $RE.test($X)
+          - metavariable-regex:
+              metavariable: $RE
+              regex: ^/\^.*\$/[a-z]*$
+          - focus-metavariable: $X
+      # An allowlist membership check before use: ALLOWED.has(value), ALLOWED.includes(value).
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $ALLOWED.has($X)
+              - pattern: $ALLOWED.includes($X)
+          - focus-metavariable: $X
+      - exact: true
+        pattern: Number(...)
+      - exact: true
+        pattern: parseInt(...)
+      - exact: true
+        pattern: parseFloat(...)
+      # shell-quote's quote([...]) and shell-escape's shellescape([...]).
+      - exact: true
+        pattern: quote([...])
+      - exact: true
+        pattern: $Q.quote([...])
+      - exact: true
+        pattern: shellescape([...])
+      - exact: true
+        pattern: shellEscape([...])
+      # execa's options object in the template form (cwd, env) is not part of the command.
+      - patterns:
+          - pattern-inside: '$EXECA({..., shell: $SH, ...})`...`'
+          - pattern: '{..., shell: $SH, ...}'
+    pattern-sinks:
+      # vm2 3.12.2: VM#run and NodeVM#run take the code (a string or a VMScript built from
+      # it, which taint follows), and NodeVM.code() runs it directly. Scoped to files that
+      # import or require vm2, so another library's `.run()` doesn't match.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  import {...} from "vm2";
+                  ...
+              - pattern-inside: |
+                  import $VM2 from "vm2";
+                  ...
+              - pattern-inside: |
+                  import * as $VM2 from "vm2";
+                  ...
+              - pattern-inside: |
+                  $VM2 = require("vm2");
+                  ...
+              - pattern-inside: |
+                  const {...} = require("vm2");
+                  ...
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: new $CLS(...).run($CODE, ...)
+                      - pattern-inside: |
+                          $SANDBOX = new $CLS(...);
+                          ...
+                          $SANDBOX.run($CODE, ...);
+                  - pattern-inside: $RUNNER.run($CODE, ...)
+                  - metavariable-regex:
+                      metavariable: $CLS
+                      regex: ^(?:[\w$]+\.)?(?:VM|NodeVM)$
+                  # NodeVM with nesting is reported by llm-output-to-code-execution-ts.
+                  - pattern-not-inside: 'new $CLS({..., nesting: true, ...}).run($CODE, ...)'
+                  - pattern-not-inside: |
+                      $SANDBOX = new $CLS({..., nesting: true, ...});
+                      ...
+                      $SANDBOX.run($CODE, ...);
+              # A sandbox kept on a class: a field initialiser or a constructor assignment,
+              # then this.<field>.run(code) in a method.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          class $K { ... $FIELD = new $CLS(...); ... }
+                      - pattern-inside: |
+                          class $K { ... constructor(...) { ... this.$FIELD = new $CLS(...); ... } ... }
+                  - pattern-inside: this.$FIELD.run($CODE, ...)
+                  - metavariable-regex:
+                      metavariable: $CLS
+                      regex: ^(?:[\w$]+\.)?(?:VM|NodeVM)$
+                  - pattern-not-inside: |
+                      class $K { ... $FIELD = new $CLS({..., nesting: true, ...}); ... }
+                  - pattern-not-inside: |
+                      class $K { ... constructor(...) { ... this.$FIELD = new $CLS({..., nesting: true, ...}); ... } ... }
+              - patterns:
+                  - pattern-inside: $CLS.code($CODE, ...)
+                  - metavariable-regex:
+                      metavariable: $CLS
+                      regex: ^(?:[\w$]+\.)?NodeVM$
+                  - pattern-not-inside: '$CLS.code($CODE, $F, {..., nesting: true, ...})'
+          - pattern: $CODE
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C7.1.1 - Output Format Enforcement"
+      mitre-atlas:
+        - "AML.T0051 - LLM Prompt Injection"
+        - "AML.T0050 - Command and Scripting Interpreter"
+      cwe:
+        - "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+        - "CWE-693: Protection Mechanism Failure"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [vm2, vercel-ai-sdk, openai, anthropic, google-genai, langchain, claude-agent-sdk, openai-agents, node]
+      # API shapes checked 2026-10-22: vm2 3.12.2 index.d.ts (VM#run, NodeVM#run, static
+      # NodeVM.code, VMScript) and README "Important Security Disclaimer"; model-output
+      # sources as in llm-output-to-code-execution-ts.
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md
+        - https://github.com/patriksimek/vm2/blob/v3.12.2/README.md#important-security-disclaimer
+        - https://github.com/patriksimek/vm2/blob/v3.12.2/index.d.ts
+        - https://github.com/patriksimek/vm2/security/advisories
+        - https://cwe.mitre.org/data/definitions/693.html

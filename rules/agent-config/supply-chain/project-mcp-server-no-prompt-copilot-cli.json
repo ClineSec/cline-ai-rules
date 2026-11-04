@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "repo-tools": {
+      "type": "local",
+      // ruleid: project-mcp-server-no-prompt-copilot-cli
+      "command": "node",
+      "args": ["tools/mcp/server.mjs"],
+      "tools": ["*"]
+    },
+    "docs": {
+      "type": "http",
+      // ok: project-mcp-server-no-prompt-copilot-cli
+      "url": "https://mcp.example.com/docs",
+      "tools": ["search_docs"]
+    }
+  }
+}

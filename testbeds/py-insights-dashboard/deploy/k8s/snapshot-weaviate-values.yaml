@@ -1,0 +1,37 @@
+# Values for the weaviate/weaviate chart (17.8.x), started from `helm show values`:
+#   helm upgrade --install snapshots weaviate/weaviate -f deploy/k8s/snapshot-weaviate-values.yaml
+image:
+  registry: cr.weaviate.io
+  tag: 1.40.2
+  repo: semitechnologies/weaviate
+replicas: 1
+storage:
+  size: 32Gi
+service:
+  name: weaviate
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+  type: LoadBalancer
+  loadBalancerSourceRanges: []
+grpcService:
+  enabled: true
+  name: weaviate-grpc
+  ports:
+    - name: grpc
+      protocol: TCP
+      port: 50051
+  # Only the dashboard pods call gRPC.
+  type: ClusterIP
+authentication:
+  anonymous_access:
+    enabled: true
+  oidc:
+    enabled: false
+authorization:
+  admin_list:
+    enabled: false
+env:
+  QUERY_DEFAULTS_LIMIT: 25
+  DEFAULT_VECTORIZER_MODULE: text2vec-openai

@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(./vendors.md)",
+      "WebFetch(domain:status.example.com)",
+      "WebFetch(domain:*.statuspage.io)",
+      "WebFetch(domain:*.up.railway.app)"
+    ],
+    "ask": [
+      "WebFetch(domain:sms.example.com)"
+    ],
+    "deny": [
+      "Bash(curl:*)",
+      "Bash(wget:*)"
+    ]
+  }
+}

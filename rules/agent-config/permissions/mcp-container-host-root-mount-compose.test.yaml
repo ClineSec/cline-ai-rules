@@ -1,0 +1,94 @@
+x-mcp-defaults: &mcp-defaults
+  restart: unless-stopped
+  volumes:
+    # ruleid: mcp-container-host-root-mount-compose
+    - ~/:/home/user:ro
+
+services:
+  devops-mcp:
+    image: ghcr.io/example-org/devops-mcp:1.2.0
+    volumes:
+      # ok: mcp-container-host-root-mount-compose
+      - /var/run/docker.sock:/var/run/docker.sock
+      # ruleid: mcp-container-host-root-mount-compose
+      - /:/host:rw
+      - mcp-audit:/audit
+
+  clipboard:
+    build: ./clipboard
+    container_name: clipboard-mcp-server
+    volumes:
+      # ruleid: mcp-container-host-root-mount-compose
+      - ${HOME}:/host/home:ro
+      # ok: mcp-container-host-root-mount-compose
+      - ${PWD}:/host/pwd:rw
+
+  peambot-mcp-server:
+    build: ./mcp-server
+    volumes:
+      # ruleid: mcp-container-host-root-mount-compose
+      - type: bind
+        source: /
+        target: /host/root
+        read_only: true
+      # ok: mcp-container-host-root-mount-compose
+      - type: volume
+        source: peambot-cache
+        target: /cache
+
+  files:
+    image: node:22-alpine
+    command: sh -c "npx -y @modelcontextprotocol/server-filesystem@2.0.0 /projects"
+    volumes:
+      # ruleid: mcp-container-host-root-mount-compose
+      - "${HOME:-/root}:/projects"
+
+  windows-notes:
+    image: example-org/notes-mcp:3.1.0
+    volumes:
+      # ruleid: mcp-container-host-root-mount-compose
+      - C:/Users:/host/Users:ro
+
+  sysinfo:
+    build: .
+    ports:
+      - "${API_PORT:-8080}:${API_PORT:-8080}"
+      - "${MCP_PORT:-8081}:${MCP_PORT:-8081}"
+    volumes:
+      # ruleid: mcp-container-host-root-mount-compose
+      - /:/host:ro
+
+  mcp-node-exporter:
+    image: prom/node-exporter:v1.9.1
+    container_name: mcp-node-exporter
+    command: ["--path.rootfs=/host"]
+    volumes:
+      # ok: mcp-container-host-root-mount-compose
+      - /:/host:ro,rslave
+
+  dashboard:
+    image: example-org/dashboard:4.0.0
+    volumes:
+      # ok: mcp-container-host-root-mount-compose
+      - /:/host:ro
+
+  notes-mcp:
+    image: example-org/notes-mcp:3.1.0
+    volumes:
+      # ok: mcp-container-host-root-mount-compose
+      - ./notes:/data/notes
+      # ok: mcp-container-host-root-mount-compose
+      - /home/fixture-user/notes:/data/archive:ro
+      # ok: mcp-container-host-root-mount-compose
+      - notes-data:/data/db
+
+  bedrock:
+    image: example-org/mcpe-server:1.21.0
+    volumes:
+      # ok: mcp-container-host-root-mount-compose
+      - /:/host:ro
+
+volumes:
+  mcp-audit:
+  peambot-cache:
+  notes-data:

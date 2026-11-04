@@ -1,0 +1,387 @@
+rules:
+  - id: llm-output-to-sql-java
+    # The pattern-sources, pattern-propagators, and first 5 pattern-sanitizers are shared with
+    # llm-output-to-code-execution-java and llm-output-to-html-java (build.py SHARED_BLOCKS
+    # "model-output sources (Java)", "lambda propagators (Java)", "value sanitizers (Java)"):
+    # edit them together.
+    languages: [java]
+    severity: ERROR
+    message: >-
+      Model output is run as SQL here, or spliced into SQL text. Completions are untrusted
+      input: anyone who can influence the prompt, directly or through a document, web page,
+      ticket, or tool result the model reads, can choose the statement, and it runs with this
+      connection's privileges (read other users' or tenants' rows, change or delete data).
+      Keep the SQL fixed and pass model-supplied values as bound parameters
+      (`jdbcTemplate.query("... WHERE id = ?", mapper, value)`, `query.setParameter("id",
+      value)`); pick identifiers from a constant allowlist (`COLUMNS.get(choice)`). If the
+      feature is text-to-SQL, a read-only role reduces the damage but doesn't remove it: run
+      generated SQL on a dedicated read-only connection limited to the views it may read, with
+      row-level security, a statement timeout, and a row limit, and parse it (for example with
+      JSqlParser) to reject anything but one SELECT over allowed tables.
+    mode: taint
+    pattern-sources:
+      # Spring AI ChatClient (spring-ai-client-chat 2.0.2 and 1.1.8): a request spec started with
+      # prompt() on a ChatClient field, parameter, or local, and everything read back from it
+      # (call().content(), entity(...), chatResponse(), stream().content()).
+      - pattern: (ChatClient $CC).prompt(...)
+      - pattern: ChatClient.create(...).prompt(...)
+      - pattern: (ChatClient.Builder $CCB).build().prompt(...)
+      # The same chain on a client the file can't type (built into a `var`, returned by a
+      # getter), and a response spec kept in a variable, in a file that imports Spring AI.
+      - patterns:
+          - pattern-either:
+              - pattern: $SPEC.call().content()
+              - pattern: $SPEC.call().entity(...)
+              - pattern: $SPEC.call().chatResponse()
+              - pattern: $SPEC.call().chatClientResponse()
+              - pattern: $SPEC.call().responseEntity(...)
+              - pattern: $SPEC.stream().content()
+              - pattern: $SPEC.stream().chatResponse()
+              - pattern: $SPEC.stream().chatClientResponse()
+              - pattern: (ChatClient.CallResponseSpec $RS).$GET(...)
+              - pattern: (CallResponseSpec $RS).$GET(...)
+              - pattern: (ChatClient.StreamResponseSpec $RS).$GET(...)
+              - pattern: (StreamResponseSpec $RS).$GET(...)
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++org\.springframework\.ai\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++org\.springframework\.ai\.)[^\n]*+\z'
+      # Spring AI ChatModel and StreamingChatModel (spring-ai-model 2.0.2): call(Prompt) returns
+      # a ChatResponse (getResult().getOutput().getText(), getContent() before 1.0.0-M6), and
+      # call(String) and stream(...) return the text.
+      - patterns:
+          - pattern-either:
+              - pattern: $SAI.call(...)
+              - pattern: $SAI.stream(...)
+          - metavariable-type:
+              metavariable: $SAI
+              types: [ChatModel, StreamingChatModel, OpenAiChatModel, AzureOpenAiChatModel, AnthropicChatModel, OllamaChatModel, VertexAiGeminiChatModel, GoogleGenAiChatModel, MistralAiChatModel, BedrockProxyChatModel, DeepSeekChatModel]
+      # LangChain4j ChatModel (langchain4j-core 1.22.0) and ChatLanguageModel (0.36.2): chat(...)
+      # and generate(...) return the text, a ChatResponse (aiMessage().text()), or a
+      # Response<AiMessage> (content().text()).
+      - patterns:
+          - pattern-either:
+              - pattern: $LC.chat(...)
+              - pattern: $LC.chatAsync(...)
+              - pattern: $LC.generate(...)
+          - metavariable-type:
+              metavariable: $LC
+              types: [ChatModel, ChatLanguageModel, OpenAiChatModel, AzureOpenAiChatModel, AnthropicChatModel, OllamaChatModel, GoogleAiGeminiChatModel, VertexAiGeminiChatModel, MistralAiChatModel, BedrockChatModel]
+      # The same calls on a model the file can't type (`var model = OpenAiChatModel.builder()
+      # ... .build()`), on a receiver named like a model, in a file that imports the framework.
+      - patterns:
+          - pattern-either:
+              - pattern: $MODEL.call(...)
+              - pattern: $MODEL.stream(...)
+          - metavariable-regex:
+              metavariable: $MODEL
+              regex: (?i)^(?:this\.)?\w*(?:model|llm)$
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++org\.springframework\.ai\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++org\.springframework\.ai\.)[^\n]*+\z'
+      - patterns:
+          - pattern-either:
+              - pattern: $MODEL.chat(...)
+              - pattern: $MODEL.chatAsync(...)
+              - pattern: $MODEL.generate(...)
+          - metavariable-regex:
+              metavariable: $MODEL
+              regex: (?i)^(?:this\.)?\w*(?:model|llm)$
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\z'
+      # LangChain4j AI services built in this file (AiServices.create(...) or
+      # AiServices.builder(...)...build()), held in a local or a field: every method called on
+      # the proxy returns model output. Services injected from another file (a Spring Boot
+      # @AiService interface) can't be seen by a single-file scan.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $T $SVC = <... AiServices.$F(...) ...>;
+                  ...
+              - pattern-inside: |
+                  $SVC = <... AiServices.$F(...) ...>;
+                  ...
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    $T $SVC = <... AiServices.$F(...) ...>;
+                    ...
+                  }
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    $CTOR(...) {
+                      ...
+                      this.$SVC = <... AiServices.$F(...) ...>;
+                      ...
+                    }
+                    ...
+                  }
+          - pattern-either:
+              - pattern: $SVC.$CALL(...)
+              - pattern: this.$SVC.$CALL(...)
+      # LangChain4j streaming, in a file that imports LangChain4j: the text a
+      # StreamingChatResponseHandler receives (onPartialResponse, onCompleteResponse; onNext and
+      # onComplete in 0.x) and the TokenStream callbacks of a streaming AI service.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: void $ON($T $P) { ... }
+              - pattern-inside: void $ON($T $P, $CT $CTX) { ... }
+          - metavariable-regex:
+              metavariable: $ON
+              regex: ^(?:onPartialResponse|onCompleteResponse|onNext|onComplete)$
+          - pattern: $P
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\z'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $TS.$ON(($P) -> $BODY)
+              - pattern-inside: $TS.$ON(($P, $CTX) -> $BODY)
+          - metavariable-regex:
+              metavariable: $ON
+              regex: ^(?:onPartialResponse|onPartialResponseWithContext|onCompleteResponse|onIntermediateResponse|onNext|onComplete)$
+          - focus-metavariable: $P
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\z'
+    pattern-propagators:
+      # In --taint-intrafile mode OpenGrep drops taint through a call that takes a lambda
+      # (chatClient.prompt().user(u -> u.text(q)).call()), so carry it from the receiver to the
+      # call's result, and into the parameter of a callback over a tainted stream, Flux,
+      # Optional, or future (`.subscribe(chunk -> ...)`).
+      - patterns:
+          - pattern: $CALL
+          - pattern-either:
+              - pattern: $R.$M(..., ($P) -> $B, ...)
+              - pattern: $R.$M(..., ($P, $Q) -> $B, ...)
+        from: $R
+        to: $CALL
+      - patterns:
+          - pattern-inside: $R.$M(($P) -> $B)
+          - pattern: $P
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(?:map|flatMap|filter|forEach|forEachOrdered|peek|subscribe|doOnNext|doOnSuccess|thenAccept|thenApply|thenCompose|ifPresent|ifPresentOrElse|handle)$
+        from: $R
+        to: $P
+    pattern-sinks:
+      # One sink, so a call that two branches cover is reported once. Only the statement
+      # text counts, never the bound parameters.
+      - patterns:
+          - pattern-either:
+              # JDBC (java.sql): executeQuery / executeUpdate / executeLargeUpdate, and the text
+              # given to prepareStatement, prepareCall, and nativeSQL (a PreparedStatement binds
+              # its `?` values, but its text is still SQL).
+              - pattern: $ST.executeQuery($Q)
+              - pattern: $ST.executeUpdate($Q, ...)
+              - pattern: $ST.executeLargeUpdate($Q, ...)
+              - pattern: $CONN.prepareStatement($Q, ...)
+              - pattern: $CONN.prepareCall($Q, ...)
+              - pattern: $CONN.nativeSQL($Q)
+              # Statement.execute and addBatch are common method names, so the receiver must be
+              # typed as a statement, come straight from createStatement(), or be named like one.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $ST.execute($Q, ...)
+                      - pattern: $ST.addBatch($Q)
+                  - metavariable-type:
+                      metavariable: $ST
+                      types: [Statement, PreparedStatement, CallableStatement]
+              - patterns:
+                  - pattern-either:
+                      - pattern: $ST.execute($Q, ...)
+                      - pattern: $ST.addBatch($Q)
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: (?i)^(?:[\w.]*\.createStatement\(.*\)|(?:this\.)?\w*(?:stmt|statement))$
+              # Spring JdbcTemplate and NamedParameterJdbcTemplate (spring-jdbc 7.0.10): the
+              # first argument of query*, update, batchUpdate, and execute, on a receiver typed or
+              # named like one; JdbcClient and R2DBC DatabaseClient (spring-r2dbc 7.0.10) sql().
+              - patterns:
+                  - pattern-either:
+                      - pattern: $JT.query($Q, ...)
+                      - pattern: $JT.queryForList($Q, ...)
+                      - pattern: $JT.queryForObject($Q, ...)
+                      - pattern: $JT.queryForMap($Q, ...)
+                      - pattern: $JT.queryForRowSet($Q, ...)
+                      - pattern: $JT.queryForStream($Q, ...)
+                      - pattern: $JT.update($Q, ...)
+                      - pattern: $JT.batchUpdate($Q, ...)
+                      - pattern: $JT.execute($Q, ...)
+                  - metavariable-type:
+                      metavariable: $JT
+                      types: [JdbcTemplate, NamedParameterJdbcTemplate, JdbcOperations, NamedParameterJdbcOperations]
+              - patterns:
+                  - pattern-either:
+                      - pattern: $JT.query($Q, ...)
+                      - pattern: $JT.queryForList($Q, ...)
+                      - pattern: $JT.queryForObject($Q, ...)
+                      - pattern: $JT.queryForMap($Q, ...)
+                      - pattern: $JT.queryForRowSet($Q, ...)
+                      - pattern: $JT.queryForStream($Q, ...)
+                      - pattern: $JT.update($Q, ...)
+                      - pattern: $JT.batchUpdate($Q, ...)
+                      - pattern: $JT.execute($Q, ...)
+                  - metavariable-regex:
+                      metavariable: $JT
+                      regex: (?i)^(?:this\.)?\w*jdbc\w*$
+              - patterns:
+                  - pattern: $JC.sql($Q)
+                  - metavariable-type:
+                      metavariable: $JC
+                      types: [JdbcClient, DatabaseClient]
+              - patterns:
+                  - pattern: $JC.sql($Q)
+                  - metavariable-regex:
+                      metavariable: $JC
+                      regex: (?i)^(?:this\.)?\w*(?:jdbc\w*|databaseclient|r2dbc\w*)$
+              # JPA (jakarta.persistence 3.2) and Hibernate (7.4.13; createSQLQuery in 5.x):
+              # JPQL and HQL are injectable too.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $EM.createQuery($Q, ...)
+                      - pattern: $EM.createNativeQuery($Q, ...)
+                      - pattern: $EM.createSelectionQuery($Q, ...)
+                      - pattern: $EM.createMutationQuery($Q, ...)
+                      - pattern: $EM.createNativeMutationQuery($Q, ...)
+                      - pattern: $EM.createSQLQuery($Q, ...)
+                  - metavariable-type:
+                      metavariable: $EM
+                      types: [EntityManager, Session, StatelessSession, SharedSessionContract]
+              - patterns:
+                  - pattern-either:
+                      - pattern: $EM.createQuery($Q, ...)
+                      - pattern: $EM.createNativeQuery($Q, ...)
+                      - pattern: $EM.createSelectionQuery($Q, ...)
+                      - pattern: $EM.createMutationQuery($Q, ...)
+                      - pattern: $EM.createNativeMutationQuery($Q, ...)
+                      - pattern: $EM.createSQLQuery($Q, ...)
+                  - metavariable-regex:
+                      metavariable: $EM
+                      regex: (?i)^(?:this\.)?\w*(?:em|entitymanager|session)$
+              # jOOQ plain SQL (jooq 3.21.9, the @PlainSQL methods): DSLContext fetch / execute /
+              # resultQuery / query and DSL.sql / field / table / condition. DSL.name, val, and
+              # inline quote their argument, so they are not SQL text.
+              - patterns:
+                  - pattern: (DSLContext $DSL).$M($Q, ...)
+                  - metavariable-regex:
+                      metavariable: $M
+                      regex: ^(?:fetch|fetchOne|fetchSingle|fetchOptional|fetchValue|fetchValues|fetchOptionalValue|fetchLazy|fetchStream|fetchMany|fetchAsync|execute|executeLarge|resultQuery|query|batch|selectFrom)$
+              - patterns:
+                  - pattern: $DSL.$M($Q, ...)
+                  - metavariable-regex:
+                      metavariable: $DSL
+                      regex: (?i)^(?:this\.)?\w*(?:dsl|jooq)\w*$
+                  - metavariable-regex:
+                      metavariable: $M
+                      regex: ^(?:fetch|fetchOne|fetchSingle|fetchOptional|fetchValue|fetchValues|fetchOptionalValue|fetchLazy|fetchStream|fetchMany|fetchAsync|execute|executeLarge|resultQuery|query|batch|selectFrom)$
+              - patterns:
+                  - pattern: DSL.$M($Q, ...)
+                  - metavariable-regex:
+                      metavariable: $M
+                      regex: ^(?:sql|field|table|condition|query|resultQuery|raw|selectFrom)$
+          - metavariable-regex:
+              metavariable: $Q
+              regex: ^(?!(?:org\.jooq\.impl\.)?DSL\.(?:name|quotedName|unquotedName|val|inline|param)\()
+          - focus-metavariable: $Q
+      # SQL text built from model output (a `+` concatenation, String.format, or .formatted()
+      # whose text starts like an uppercase SQL statement) and handed to any call, such as the
+      # class's own run-query helper, so it is reported where it's built, in the default scan
+      # too. Logging calls are skipped. Text assigned to a variable first is left to the sinks
+      # above, so it is reported once.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $F(..., $Q, ...)
+              - pattern-inside: new $CLS(..., $Q, ...)
+          - pattern: $Q
+          - metavariable-regex:
+              metavariable: $Q
+              regex: (?s)^(?:String\.format\(\s*)?(?:"""\s*|")\s*(?:SELECT\b.*?\bFROM\b|WITH\s+\w+\s+AS\s*\(|INSERT\s+INTO\b|UPDATE\s+\w+\s+SET\b|DELETE\s+FROM\b)(?=.*?(?:"\s*\+|\+\s*"|\.formatted\(|\A String\.format\())
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(?!(?:[\w.]*\.)?(?:debug|info|warn|error|trace|log|println|print|printf|format)$)
+          - focus-metavariable: $Q
+    pattern-sanitizers:
+      # Values that can't carry text: numbers, booleans, UUIDs, dates, and enum constants
+      # parsed from the string (Integer.parseInt(x), Tone.valueOf(x); not String.valueOf).
+      - exact: true
+        patterns:
+          - pattern: $NUM.$PARSE(...)
+          - metavariable-regex:
+              metavariable: $NUM
+              regex: ^(?:java\.lang\.)?(?:Integer|Long|Short|Byte|Double|Float|Boolean)$|^(?:java\.util\.)?UUID$|^(?:java\.time\.)?(?:LocalDate|LocalDateTime|LocalTime|Instant|OffsetDateTime|ZonedDateTime|Duration)$
+          - metavariable-regex:
+              metavariable: $PARSE
+              regex: ^(?:parse\w*|valueOf|fromString)$
+      - exact: true
+        patterns:
+          - pattern: $CLS.valueOf(...)
+          - metavariable-regex:
+              metavariable: $CLS
+              regex: ^(?!(?:java\.lang\.)?(?:String|Object|CharSequence|StringBuilder|StringBuffer|Character)$)(?:\w+\.)*[A-Z]\w*$
+      # An allowlist lookup in a constant table (`PERSONAS.get(choice)`, `COMMANDS.getOrDefault(k,
+      # ...)`), and a check against a constant set or an anchored pattern before use
+      # (`if (!ALLOWED.contains(x)) throw ...`, `x.matches("[a-z_]+")`).
+      - patterns:
+          - pattern-either:
+              - pattern: $TABLE.get($KEY)
+              - pattern: $TABLE.getOrDefault($KEY, $DEF)
+          - metavariable-regex:
+              metavariable: $TABLE
+              regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+      - by-side-effect: true
+        patterns:
+          - pattern: $SET.contains($X)
+          - metavariable-regex:
+              metavariable: $SET
+              regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+          - focus-metavariable: $X
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X.matches("$RE")
+              - pattern: Pattern.matches("$RE", $X)
+              - pattern: $PAT.matcher($X).matches()
+          - focus-metavariable: $X
+      # Response metadata that can't carry the model's text: token counts, finish reasons, and
+      # model names (`response.getMetadata().getUsage()`, `chatResponse.tokenUsage()`).
+      - patterns:
+          - pattern: $OBJ.$GET()
+          - metavariable-regex:
+              metavariable: $GET
+              regex: ^(?:getMetadata|metadata|getUsage|tokenUsage|finishReason|getFinishReason|modelName|getModel)$
+      # jOOQ's quoting builders: an identifier or a bind value, not SQL text.
+      - exact: true
+        patterns:
+          - pattern: DSL.$QUOTE(...)
+          - metavariable-regex:
+              metavariable: $QUOTE
+              regex: ^(?:name|quotedName|unquotedName|val|inline|param)$
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      # A model choosing the SQL a connection runs is the textbook tool-misuse case (a "run
+      # SQL" tool, an agent's database step), even when the call isn't wrapped as a tool.
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C7.1.1 - Output Format Enforcement"
+      mitre-atlas:
+        - "AML.T0051 - LLM Prompt Injection"
+        - "AML.T0036 - Data from Information Repositories"
+      cwe:
+        - "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      # MEDIUM: text-to-SQL features run model SQL on purpose, often on a read-only role,
+      # which limits (but doesn't remove) the damage.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [spring-ai, langchain4j, jdbc, spring-jdbc, jpa, hibernate, jooq, r2dbc]
+      # API shapes checked 2026-10-24 against Maven Central sources: model-output sources as in
+      # llm-output-to-code-execution-java, plus spring-jdbc 7.0.10 (JdbcTemplate,
+      # NamedParameterJdbcTemplate, JdbcClient.sql), spring-r2dbc 7.0.10 (DatabaseClient.sql),
+      # jakarta.persistence-api 3.2.0 (EntityManager.createQuery / createNativeQuery),
+      # hibernate-core 7.4.13.Final (createSelectionQuery, createMutationQuery,
+      # createNativeMutationQuery), jooq 3.21.9 (@PlainSQL methods on DSLContext and DSL), and
+      # java.sql in the JDK.
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md
+        - https://cwe.mitre.org/data/definitions/89.html
+        - https://docs.spring.io/spring-framework/reference/data-access/jdbc/core.html
+        - https://www.jooq.org/doc/latest/manual/sql-building/plain-sql/
+        - https://cheatsheetseries.owasp.org/cheatsheets/Query_Parameterization_Cheat_Sheet.html

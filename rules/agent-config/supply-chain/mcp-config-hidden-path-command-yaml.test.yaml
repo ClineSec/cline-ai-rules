@@ -1,0 +1,100 @@
+# Every hidden path here names a file that doesn't exist.
+name: Fixture servers
+version: 0.0.1
+schema: v1
+# ok: mcp-config-hidden-path-command-yaml
+docs: ~/.config/.cache/.sys/.fixture-mcp.py
+mcpServers:
+  - name: Productivity suite
+    command: python3
+    args:
+      # ruleid: mcp-config-hidden-path-command-yaml
+      - ~/.config/.cache/.sys/.fixture-mcp.py
+  - name: Flow args
+    command: node
+    # ruleid: mcp-config-hidden-path-command-yaml
+    args: ["${HOME}/.continue/.sys/fixture.mjs", "--stdio"]
+  - name: Hidden program
+    # ruleid: mcp-config-hidden-path-command-yaml
+    command: /Users/fixture-user/.local/.cache/fixture-sync
+  - name: Quoted hidden program
+    # ruleid: mcp-config-hidden-path-command-yaml
+    command: "$HOME/.local/bin/.fixture-sync"
+  - name: Windows
+    # ruleid: mcp-config-hidden-path-command-yaml
+    command: C:\Users\fixture-user\.config\.sys\fixture.exe
+  - name: Windows double-quoted
+    command: py
+    # ruleid: mcp-config-hidden-path-command-yaml
+    args: ["C:\\Users\\fixture-user\\.config\\.sys\\fixture.py"]
+  - name: Shell line
+    command: bash
+    args:
+      - -c
+      # ruleid: mcp-config-hidden-path-command-yaml
+      - exec python3 ~/.config/.cache/.sys/.fixture-mcp.py
+  - name: Installed runner
+    # ok: mcp-config-hidden-path-command-yaml
+    command: ~/.local/bin/uvx
+    args:
+      - example-org-tickets-mcp==1.4.0
+  - name: Script in one dot folder
+    command: bash
+    args:
+      # ok: mcp-config-hidden-path-command-yaml
+      - ~/.continue/scripts/notes-mcp.sh
+  - name: Virtualenv in a dot folder
+    # ok: mcp-config-hidden-path-command-yaml
+    command: ~/.mcp-tools/.venv/bin/python
+    args:
+      - -m
+      - example_org_notes_mcp
+  - name: Env file
+    command: docker
+    args:
+      - run
+      - --env-file
+      # ok: mcp-config-hidden-path-command-yaml
+      - ~/.config/.secrets/.env
+      - ghcr.io/example-org/mcp:1.0.0
+    env:
+      # ok: mcp-config-hidden-path-command-yaml
+      FIXTURE_HOOK: ~/.config/.cache/.sys/.fixture-mcp.py
+  - name: Cwd and relative script
+    command: python3
+    # ruleid: mcp-config-hidden-path-command-yaml
+    cwd: ~/.config/.cache/.sys
+    args:
+      - fixture-mcp.py
+      - --stdio
+  - name: Cwd and relative command
+    # ruleid: mcp-config-hidden-path-command-yaml
+    cwd: ${HOME}/.continue/.cache/.sys
+    command: ./fixture-sync.js
+  - name: Node options
+    command: node
+    args: [server.js]
+    env:
+      # ruleid: mcp-config-hidden-path-command-yaml
+      NODE_OPTIONS: --require ~/.continue/.cache/.sys/.fixture-loader.js
+  - name: Cwd hidden but packaged
+    # ok: mcp-config-hidden-path-command-yaml
+    cwd: ~/.config/.cache/.sys
+    command: npx
+    args: ["-y", "@example-org/notes-mcp@2.0.0"]
+  - name: Cwd hidden no relative script
+    command: python3
+    # ok: mcp-config-hidden-path-command-yaml
+    cwd: ~/.config/.cache/.sys
+    args: ["-m", "example_org_notes_mcp"]
+  - name: Cwd single dot folder
+    command: python3
+    # ok: mcp-config-hidden-path-command-yaml
+    cwd: ~/.cache
+    args: [fixture-mcp.py]
+  - name: Node options no loader
+    command: node
+    args: [server.js]
+    env:
+      # ok: mcp-config-hidden-path-command-yaml
+      NODE_OPTIONS: --max-old-space-size=4096 --enable-source-maps

@@ -1,0 +1,14 @@
+[Unit]
+Description=devtools notes MCP server (contrib, standalone fastmcp)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=devtools
+WorkingDirectory=/srv/devtools
+EnvironmentFile=/srv/devtools/deploy/build-vm.env
+ExecStart=/srv/devtools/.venv/bin/fastmcp run contrib/notes_server.py:notes
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

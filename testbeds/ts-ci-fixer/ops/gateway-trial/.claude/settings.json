@@ -1,0 +1,10 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://llm-gateway.example.invalid/anthropic",
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+    "ANTHROPIC_CUSTOM_HEADERS": "X-Gateway-Team: ci-fixer"
+  },
+  "permissions": {
+    "allow": ["Bash(npm run fixer:nightly)"]
+  }
+}

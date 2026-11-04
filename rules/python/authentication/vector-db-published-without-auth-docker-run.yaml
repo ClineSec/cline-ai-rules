@@ -1,0 +1,165 @@
+rules:
+  - id: vector-db-published-without-auth-docker-run
+    # `docker run` (or podman, nerdctl) that starts a Chroma, Qdrant, Weaviate, or Milvus
+    # server, publishes its port on every interface of the host (or uses the host's network),
+    # and leaves the server's auth off, in scripts, Makefiles, CI jobs, and systemd units. The
+    # server facts are those of vector-db-published-without-auth-compose (checked 2026-10-25:
+    # Chroma 1.5.9, Qdrant 1.20.0, Weaviate 1.40.2, Milvus 3.0.3); the command parsing and
+    # the published-port test are shared with mcp-server-bind-all-interfaces-config-docker-run.
+    # The image is read from the command, or from a variable named for the database's image
+    # (${MILVUS_IMAGE}); a variable image (or a digest) for Chroma is treated as 0.x. Settings
+    # that can't be seen keep the command quiet: --env-file, and a config file mounted over
+    # the server's config folder (or Qdrant's --config-path).
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This starts a vector database (Chroma, Qdrant, Weaviate, or Milvus) with its auth off
+      and publishes its port on every interface of the host (or shares the host's network).
+      Docker opens published ports past the host firewall, so anyone who can reach the host
+      can read every collection (embeddings can be inverted back to much of their source
+      text) and insert, change, or delete documents, which poisons what the RAG app
+      retrieves. Publish on loopback only (-p 127.0.0.1:6333:6333), and turn on the server's
+      auth: -e QDRANT__SERVICE__API_KEY for Qdrant, AUTHENTICATION_APIKEY_ENABLED with
+      anonymous access off for Weaviate, COMMON_SECURITY_AUTHORIZATIONENABLED=true (and a new
+      root password) for Milvus, or an authenticating proxy for Chroma, which has no built-in
+      auth since 1.0.
+    paths:
+      include:
+        - "*.sh"
+        - "*.bash"
+        - "*.zsh"
+        - "Makefile"
+        - "GNUmakefile"
+        - "*.mk"
+        - "justfile"
+        - "Justfile"
+        - ".justfile"
+        - ".github/workflows/*.yml"
+        - ".github/workflows/*.yaml"
+        - ".gitlab-ci.yml"
+        - ".circleci/config.yml"
+        - "azure-pipelines.yml"
+        - "bitbucket-pipelines.yml"
+        - "Jenkinsfile"
+        - "*.service"
+    pattern-regex: |-
+      (?xm)
+      (?(DEFINE)
+        # --- docker run command groups (begin): build.py keeps this block identical in
+        # vector-db-published-without-auth-docker-run; edit both. ---
+        (?<q> " (?:[^"\\\n] | \\.)*+ " | ' [^'\n]*+ ' )
+        (?<lone> " (?![^"\n]*") | ' (?![^'\n]*') )
+        (?<ws> [ \t]++ | [ \t]*+ \\\r?\n [ \t]*+ )
+        (?<addr> 0\.0\.0\.0 | :: | \[::\] )
+        # One piece of the command: a word, a quoted string, a \-newline continuation, or
+        # one other character. The command stops at a newline, a comment, and ; & |
+        # separators. Pieces are atomic and take whole words, so a long line costs one step
+        # per word (per-character steps hit PCRE's match limit on lines of about 50 KB).
+        (?<c> (?> (?&q) | \\\r?\n | \\[^\r\n] | [^\s"'\#;&|\\]++ | [^\n"'\#;&|\\] ) )
+        (?<pp> \d++ (?: -\d++ )?+ | \$\{ [^}\n]*+ \} | \$\w++ | \$\( \w++ \) )
+        # A port published on every host interface, or host networking.
+        (?<pub> (?: -p | --publish ) (?: = | (?&ws) ) ["']?+
+                (?: (?: (?&addr) | \$\{ \w++ :?- (?&addr) \} ) : )?+
+                (?&pp) (?: : (?&pp) )?+ (?: / (?:tcp|udp|sctp) )?+ ["']?+ (?= \s | $ )
+              | -P (?= \s ) | --publish-all (?= \s | =true )
+              | (?: --network | --net ) (?: = | (?&ws) ) ["']?+ host ["']?+ (?= \s | $ ) )
+        # Everything before the program on its line (quoted strings skipped unless they hold
+        # a command, as in run: "..." or sh -c "...").
+        (?<pre> (?> (?<= : | :\s | = | -c\s | -lc\s | -ec\s | \beval\s ) ["']
+          | (?&q) | (?&lone) | \\[^\r\n] | (?<=\S)\#
+          # A run of plain words in one step (a program never starts inside one); it stops
+          # before then/do/else.
+          | (?: (?! (?:then|do|else) [ \t] ) [^\s"'\#\\;&|(`]++ [ \t]*+ )++ | [^\n"'\#\\] )*? )
+        # --- docker run command groups (end) ---
+        # A vector database image, or a variable named for one (${QDRANT_IMAGE}, $(QDRANT_IMAGE)).
+        (?<img> (?<=\s) ["']?+
+                (?: (?: [\w.-]++ (?: :\d++ )?+ / )?
+                (?: qdrant/qdrant | semitechnologies/weaviate | milvusdb/milvus | (?: chromadb | chroma-core ) / chroma )
+                (?: [:@] [^\s"';&|)]*+ )?+
+                  | \$[{(]?+ (?= \w*? (?i: milvus | qdrant | weaviate | chroma ) ) (?= \w*? (?i: image | img ) ) \w++ [})]?+ )
+                ["']?+ (?= [\s;&|)] | $ ) )
+        # A piece of the command before the image (docker's own options).
+        (?<ci> (?! (?&img) ) (?&c) )
+        (?<env> (?: -e | --env ) (?: = | (?&ws) ) ["']?+ )
+        # NAME=value, or NAME alone (passed through from the host's environment).
+        (?<set> (?: = (?! ["']?+ (?: \s | $ ) ) | ["']?+ (?= \s | $ ) ) )
+        (?<on> = ["']?+ (?i: on | enabled | 1 | true ) ["']?+ (?= [\s;&|)] | $ ) )
+        (?<mount> (?: -v | --volume | --mount ) (?: = | (?&ws) ) ["']?+ [^\s"']*? )
+        (?<envfile> --env-file (?: = | (?&ws) ) ) )
+      # --- docker run command start (begin): build.py keeps this block identical in
+      # vector-db-published-without-auth-docker-run; edit both. ---
+      # A continued line (the previous one ends in \) starts a command only after a separator
+      # or a keyword: "cmd; \", "&& \", "then \".
+      ^ (?: (?<! \\\n ) (?<! \\\r\n )
+          | (?<= [;&|] \\\n | [;&|][ \t] \\\n | \bthen[ \t] \\\n | \belse[ \t] \\\n | \bdo[ \t] \\\n ) )
+        (?&pre)
+      (?: ^ (?: \t [@+-]{1,2}
+              | [ \t]*+ (?: - [ \t]++ )?+
+                (?: Exec(?:Start|StartPre|Reload)? = [@!+:-]*+ | [\w.-]++ [ \t]*+ : [ \t]++ )?+ )
+        | (?<=[;&|(`]) [ \t]*+
+        | (?<![\w-]) (?:then|do|else) [ \t]++
+        | (?<= : ["'] | :\s["'] | =["'] | c\s["'] | \beval\s["'] ) )
+      (?: [A-Za-z_]\w*+ = (?: (?&q) | [^\s"'\#;&|]*+ ) [ \t]++ | (?: sudo | exec | nohup ) [ \t]++ )*+
+      \K
+      ["']?+ (?: [\w.~${}-]*+ / )*+ (?: docker | podman | nerdctl ) ["']?+ (?: (?&ws) container )?+ (?&ws) run (?= \s )
+      # --- docker run command start (end) ---
+      (?= (?&ci)*? (?<=\s) (?&pub) )
+      (?: # Chroma 1.x, latest, or untagged: no built-in auth to turn on.
+          (?= (?&ci)*? (?= (?&img) ) (?<=\s) ["']?+ (?: [\w.-]+ (?: :\d+ )? / )? (?: chromadb | chroma-core ) / chroma
+              (?: : (?: latest | v?[1-9][\w.-]*+ ) )?+ ["']?+ (?= [\s;&|)] | $ ) )
+        | # Chroma 0.x, a digest, or an image from a variable: auth needs a server auth provider.
+          (?= (?&ci)*? (?= (?&img) ) (?<=\s) ["']?+ (?: (?: [\w.-]+ (?: :\d+ )? / )? (?: chromadb | chroma-core ) / chroma (?: :v?0\. | @ )
+                                       | \$[{(]?+ (?i: \w*? chroma \w*+ ) ) )
+          (?! (?&ci)*? (?<=\s) (?: (?&env) CHROMA_SERVER_AUTHN?_PROVIDER (?&set) | (?&envfile) ) )
+        | # Qdrant with no API key.
+          (?= (?&ci)*? (?= (?&img) ) (?<=\s) ["']?+ (?: (?: [\w.-]+ (?: :\d+ )? / )? qdrant/qdrant (?= [:@\s"';&|)] | $ )
+                                       | \$[{(]?+ (?i: \w*? qdrant \w*+ ) ) )
+          (?! (?&ci)*? (?<=\s) (?: (?&env) QDRANT__SERVICE__(?:API_KEY|ALT_API_KEY|READ_ONLY_API_KEY) (?&set)
+                                 | (?&envfile) | (?&mount) /qdrant/config ) )
+          (?! (?&c)*? (?<=\s) --config-path (?= [\s=] ) )
+        | # Weaviate with anonymous access on, explicitly or because no other method is, and
+          # no authorization.
+          (?= (?&ci)*? (?= (?&img) ) (?<=\s) ["']?+ (?: (?: [\w.-]+ (?: :\d+ )? / )? semitechnologies/weaviate (?= [:@\s"';&|)] | $ )
+                                       | \$[{(]?+ (?i: \w*? weaviate \w*+ ) ) )
+          (?! (?&ci)*? (?<=\s) (?&env) AUTHORIZATION_(?:ADMINLIST_ENABLED|RBAC_ENABLED|ENABLE_RBAC) (?&on) )
+          (?: (?= (?&ci)*? (?<=\s) (?&env) AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED (?&on) )
+            | (?! (?&ci)*? (?<=\s) (?: (?&env) AUTHENTICATION_(?:APIKEY|OIDC|DB_USERS)_ENABLED (?&on) | (?&envfile) ) )
+              # A --config-file can turn auth on (the environment still overrides it).
+              (?! (?&c)*? (?<=\s) --config-file (?= [\s=] ) ) )
+        | # Milvus with authorization off (the default).
+          (?= (?&ci)*? (?= (?&img) ) (?<=\s) ["']?+ (?: (?: [\w.-]+ (?: :\d+ )? / )? milvusdb/milvus (?= [:@\s"';&|)] | $ )
+                                       | \$[{(]?+ (?i: \w*? milvus \w*+ ) ) )
+          (?! (?&ci)*? (?<=\s) (?: (?&env) (?i: (?: milvus_conf_ )? common [_./]*+ security [_./]*+ authorization [_./]*+ enabled )
+                                   = ["']?+ (?i: true | t | 1 ) ["']?+ (?= [\s;&|)] | $ )
+                                 | (?&envfile) | (?&mount) /milvus/configs/ (?: milvus | user ) \.yaml ) ) )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM09:2026 - Vector and Embedding Weaknesses"
+        - "LLM08:2025 - Vector and Embedding Weaknesses"
+      owasp-aisvs:
+        - "v1.01-C5.2.1 - AI Resource Authorization & Classification"
+      mitre-atlas:
+        - "AML.T0132 - Misconfigured or Publicly Exposed AI Services"
+        - "AML.T0085.000 - Data from AI Services: RAG Databases"
+      cwe:
+        - "CWE-306: Missing Authentication for Critical Function"
+        - "CWE-1327: Binding to an Unrestricted IP Address"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [docker, chromadb, qdrant, weaviate, milvus]
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM09_VectorAndEmbeddingWeaknesses.md
+        - https://github.com/OWASP/AISVS/blob/v1.01/1.01/en/0x10-C05-Access-Control-and-Identity.md
+        - https://cwe.mitre.org/data/definitions/306.html
+        - https://github.com/chroma-core/chroma/blob/1.5.9/rust/frontend/src/auth/mod.rs
+        - https://github.com/qdrant/qdrant/blob/v1.20.0/src/settings.rs
+        - https://github.com/weaviate/weaviate/blob/v1.40.2/usecases/config/environment.go
+        - https://github.com/milvus-io/milvus/blob/v3.0.3/pkg/config/env_source.go
+        - https://docs.docker.com/reference/cli/docker/container/run/
+        - https://docs.docker.com/engine/network/port-publishing/
+        - https://www.legitsecurity.com/blog/the-risks-lurking-in-publicly-exposed-genai-development-services
+        - https://www.upguard.com/blog/open-chroma-databases-ai-attack-surface

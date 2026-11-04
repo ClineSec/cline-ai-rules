@@ -1,0 +1,63 @@
+name: release-check
+on:
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the release page
+        run: |
+          # claude -p "check" --allowedTools "Bash(curl:*)"
+          # ruleid: agent-allowlist-network-exfil-commands-cli
+          claude -p "Check that the release page is up" --allowedTools "Read,Bash(curl -sI https://downloads.example.com/*)" \
+            --disallowedTools "Bash(wget:*)" \
+            --max-turns 5
+      - name: DNS check
+        # ruleid: agent-allowlist-network-exfil-commands-cli
+        run: claude -p "Resolve the hosts" --allowedTools "Read" "Bash(dig:*)" "Bash(nslookup *)" --max-turns 3
+      - name: Narrow check
+        # ok: agent-allowlist-network-exfil-commands-cli
+        run: claude -p "Check status" --allowedTools "Bash(curl -sf https://status.example.com/healthz)" "Bash(git log:*)"
+      - name: Deny list only
+        # ok: agent-allowlist-network-exfil-commands-cli
+        run: claude -p "Summarize" --disallowedTools "Bash(curl:*)" "Bash(ssh:*)"
+      - name: Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          # ruleid: agent-allowlist-network-exfil-commands-cli
+          claude_args: --max-turns 10 --allowedTools "Read" "Grep" "Bash(curl --silent *)"
+      - name: Review (old action)
+        uses: anthropics/claude-code-action@v0
+        with:
+          allowed_tools: |
+            Read
+            # ruleid: agent-allowlist-network-exfil-commands-cli
+            Bash(wget:*)
+          # ok: agent-allowlist-network-exfil-commands-cli
+          disallowed_tools: "Bash(curl:*)"
+      - name: Gemini
+        uses: google-github-actions/run-gemini-cli@v0
+        with:
+          settings: |
+            {
+              "tools": {
+                "core": [
+                  // ok: agent-allowlist-network-exfil-commands-cli
+                  "run_shell_command(curl)"
+                ],
+                "allowed": [
+                  "run_shell_command(git status)",
+                  // ruleid: agent-allowlist-network-exfil-commands-cli
+                  "run_shell_command(ssh)"
+                ],
+                // ok: agent-allowlist-network-exfil-commands-cli
+                "exclude": ["run_shell_command(scp)"]
+              }
+            }
+      - name: Gemini lookup
+        # ruleid: agent-allowlist-network-exfil-commands-cli
+        run: gemini -p "Look up the hosts" --allowed-tools="run_shell_command(nslookup)"
+      - name: Prose
+        # ok: agent-allowlist-network-exfil-commands-cli
+        run: echo "Bash(curl:*) stays out of the allow list"

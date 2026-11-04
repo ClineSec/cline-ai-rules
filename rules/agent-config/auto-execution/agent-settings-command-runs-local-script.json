@@ -1,0 +1,164 @@
+[
+  {
+    // .claude/settings.json: credential and telemetry helpers
+    // ruleid: agent-settings-command-runs-local-script
+    "apiKeyHelper": "./scripts/get-api-key.sh",
+    // ruleid: agent-settings-command-runs-local-script
+    "awsAuthRefresh": "bash scripts/aws-sso-refresh.sh --profile dev",
+    // ruleid: agent-settings-command-runs-local-script
+    "awsCredentialExport": "node .claude/aws-creds.mjs",
+    // ruleid: agent-settings-command-runs-local-script
+    "gcpAuthRefresh": "\"$CLAUDE_PROJECT_DIR\"/tools/gcp-login",
+    // ruleid: agent-settings-command-runs-local-script
+    "otelHeadersHelper": "uv run .claude/otel_headers.py",
+    // ruleid: agent-settings-command-runs-local-script
+    "statusLine": { "type": "command", "command": "bash .claude/statusline.sh", "padding": 1 },
+    "subagentStatusLine": {
+      "type": "command",
+      // ruleid: agent-settings-command-runs-local-script
+      "command": ".claude/subagent-rows.sh"
+    },
+    // ruleid: agent-settings-command-runs-local-script
+    "fileSuggestion": { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/scripts/file-index.sh" },
+    "extraKnownMarketplaces": {
+      "team-plugins": {
+        "source": {
+          "source": "url",
+          "url": "https://plugins.example.com/marketplace.json",
+          // ruleid: agent-settings-command-runs-local-script
+          "headersHelper": "node scripts/marketplace-token.js"
+        }
+      },
+      "team-inline": {
+        "source": {
+          "source": "settings",
+          "name": "team-inline",
+          "plugins": [
+            {
+              "name": "formatter",
+              "source": { "source": "archive", "url": "https://registry.example.com/formatter-1.2.0.zip" },
+              "strict": false,
+              // ok: agent-settings-command-runs-local-script
+              "headersHelper": "./scripts/registry-token.sh"
+            }
+          ]
+        }
+      }
+    },
+    "hooks": {
+      "SessionStart": [
+        {
+          "hooks": [
+            // ok: agent-settings-command-runs-local-script
+            { "type": "command", "command": ".claude/hooks/session-start.sh" }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    // ruleid: agent-settings-command-runs-local-script
+    "apiKeyHelper": "python3 -u tools/claude_key.py",
+    // ruleid: agent-settings-command-runs-local-script
+    "otelHeadersHelper": "powershell -NoProfile -File .\\scripts\\otel-headers.ps1",
+    // ruleid: agent-settings-command-runs-local-script
+    "awsCredentialExport": "node -r dotenv/config scripts/bedrock-creds.js",
+    // ok: agent-settings-command-runs-local-script
+    "gcpAuthRefresh": "C:\\Program Files\\Google\\gcloud-refresh.cmd",
+    "additionalMarketplaces": {
+      "ops": {
+        // ruleid: agent-settings-command-runs-local-script
+        "source": { "source": "url", "url": "https://ops.example.com/marketplace.json", "headersHelper": "./bin/registry-headers" }
+      }
+    }
+  },
+  {
+    // Installed tools, absolute and home paths, plugin-root paths, and inline commands.
+    // ok: agent-settings-command-runs-local-script
+    "apiKeyHelper": "/usr/local/bin/vault-claude-key",
+    // ok: agent-settings-command-runs-local-script
+    "awsAuthRefresh": "aws sso login --profile dev",
+    // ok: agent-settings-command-runs-local-script
+    "awsCredentialExport": "aws configure export-credentials --profile bedrock --format process",
+    // ok: agent-settings-command-runs-local-script
+    "gcpAuthRefresh": "gcloud auth application-default login",
+    // ok: agent-settings-command-runs-local-script
+    "otelHeadersHelper": "~/.claude/otel-headers.sh",
+    // ok: agent-settings-command-runs-local-script
+    "statusLine": { "type": "command", "command": "jq -r '.model.display_name'" },
+    // ok: agent-settings-command-runs-local-script
+    "fileSuggestion": { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/files.sh" },
+    "env": {
+      // ok: agent-settings-command-runs-local-script
+      "command": "node .github/setup.js",
+      // ok: agent-settings-command-runs-local-script
+      "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "300000"
+    }
+  },
+  {
+    // .mcp.json
+    "mcpServers": {
+      "sentry": {
+        "type": "http",
+        "url": "https://mcp.example.com/sentry",
+        // ruleid: agent-settings-command-runs-local-script
+        "headersHelper": "python3 scripts/mcp_headers.py"
+      },
+      "docs": {
+        "type": "http",
+        "url": "https://mcp.example.com/docs",
+        // ok: agent-settings-command-runs-local-script
+        "headersHelper": "/opt/bin/get-mcp-auth-headers.sh"
+      },
+      "local": {
+        // ok: agent-settings-command-runs-local-script
+        "command": "node",
+        "args": ["./mcp/server.js"]
+      }
+    }
+  },
+  {
+    // A plugin's .mcp.json without the mcpServers wrapper.
+    "tickets": {
+      "type": "http",
+      "url": "https://mcp.example.com/tickets",
+      // ruleid: agent-settings-command-runs-local-script
+      "headersHelper": "scripts/ticket-token.sh"
+    }
+  },
+  {
+    // .claude-plugin/plugin.json
+    "name": "example-plugin",
+    "settings": {
+      // ruleid: agent-settings-command-runs-local-script
+      "subagentStatusLine": { "type": "command", "command": "node scripts/subagent-rows.js" }
+    }
+  },
+  {
+    // .claude-plugin/marketplace.json
+    "name": "example-marketplace",
+    "owner": { "name": "Example" },
+    "plugins": [
+      {
+        "name": "registry-plugin",
+        "strict": false,
+        "source": { "source": "archive", "url": "https://registry.example.com/registry-plugin-2.1.0.zip" },
+        // ok: agent-settings-command-runs-local-script
+        "headersHelper": "./scripts/mint-registry-token.sh"
+      },
+      {
+        "name": "inline-mcp",
+        "source": "./plugins/inline-mcp",
+        "strict": false,
+        "mcpServers": {
+          "search": {
+            "type": "http",
+            "url": "https://mcp.example.com/search",
+            // ruleid: agent-settings-command-runs-local-script
+            "headersHelper": "bash ./scripts/search-headers.sh"
+          }
+        }
+      }
+    ]
+  }
+]

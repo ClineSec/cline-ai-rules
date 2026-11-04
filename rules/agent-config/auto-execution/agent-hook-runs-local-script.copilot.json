@@ -1,0 +1,27 @@
+{
+  // .github/hooks/policy.json (GitHub Copilot CLI and cloud agent)
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        // ruleid: agent-hook-runs-local-script
+        "bash": "./scripts/copilot/session-start.sh",
+        // ruleid: agent-hook-runs-local-script
+        "powershell": "./scripts/copilot/session-start.ps1",
+        // ok: agent-hook-runs-local-script
+        "cwd": "scripts/copilot",
+        "timeoutSec": 10
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        // ok: agent-hook-runs-local-script
+        "bash": "echo \"$(date) pre-tool\" >> logs/copilot-tools.log",
+        // ruleid: agent-hook-runs-local-script
+        "command": "python3 .github/hooks/check_tool.py"
+      }
+    ]
+  }
+}

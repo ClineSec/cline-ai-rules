@@ -1,0 +1,34 @@
+name: lint-fix
+on:
+  workflow_dispatch:
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fix lint with a subagent
+        run: |
+          npm ci
+          # ruleid: subagent-permission-mode-cli
+          claude -p "Fix the lint job" --agents '{
+            "fixer": {"description": "Fixes lint", "prompt": "Fix lint.", "permissionMode": "acceptEdits"}
+          }'
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # ruleid: subagent-permission-mode-cli
+          claude_args: --agents '{"fixer":{"description":"d","prompt":"p","permissionMode":"auto"}}'
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # ruleid: subagent-permission-mode-cli
+          claude_args: |
+            --max-turns 20
+            --agents '{"fixer":{"description":"d","prompt":"p","permissionMode":"acceptEdits"}}'
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # ok: subagent-permission-mode-cli
+          claude_args: --agents '{"reviewer":{"description":"d","prompt":"p","permissionMode":"plan"}}'
+          # ok: subagent-permission-mode-cli
+          settings: '{"permissions":{"defaultMode":"acceptEdits"}}'
+      - name: Settings only
+        # ok: subagent-permission-mode-cli
+        run: claude -p "Review" --settings '{"permissions":{"defaultMode":"acceptEdits"}}'

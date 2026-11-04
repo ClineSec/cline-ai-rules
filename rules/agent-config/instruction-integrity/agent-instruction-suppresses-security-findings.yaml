@@ -1,0 +1,65 @@
+rules:
+  - id: agent-instruction-suppresses-security-findings
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      An agent instruction file tells the agent to ignore, hide, or downgrade security
+      findings. Any coding or review agent that loads this file inherits the instruction,
+      including agents run for security review. Remove it; record accepted risk in your
+      scanner's waiver mechanism, where it is visible and reviewable.
+    paths:
+      include:
+        - "CLAUDE.md"
+        - "CLAUDE.local.md"
+        - "AGENTS.md"
+        - "AGENTS.override.md"
+        - "GEMINI.md"
+        - ".cursorrules"
+        - ".cursor/rules/**"
+        - ".windsurfrules"
+        - ".windsurf/rules/**"
+        # Windsurf's current preferred rules folder; .windsurf/rules is the fallback.
+        - ".devin/rules/**"
+        - ".clinerules"
+        - ".clinerules/**"
+        - ".github/copilot-instructions.md"
+        - ".github/instructions/**"
+        # Skills, subagents, and slash commands: project copies and those shipped in plugins
+        # (a plugin's agents/ and commands/ folders, which load recursively), plus Gemini CLI
+        # custom commands (TOML).
+        - "SKILL.md"
+        - ".claude/agents/**"
+        - ".claude/commands/**"
+        - "agents/**/*.md"
+        - "commands/**/*.md"
+        - ".gemini/commands/**"
+    # Gaps may cross a line break inside wrapped Markdown text, but not a blank line or the
+    # start of a list item, heading, quote, or table row.
+    pattern-either:
+      - pattern-regex: (?i)\b(ignore|disregard|skip|suppress|hide|omit|exclude)\b(?:[^\n]|\n(?![ \t]*(?:\r?\n|[-*+>#|]|\d+[.)]))){0,60}\b(security|vulnerabilit(y|ies)|cve|sast|sca)\b(?:[^\n]|\n(?![ \t]*(?:\r?\n|[-*+>#|]|\d+[.)]))){0,40}\b(findings?|issues?|alerts?|warnings?|results?|reports?)\b
+      - pattern-regex: (?i)\b(do\s+not|don'?t|never)\s+(report|flag|mention|raise|surface|include)\b(?:[^\n]|\n(?![ \t]*(?:\r?\n|[-*+>#|]|\d+[.)]))){0,60}\b(security|vulnerabilit(y|ies)|cve|injection|secrets?)\b
+      - pattern-regex: (?i)\b(treat|mark|classify|consider)\b(?:[^\n]|\n(?![ \t]*(?:\r?\n|[-*+>#|]|\d+[.)]))){0,60}\b(security|vulnerabilit(y|ies)|cve|sast)\b(?:[^\n]|\n(?![ \t]*(?:\r?\n|[-*+>#|]|\d+[.)]))){0,60}\bas\s+(a\s+)?(false\s+positives?|informational|low\s+severity|won'?t\s+fix|accepted)\b
+      - pattern-regex: (?i)\b(downgrade|lower|reduce)\b(?:[^\n]|\n(?![ \t]*(?:\r?\n|[-*+>#|]|\d+[.)]))){0,40}\bseverity\b(?:[^\n]|\n(?![ \t]*(?:\r?\n|[-*+>#|]|\d+[.)]))){0,60}\b(security|vulnerabilit(y|ies)|cve|findings?)\b
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM01:2026 - Prompt Injection"
+        - "LLM01:2025 - Prompt Injection"
+      owasp-agentic:
+        - "ASI01 - Agent Goal Hijack"
+        - "ASI06 - Memory & Context Poisoning"
+      owasp-aisvs:
+        - "v1.01-AC.11.2 - AI Code-Review & Assistant Bot Hardening"
+      mitre-atlas:
+        - "AML.T0081 - Modify AI Agent Configuration"
+      cwe:
+        - "CWE-1427: Improper Neutralization of Input Used for LLM Prompting"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code, codex, cursor, copilot, windsurf, cline, gemini-cli]
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM01_PromptInjection.md
+        - https://cwe.mitre.org/data/definitions/1427.html

@@ -1,0 +1,16 @@
+// Zed's format (.zed/settings.json): "context_servers", with comments and trailing commas.
+{
+  "context_servers": {
+    "filesystem": {
+      "command": "npx",
+      // ruleid: mcp-config-unpinned-package
+      "args": ["-y", "@example-org/mcp-filesystem"],
+      "env": {},
+    },
+    "git": {
+      "command": "uvx",
+      // ok: mcp-config-unpinned-package
+      "args": ["example-org-mcp-git==2026.1.14"],
+    },
+  },
+}

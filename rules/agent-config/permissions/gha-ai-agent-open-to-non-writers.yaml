@@ -1,0 +1,237 @@
+rules:
+  - id: gha-ai-agent-open-to-non-writers
+    # claude-code-action and codex-action refuse to run unless the user who triggered the
+    # event has write access to the repository. These inputs turn that check off for
+    # everyone: claude-code-action allowed_non_write_users: "*" (read only when github_token
+    # is also passed) and allowed_bots: "*" (any GitHub App), and codex-action
+    # allow-users: "*". Reported when the agent can then edit files or run commands:
+    # claude-code-action in tag mode (no prompt input, where it gets acceptEdits) or with
+    # Bash / edit tools in claude_args or settings, and codex-action unless it is read-only.
+    # A read-only agent open to everyone (a Q&A bot) is what the switch is for, and is not
+    # reported.
+    #
+    # When the step's prompt or env carries text from the event (an issue body, a comment),
+    # gha-ai-agent-untrusted-trigger already reports that line, so this rule stays quiet on
+    # the step. What remains here is mostly tag mode, where the commenter's own words are the
+    # instruction and no prompt input exists to report.
+    languages: [yaml]
+    severity: ERROR
+    message: >-
+      This step turns off the agent action's write-access check for everyone, and the agent
+      can edit files or run commands. Anyone with a GitHub account (or any GitHub App) can
+      open an issue or comment and tell the agent what to do, with the job's token and
+      secrets. Remove the "*" (list the specific users or bots instead), or keep the open
+      bot read-only: no Bash or edit tools in claude_args, codex-action with
+      permission-profile ":read-only", and a token that cannot write.
+    paths:
+      include:
+        - ".github/workflows/*.yml"
+        - ".github/workflows/*.yaml"
+    patterns:
+      - pattern-either:
+          # anthropics/claude-code-action v1.0.258 (not the base action, which has no check).
+          - patterns:
+              - pattern-inside: |
+                  uses: $A
+                  ...
+              - metavariable-regex:
+                  metavariable: $A
+                  regex: ^["']?anthropics/claude-code-action@
+              - pattern-either:
+                  - patterns:
+                      - pattern-inside: |
+                          with:
+                            ...
+                            github_token: $T
+                            ...
+                      - pattern: 'allowed_non_write_users: $W'
+                  - pattern: 'allowed_bots: $W'
+              # It acts: tag mode (no prompt input), or claude_args / settings that allow
+              # Bash or edits.
+              - pattern-either:
+                  - patterns:
+                      - pattern-either: [{pattern: 'allowed_non_write_users: $W'}, {pattern: 'allowed_bots: $W'}, {pattern: 'allow-users: $W'}]
+                      - pattern-not-inside: |
+                          with:
+                            ...
+                            prompt: $P
+                            ...
+                  - patterns:
+                      - pattern-either: [{pattern: 'allowed_non_write_users: $W'}, {pattern: 'allowed_bots: $W'}, {pattern: 'allow-users: $W'}]
+                      - pattern-either:
+                          - pattern-inside: |
+                              with:
+                                ...
+                                claude_args: $ACT
+                                ...
+                          - pattern-inside: |
+                              with:
+                                ...
+                                settings: $ACT
+                                ...
+                      # claude_args flags, or a settings JSON string with an allow list or default
+                      # mode. Bash counts when bare or with a wildcard, except read-only commands
+                      # (gh ... view/list, git diff/log/show); an exact command like
+                      # Bash(npm test) does not count.
+                      - metavariable-regex:
+                          metavariable: $ACT
+                          regex: |-
+                            (?xs)
+                            # --- claude-code-action acting test (begin): build.py keeps this block identical in
+                            # gha-ai-agent-untrusted-trigger; edit both together. ---
+                            (?(DEFINE)
+                              (?<ro> (?: gh \s++ [\w-]++ \s++ (?:view|list|diff|status|checks)
+                                       | git \s++ (?:diff|log|show|status|blame)
+                                       | cat | ls | head | tail | wc | grep | rg | echo | pwd ) (?![\w-]) )
+                              (?<tool> (?<![\w(]) (?: Bash (?![\w(])
+                                                    | Bash \( \s*+ (?: \*?+ \s*+ \) | (?! (?&ro) ) [^)]*? \* [^)]*+ \) )
+                                                    | (?:Multi)?Edit | Write | NotebookEdit ) (?!\w) )
+                            )
+                            .*? (?: (?<![\w-]) --dangerously-skip-permissions (?![\w-])
+                                  | (?<![\w-]) --permission-mode (?:=|\s++) \\?["']? (?:acceptEdits|auto|bypassPermissions) (?![\w-])
+                                  | (?<![\w-]) --allowed-?[Tt]ools (?:=|\s++) (?: (?!\s--) . )*? (?&tool)
+                                  | \\?"defaultMode\\?" \s*+ : \s*+ \\?" (?:acceptEdits|auto|bypassPermissions) \\?"
+                                  | \\?"allow\\?" \s*+ : \s*+ \[ [^\]]*? (?&tool) )
+                            # --- claude-code-action acting test (end) ---
+              # The events claude-code-action runs on (it stops on discussions) where the
+              # actor can be anyone. Each branch binds the triggers itself: a filter inside a
+              # pattern-either branch does not see metavariables bound outside it.
+              - pattern-inside: |
+                  $ONKEY: $ON
+                  ...
+                  jobs: $_
+              - metavariable-regex:
+                  metavariable: $ONKEY
+                  regex: ^["']?on["']?$
+              - metavariable-regex:
+                  metavariable: $ON
+                  regex: (?s).*?(?<![\w-])(?:issues|issue_comment|pull_request_target|pull_request_review|pull_request_review_comment|workflow_run)(?![\w-])
+          # openai/codex-action v1.13, unless it is read-only. (allow-bot-users does not take
+          # "*".)
+          - patterns:
+              - pattern-inside: |
+                  uses: $A
+                  ...
+              - metavariable-regex:
+                  metavariable: $A
+                  regex: ^["']?openai/codex-action@
+              - pattern: 'allow-users: $W'
+              - pattern-not-inside: |
+                  with:
+                    ...
+                    sandbox: read-only
+                    ...
+              - pattern-not-inside: |
+                  with:
+                    ...
+                    permission-profile: ":read-only"
+                    ...
+              - pattern-not-inside: |
+                  with:
+                    ...
+                    safety-strategy: read-only
+                    ...
+              - pattern-inside: |
+                  $ONKEY: $ON
+                  ...
+                  jobs: $_
+              - metavariable-regex:
+                  metavariable: $ONKEY
+                  regex: ^["']?on["']?$
+              - metavariable-regex:
+                  metavariable: $ON
+                  regex: (?s).*?(?<![\w-])(?:issues|issue_comment|discussion|discussion_comment|pull_request_target|pull_request_review|pull_request_review_comment|workflow_run)(?![\w-])
+      # "*" alone or as one entry of the comma-separated list.
+      - metavariable-regex:
+          metavariable: $W
+          regex: ^["']?(?:[^"',]*,)*\s*\*\s*(?:,[^"']*)?["']?$
+      # No if: on author_association in the step or job: that gate keeps outsiders out anyway.
+      - pattern-either:
+          - patterns:
+              - pattern-either: [{pattern: 'allowed_non_write_users: $W'}, {pattern: 'allowed_bots: $W'}, {pattern: 'allow-users: $W'}]
+              - pattern-not-inside: |
+                  if: $C
+                  ...
+          - patterns:
+              - pattern-either: [{pattern: 'allowed_non_write_users: $W'}, {pattern: 'allowed_bots: $W'}, {pattern: 'allow-users: $W'}]
+              - pattern-inside: |
+                  if: $C
+                  ...
+              - metavariable-regex:
+                  metavariable: $C
+                  regex: (?s)^(?!.*author_association)
+      # gha-ai-agent-untrusted-trigger reports steps whose prompt or env carries text from
+      # the event; this rule leaves those steps to it.
+      - pattern-either:
+          - patterns:
+              - pattern-either: [{pattern: 'allowed_non_write_users: $W'}, {pattern: 'allowed_bots: $W'}, {pattern: 'allow-users: $W'}]
+              - pattern-not-inside: |
+                  uses: $A
+                  ...
+                  with:
+                    ...
+                    prompt: $P
+                    ...
+          - patterns:
+              - pattern-either: [{pattern: 'allowed_non_write_users: $W'}, {pattern: 'allowed_bots: $W'}, {pattern: 'allow-users: $W'}]
+              - pattern-inside: |
+                  uses: $A
+                  ...
+                  with:
+                    ...
+                    prompt: $P
+                    ...
+              - metavariable-regex:
+                  metavariable: $P
+                  regex: |-
+                    (?xs) ^ (?! .*? \$\{\{ (?:(?!\}\}).)*? (?<![\w.]) (?: github\.event\. (?: issue\.(?:title|body) | pull_request\.(?:title|body|head\.(?:ref|label)) | (?:comment|review|review_comment)\.body | discussion\.(?:title|body) | workflow_run\.(?:head_branch|display_title|head_commit\.(?:message|author\.(?:name|email))) ) | github\.head_ref | toJSON\( \s* github\.event (?: \.(?:issue|pull_request|comment|review|review_comment|discussion|workflow_run) )? \s* \) ) (?!\w) )
+      - pattern-either:
+          - patterns:
+              - pattern-either: [{pattern: 'allowed_non_write_users: $W'}, {pattern: 'allowed_bots: $W'}, {pattern: 'allow-users: $W'}]
+              - pattern-not-inside: |
+                  uses: $A
+                  ...
+                  env: $SENV
+                  ...
+          - patterns:
+              - pattern-either: [{pattern: 'allowed_non_write_users: $W'}, {pattern: 'allowed_bots: $W'}, {pattern: 'allow-users: $W'}]
+              - pattern-inside: |
+                  uses: $A
+                  ...
+                  env: $SENV
+                  ...
+              - metavariable-regex:
+                  metavariable: $SENV
+                  regex: |-
+                    (?xs) ^ (?! .*? \$\{\{ (?:(?!\}\}).)*? (?<![\w.]) (?: github\.event\. (?: issue\.(?:title|body) | pull_request\.(?:title|body|head\.(?:ref|label)) | (?:comment|review|review_comment)\.body | discussion\.(?:title|body) | workflow_run\.(?:head_branch|display_title|head_commit\.(?:message|author\.(?:name|email))) ) | github\.head_ref | toJSON\( \s* github\.event (?: \.(?:issue|pull_request|comment|review|review_comment|discussion|workflow_run) )? \s* \) ) (?!\w) )
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI03 - Identity and Privilege Abuse"
+        - "ASI01 - Agent Goal Hijack"
+      owasp-aisvs:
+        - "v1.01-AC.11.5 - AI Code-Review & Assistant Bot Hardening"
+        - "v1.01-AC.11.7 - AI Code-Review & Assistant Bot Hardening"
+      mitre-atlas:
+        - "AML.T0051.000 - LLM Prompt Injection: Direct"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-862: Missing Authorization"
+      # The token's permissions and the secrets in the job are not weighed; a step that
+      # gha-ai-agent-untrusted-trigger skips (pull request text behind a same-repo guard)
+      # is not picked up here either.
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [github-actions, claude-code, codex]
+      references:
+        - https://github.com/anthropics/claude-code-action/blob/v1.0.258/action.yml
+        - https://github.com/anthropics/claude-code-action/blob/v1.0.258/docs/security.md
+        - https://github.com/anthropics/claude-code-action/blob/v1.0.258/src/github/validation/permissions.ts
+        - https://github.com/openai/codex-action/blob/v1.13/action.yml
+        - https://github.com/openai/codex-action/blob/v1.13/docs/security.md

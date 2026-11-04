@@ -1,0 +1,231 @@
+rules:
+  - id: subagent-permission-mode-cli-py
+    # Python twin of subagent-permission-mode-cli (shell, CI, Makefile, package.json): a
+    # claude launch (subprocess, asyncio, os.exec*, pexpect) whose --agents JSON gives a
+    # subagent permissionMode acceptEdits or auto. The program is matched as in
+    # ai-cli-bypass-flag-invocation-py. Claude Code 2.1.310 CLI reference and sub-agents docs,
+    # read 2026-10-25: --agents takes the JSON object (or, with -p, a file path from v2.1.281),
+    # and a CLI-defined subagent's permissionMode applies under a default or dontAsk session.
+    # The value is read when it is a literal, json.dumps of a literal, or json.dumps of a dict
+    # assigned earlier in the same scope or module. A file path and settings JSON (--settings)
+    # stay quiet. AgentDefinition objects are agent-sdk-subagent-permission-mode.
+    languages: [python]
+    severity: WARNING
+    message: >-
+      This code starts Claude Code with a subagent, passed as JSON to --agents, whose
+      permissionMode is acceptEdits or auto. When the session runs in Manual (`default`) or
+      `dontAsk` mode, which is how `claude -p` starts when no --permission-mode is given,
+      Claude Code runs that subagent in the mode its definition names: acceptEdits approves
+      file edits and rm, mv, cp, and sed in the working directory without asking, and auto
+      lets a classifier approve shell commands and network requests. Whatever the model
+      delegates to it then skips the limits the session's --permission-mode and
+      --allowedTools were meant to set, and a prompt injection in the ticket, issue, or log
+      the agent reads can change files or run commands with this process's access. Leave
+      permissionMode out of the definition so the subagent inherits the session's mode, give
+      it a tools list without Edit, Write, or Bash, or allow only the commands it needs with
+      --allowedTools.
+    pattern-either:
+      # --- The JSON written in the argv: a string or json.dumps({...}) ---
+      - patterns:
+          - pattern-either:
+              # The program by name or call first or second in the argv or anywhere after a
+              # known wrapper first, or as a string (a constant counts) anywhere in it. A free
+              # $PROG anywhere in a list pairs every element with every later one, which times
+              # out on long lists.
+              - patterns:
+                  - pattern-either:
+                      - pattern: '[$PROG, ..., "--agents", $J, ...]'
+                      - pattern: '[$W, $PROG, ..., "--agents", $J, ...]'
+                      - pattern: '($PROG, ..., "--agents", $J, ...)'
+                      - pattern: '($W, $PROG, ..., "--agents", $J, ...)'
+                      - pattern: '$F(..., $PROG, ..., "--agents", $J, ...)'
+                      - pattern: '$F(..., $PROG, ..., [..., "--agents", $J, ...], ...)'
+                      - pattern: '[$PROG, ..., "--agents=" + $J, ...]'
+                      - pattern: '[$W, $PROG, ..., "--agents=" + $J, ...]'
+                  - metavariable-pattern:
+                      metavariable: $PROG
+                      pattern-either:
+                        - pattern: '"=~/^(?:.*\/)?(?:claude|@anthropic-ai\/claude-code(?:@.*)?)$/"'
+                        - pattern-regex: (?i)^[\w.$]*claude\w*(?:\(\))?$
+              # After a known wrapper first (timeout, sudo, env, nice, uv run, ...), a name
+              # anywhere: the flag and the program are each found in one pass over the list and
+              # joined on it, so a long list never pairs its elements.
+              - patterns:
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., "--agents", $J, ...]'
+                          - pattern: '("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., "--agents", $J, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., "--agents", $J, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., "--agents", $J, ...], ...)'
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., "--agents=" + $J, ...]'
+                  - patterns:
+                      - pattern-either:
+                          - pattern: '["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...]'
+                          - pattern: '("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...)'
+                          - pattern: '$F("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $PROG, ...], ...)'
+                      - metavariable-pattern:
+                          metavariable: $PROG
+                          pattern-regex: (?i)^[\w.$]*claude\w*(?:\(\))?$
+              - pattern: '[..., "=~/^(?:.*\/)?(?:claude|@anthropic-ai\/claude-code(?:@.*)?)$/", ..., "--agents", $J, ...]'
+              - pattern: '(..., "=~/^(?:.*\/)?(?:claude|@anthropic-ai\/claude-code(?:@.*)?)$/", ..., "--agents", $J, ...)'
+              - pattern: '[..., "=~/^(?:.*\/)?(?:claude|@anthropic-ai\/claude-code(?:@.*)?)$/", ..., "--agents=" + $J, ...]'
+          # A JSON string (a module constant counts, through constant propagation), or a dict
+          # or dict() literal with the key quoted either way or as a keyword.
+          - metavariable-pattern:
+              metavariable: $J
+              pattern-either:
+                - pattern: '"=~/permissionMode.[ \t]*:[ \t]*.(?:acceptEdits|auto)[^A-Za-z]/"'
+                - pattern-regex: (?s)\A(?:\{|dict\(|json\.dumps\().*?(?:["']permissionMode["']\s*:|\bpermissionMode\s*=)\s*["'](?:acceptEdits|auto)["']
+          - focus-metavariable: $J
+      # --- json.dumps of a dict assigned earlier ---
+      - patterns:
+          - pattern-either:
+              # As in the first branch: a name or call first or second in the list or anywhere
+              # after a known wrapper first, a string anywhere (a free $PROG anywhere in a long
+              # list times out).
+              - patterns:
+                  - pattern-either:
+                      - pattern: |
+                          $D = $DICT
+                          ...
+                          $F(..., [$PROG, ..., "--agents", json.dumps($D, ...), ...], ...)
+                      - pattern: |
+                          $D = $DICT
+                          ...
+                          $F(..., [$W, $PROG, ..., "--agents", json.dumps($D, ...), ...], ...)
+                      - pattern: |
+                          $D = $DICT
+                          ...
+                          $ARGV = [$PROG, ..., "--agents", json.dumps($D, ...), ...]
+                      - pattern: |
+                          $D = $DICT
+                          ...
+                          $ARGV = [$W, $PROG, ..., "--agents", json.dumps($D, ...), ...]
+                      - pattern: |
+                          $D: $T = $DICT
+                          ...
+                          $F(..., [$PROG, ..., "--agents", json.dumps($D, ...), ...], ...)
+                      - pattern: |
+                          $D: $T = $DICT
+                          ...
+                          $F(..., [$W, $PROG, ..., "--agents", json.dumps($D, ...), ...], ...)
+                      - pattern: |
+                          $D: $T = $DICT
+                          ...
+                          $ARGV = [$PROG, ..., "--agents", json.dumps($D, ...), ...]
+                      - pattern: |
+                          $D: $T = $DICT
+                          ...
+                          $ARGV = [$W, $PROG, ..., "--agents", json.dumps($D, ...), ...]
+                      - pattern: |
+                          $D = $DICT
+                          ...
+                          $F(..., $PROG, ..., "--agents", json.dumps($D, ...), ...)
+                  - metavariable-pattern:
+                      metavariable: $PROG
+                      pattern-either:
+                        - pattern: '"=~/^(?:.*\/)?(?:claude|@anthropic-ai\/claude-code(?:@.*)?)$/"'
+                        - pattern-regex: (?i)^[\w.$]*claude\w*(?:\(\))?$
+              # After a known wrapper first (timeout, sudo, env, nice, uv run, ...), a name
+              # anywhere: the --agents argument and the program are each found in one pass over
+              # the list and joined on it, so a long list never pairs its elements.
+              - patterns:
+                  - patterns:
+                      - pattern-either:
+                          - pattern: |
+                              $D = $DICT
+                              ...
+                              $F(..., ["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., "--agents", json.dumps($D, ...), ...], ...)
+                          - pattern: |
+                              $D = $DICT
+                              ...
+                              $ARGV = ["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., "--agents", json.dumps($D, ...), ...]
+                          - pattern: |
+                              $D: $T = $DICT
+                              ...
+                              $F(..., ["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., "--agents", json.dumps($D, ...), ...], ...)
+                          - pattern: |
+                              $D: $T = $DICT
+                              ...
+                              $ARGV = ["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., "--agents", json.dumps($D, ...), ...]
+                  - patterns:
+                      - pattern-either:
+                          - pattern: |
+                              $D = $DICT
+                              ...
+                              $F(..., ["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...], ...)
+                          - pattern: |
+                              $D = $DICT
+                              ...
+                              $ARGV = ["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...]
+                          - pattern: |
+                              $D: $T = $DICT
+                              ...
+                              $F(..., ["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...], ...)
+                          - pattern: |
+                              $D: $T = $DICT
+                              ...
+                              $ARGV = ["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...]
+                      - metavariable-pattern:
+                          metavariable: $PROG
+                          pattern-regex: (?i)^[\w.$]*claude\w*(?:\(\))?$
+              - pattern: |
+                  $D = $DICT
+                  ...
+                  $F(..., [..., "=~/^(?:.*\/)?(?:claude|@anthropic-ai\/claude-code(?:@.*)?)$/", ..., "--agents", json.dumps($D, ...), ...], ...)
+              - pattern: |
+                  $D = $DICT
+                  ...
+                  $ARGV = [..., "=~/^(?:.*\/)?(?:claude|@anthropic-ai\/claude-code(?:@.*)?)$/", ..., "--agents", json.dumps($D, ...), ...]
+              - pattern: |
+                  $D: $T = $DICT
+                  ...
+                  $F(..., [..., "=~/^(?:.*\/)?(?:claude|@anthropic-ai\/claude-code(?:@.*)?)$/", ..., "--agents", json.dumps($D, ...), ...], ...)
+              - pattern: |
+                  $D: $T = $DICT
+                  ...
+                  $ARGV = [..., "=~/^(?:.*\/)?(?:claude|@anthropic-ai\/claude-code(?:@.*)?)$/", ..., "--agents", json.dumps($D, ...), ...]
+          - metavariable-regex:
+              metavariable: $DICT
+              regex: (?s)^(?:\{|dict\().*(?:["']permissionMode["']\s*:|\bpermissionMode\s*=)\s*["'](?:acceptEdits|auto)["']
+          - focus-metavariable: $DICT
+      # --- A whole command line in one string (shell=True, os.system, shlex.split), with the
+      # JSON in a '...' argument ---
+      - patterns:
+          - pattern-regex: |-
+              (?x)
+              (?<![\w]) [rRbBuU]{0,2} (?<qt>["']) [ \t]*
+              (?: [\w.~/${}-]*/ )?
+              (?: (?:npx|bunx|pnpx) (?:[ \t]+(?:-y|--yes))? [ \t]+ @anthropic-ai/claude-code (?:@[\w.^~-]+)? | claude )
+              (?=[ \t]) (?: (?!\k<qt>) [^\n\\] | \\. )*? [ \t] --agents [= \t]++ \\?["']? \{
+              (?: (?!\k<qt>) [^\n\\'] | \\. )*?
+              \\?" permissionMode \\?" \s* : \s* \\?" (?:acceptEdits|auto) \\?"
+          - pattern-not-regex: (?m)^[ \t]*\#[^\n]*
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI03 - Identity and Privilege Abuse"
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-269: Improper Privilege Management"
+      # The code's author writes both the session flags and the subagent definition; the
+      # finding marks a subagent the session's limits don't cover.
+      confidence: LOW
+      likelihood: LOW
+      impact: HIGH
+      technology: [claude-code]
+      references:
+        - https://code.claude.com/docs/en/cli-reference
+        - https://code.claude.com/docs/en/sub-agents#permission-modes
+        - https://code.claude.com/docs/en/permission-modes

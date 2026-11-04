@@ -1,0 +1,117 @@
+rules:
+  - id: agent-allowlist-webfetch-any-domain-qwen
+    # Qwen Code twin of agent-allowlist-webfetch-any-domain. Qwen reads Claude-style rules but
+    # matches domains its own way: a specifier covers that name and every subdomain, with no
+    # wildcards, so domain:com covers every .com and domain:* covers nothing.
+    languages: [json]
+    severity: WARNING
+    message: >-
+      This Qwen Code permission lets the agent fetch any web address without asking: a bare
+      WebFetch (or web_fetch, WebFetchTool) allow rule matches every fetch, and a domain rule
+      for a top-level name (WebFetch(domain:com)), a public second level (co.uk), or a tunnel or
+      free hosting domain (trycloudflare.com, vercel.app) covers every name under it, because
+      Qwen Code 0.26 matches a domain and all its subdomains. A prompt injection in a file,
+      issue, web page, or tool result the agent reads can then have it read a secret (.env, a
+      cloud credential, source code) and send it out in the address of a request to a server
+      the attacker runs, such as https://attacker.example/?d=<secret>, with nobody asked.
+      Allow only the hosts the agent needs (WebFetch(domain:docs.example.com)) and let other
+      fetches ask.
+    paths:
+      include:
+        - ".qwen/settings.json"
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-inside: '"permissions": {...}'
+              - pattern: '"allow": [..., "$V", ...]'
+          # The deprecated tools.allowed list, still read as allow rules.
+          - patterns:
+              - pattern-inside: '"tools": {...}'
+              - pattern: '"allowed": [..., "$V", ...]'
+      - metavariable-regex:
+          metavariable: $V
+          regex: |-
+            (?x)
+            # --- web fetch any host (begin): build.py keeps this block identical in the
+            # agent-allowlist-webfetch-any-domain rules; edit every copy together. ---
+            (?(DEFINE)
+              # A DNS label as written, and one with a * in it. In Claude Code and Cursor rules a *
+              # other than a leading *. matches text within one label.
+              (?<wflit> [A-Za-z0-9_-]++ )
+              (?<wfwild> [A-Za-z0-9_-]*+ \* [A-Za-z0-9_*-]*+ )
+              # Where a host pattern ends: a port, path, closing bracket, quote, separator, or the end.
+              (?<wfend> (?= [:/)"'`\s,;\]}] | $ ) )
+              # Top-level names that public DNS never answers (.local is mDNS; the private names of
+              # scripts/gen_mcp_remote_host.py plus the RFC 2606 / 6761 reserved names), so a wildcard
+              # under one can't reach an attacker's server.
+              (?<wfpriv> (?i: local | localhost | internal | lan | home | corp | intranet | private
+                | consul | proxy | lab | wg | monitor | hammernet | test | invalid | example | onion
+                | arpa ) (?&wfend) )
+              # Country-code second levels that anyone can register under (co.uk, com.au).
+              (?<wfcc2> (?i: co | com | net | org | ne | or ) \. [A-Za-z]{2} )
+              # Tunnels and free app and page hosts, where anyone can get a subdomain and read its
+              # request logs (scripts/gen_mcp_remote_host.py's services plus free static page hosts).
+              (?<wfshared> (?i: trycloudflare\.com | ngrok-free\.(?:app|dev|pizza) | ngrok\.(?:app|dev|io|pizza)
+                | loca\.lt | localtunnel\.me | lhr\.life | lhr\.rocks | serveo\.net | pinggy(?:-free)?\.link
+                | tunnelmole\.net | bore\.pub | loclx\.io | devtunnels\.ms | app\.github\.dev
+                | oast\.(?:pro|live|site|online|fun|me) | oastify\.com | burpcollaborator\.net
+                | onrender\.com | fly\.dev | herokuapp\.com | vercel\.app | netlify\.app | railway\.app
+                | workers\.dev | deno\.dev | deno\.net | replit\.app | koyeb\.app | hf\.space | modal\.run
+                | github\.io | gitlab\.io | pages\.dev | web\.app | firebaseapp\.com | glitch\.me | surge\.sh
+                # Tailscale Funnel publishes any tailnet's node under ts.net.
+                | ts\.net ) )
+              # A host pattern that matches hosts anyone can own: every host (*, *.*), a wildcard in the
+              # registrable label (*.com, *example.com, docs.*.com, *.co.uk), or any subdomain of a tunnel
+              # or free hosting domain (*.trycloudflare.com, *.up.railway.app). A wildcard under a domain
+              # someone owns (*.example.com, api-*.example.com, example.*) or a private name (*.local) is
+              # scoped.
+              (?<anyhost>
+                  (?= \.*+ \* ) [*.]++ (?&wfend)
+                | (?: (?: (?&wflit) | (?&wfwild) ) \. )*? (?&wfwild) \. (?! (?&wfpriv) )
+                  (?: (?&wfcc2) | (?&wflit) ) \.?+ (?&wfend)
+                | \* \. (?: (?&wflit) \. )*? (?&wfshared) \.?+ (?&wfend) )
+            )
+            # --- web fetch any host (end) ---
+            ^ \s*+ (?: WebFetch | web_fetch | WebFetchTool ) \s*+
+            (?: \( \s*+ \) | \( \s*+ (?: domain: \s*+ )?+ \.?+
+                (?: (?! (?&wfpriv) ) (?&wflit) | (?&wfcc2) | (?&wfshared) ) \.?+ \s*+ \) )?
+            \s*+ $
+      - focus-metavariable: $V
+      # Deny and ask rules win over allow (deny > ask > allow), and tools.exclude removes the
+      # tool, so a bare entry there covers every fetch.
+      - pattern-not-inside:
+          patterns:
+            - pattern-either:
+                - pattern: '"permissions": {..., "deny": [..., "$D", ...], ...}'
+                - pattern: '"permissions": {..., "ask": [..., "$D", ...], ...}'
+                - pattern: '"tools": {..., "exclude": [..., "$D", ...], ...}'
+            - metavariable-regex:
+                metavariable: $D
+                regex: ^\s*(?:WebFetch|web_fetch|WebFetchTool)(?:\(\s*\))?\s*$
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0086 - Exfiltration via AI Agent Tool Invocation"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      # MEDIUM: the allow is certain, but some teams allow every fetch on machines with nothing
+      # to steal, and the fetch still needs a secret in reach to leak one.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [qwen-code]
+      references:
+        - https://github.com/QwenLM/qwen-code/blob/v0.26.1/packages/core/src/permissions/rule-parser.ts
+        - https://github.com/QwenLM/qwen-code/blob/v0.26.1/packages/cli/src/config/settingsSchema.ts
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

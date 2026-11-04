@@ -1,0 +1,4 @@
+{
+  "command": "uvx",
+  "args": ["example-org-statuspage-mcp==1.8.0"]
+}

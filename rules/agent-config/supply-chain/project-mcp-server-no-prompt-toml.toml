@@ -1,0 +1,28 @@
+model_reasoning_effort = "medium"
+
+[mcp_servers.repo-tools]
+# ruleid: project-mcp-server-no-prompt-toml
+command = "node"
+args = ["tools/mcp/server.mjs"]
+
+[mcp_servers.paused]
+# ok: project-mcp-server-no-prompt-toml
+command = "node"
+args = ["tools/mcp/paused.mjs"]
+enabled = false
+
+[mcp_servers.docs]
+# ok: project-mcp-server-no-prompt-toml
+url = "https://mcp.example.com/docs"
+
+[mcp_servers]
+# ruleid: project-mcp-server-no-prompt-toml
+status = { command = "uvx", args = ["example-org-status-mcp==1.0.3"] }
+
+[[hooks.PostToolUse]]
+matcher = "^apply_patch$"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+# ok: project-mcp-server-no-prompt-toml
+command = "echo patched"

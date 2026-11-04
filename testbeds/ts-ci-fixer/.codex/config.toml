@@ -1,0 +1,18 @@
+# Codex settings for working on ci-fixer. Personal settings live in ~/.codex/config.toml.
+model = "gpt-5.5"
+approval_policy = "on-request"
+
+[mcp_servers.repo-files]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "."]
+
+# Reads CI logs that the runner script downloads next to the checkout.
+[mcp_servers.ci-logs]
+command = "npx"
+args = [
+  "-y",
+  "@modelcontextprotocol/server-filesystem@2.0.0",
+  "../ci-logs",
+  "/home/ci-fixer",
+]
+startup_timeout_sec = 20

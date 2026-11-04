@@ -1,0 +1,73 @@
+rules:
+  - id: agent-sdk-subagent-permission-mode
+    languages: [python]
+    severity: WARNING
+    message: >-
+      This Claude Agent SDK subagent definition sets its own permission mode, looser than a
+      Manual (`default`) or `dontAsk` session, and the SDK starts sessions in `default` when
+      no mode is set. In such a session Claude Code runs this subagent in the mode named here:
+      `acceptEdits` approves file edits and `rm`, `mv`, `cp`, and `sed` inside the working
+      directory before your `can_use_tool` callback is asked, and `auto` lets a classifier
+      approve shell commands and network requests. Whatever the model delegates to this
+      subagent therefore skips the checks the session's `allowed_tools` and `can_use_tool`
+      were meant to apply, and a prompt injection in a ticket, file, or tool result it reads
+      can change files or run commands. Leave `permissionMode` unset so the subagent inherits
+      the session's mode, give it a `tools` list without Edit, Write, or Bash if it shouldn't
+      change anything, or gate its calls with a PreToolUse hook, which runs before the mode
+      is applied.
+    # Claude Code docs for v2.1.310, read 2026-10-25: agent-sdk/permissions ("Auto-approved
+    # tools never reach canUseTool"; the subagent inheritance note: under a default or
+    # dontAsk session a subagent runs in the mode it sets, never bypassPermissions since
+    # v2.1.267, and auto only where auto mode is available) and agent-sdk/subagents
+    # (AgentDefinition.permissionMode). claude-agent-sdk v0.2.174 types.py: AgentDefinition
+    # has permissionMode: PermissionMode | None. bypassPermissions is left out because
+    # current SDKs ignore it (agent-sdk-bypass-permissions skips AgentDefinition for the same
+    # reason); dontAsk and plan are stricter. Agent files in .claude/agents/ are
+    # subagent-permission-mode.
+    patterns:
+      - pattern-either:
+          - pattern: AgentDefinition(..., permissionMode=$V, ...)
+          - pattern: claude_agent_sdk.AgentDefinition(..., permissionMode=$V, ...)
+          - pattern: claude_agent_sdk.types.AgentDefinition(..., permissionMode=$V, ...)
+          # A variant of a shared definition.
+          - pattern: dataclasses.replace($BASE, ..., permissionMode=$V, ...)
+      - metavariable-pattern:
+          metavariable: $V
+          patterns:
+            - pattern-either:
+                - pattern: '"acceptEdits"'
+                - pattern: '"auto"'
+            # A guard that picks the mode from a comparison isn't the mode itself.
+            - pattern-not-inside: $A == $B
+            - pattern-not-inside: $A != $B
+            - pattern-not-inside: $A in $B
+            - pattern-not-inside: $A not in $B
+      - focus-metavariable: $V
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI03 - Identity and Privilege Abuse"
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-269: Improper Privilege Management"
+      # The app's own author picks both the session's and the subagent's mode, often on
+      # purpose; the finding marks a subagent the session's approval checks don't cover.
+      confidence: LOW
+      likelihood: LOW
+      impact: HIGH
+      technology: [claude-agent-sdk, anthropic]
+      references:
+        - https://code.claude.com/docs/en/agent-sdk/permissions
+        - https://code.claude.com/docs/en/agent-sdk/subagents
+        - https://github.com/anthropics/claude-agent-sdk-python/blob/v0.2.174/src/claude_agent_sdk/types.py
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

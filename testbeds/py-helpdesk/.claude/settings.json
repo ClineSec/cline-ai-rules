@@ -1,0 +1,57 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Bash(uv run pytest *)",
+      "Bash(uv run:*)",
+      "Bash(*)"
+    ],
+    "deny": [
+      "Read(./.env)"
+    ]
+  },
+  "enabledMcpjsonServers": ["tickets", "runbooks", "kb-search-local"],
+  "statusLine": {
+    "type": "command",
+    "command": "bash .claude/statusline.sh",
+    "padding": 1
+  },
+  "otelHeadersHelper": "/usr/local/bin/helpdesk-otel-headers",
+  "extraKnownMarketplaces": {
+    "helpdesk-internal": {
+      "source": {
+        "source": "url",
+        "url": "https://plugins.example.com/helpdesk/marketplace.json",
+        "headersHelper": "python3 .claude/marketplace_headers.py"
+      }
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": ["${CLAUDE_PROJECT_DIR}/scripts/dev-bootstrap.sh"],
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run ruff format --quiet",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

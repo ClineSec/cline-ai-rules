@@ -1,0 +1,66 @@
+rules:
+  - id: mcp-server-bind-all-interfaces-config-fastmcp-json
+    # fastmcp.json (and the documented dev.fastmcp.json / prod.fastmcp.json variants), the
+    # config file `fastmcp run` reads: deployment.host, or FASTMCP_HOST in deployment.env, set
+    # to every interface. Sources: PrefectHQ fastmcp 4.1.3
+    # utilities/mcp_server_config/v1/mcp_server_config.py (Deployment.transport, .host, .env;
+    # fastmcp.json is found in the working directory when `fastmcp run` gets no argument) and
+    # cli/run.py (CLI flags win over the file; the host is dropped for stdio, the default
+    # transport). A deployment whose transport is stdio is not reported.
+    languages: [json]
+    severity: INFO
+    message: >-
+      This fastmcp.json makes `fastmcp run` serve the MCP server on every network interface
+      of the machine it runs on, so anyone who can reach that machine on the server's port can
+      list and call its tools and do whatever they can do. Nothing here shows whether the
+      server requires auth, and fastmcp has none by default. Use "127.0.0.1" (the default)
+      for local use. For a server other machines must reach, require auth in the server
+      (fastmcp `auth=`) or put it behind an authenticating proxy.
+    paths:
+      include:
+        - "fastmcp.json"
+        - "*.fastmcp.json"
+    patterns:
+      - pattern-inside: '"deployment": {...}'
+      - pattern-not-inside: '"deployment": {..., "transport": "stdio", ...}'
+      - pattern-either:
+          - pattern: '"host": "$H"'
+          - patterns:
+              - pattern-inside: '"env": {...}'
+              - pattern-either:
+                  - pattern: '"FASTMCP_HOST": "$H"'
+                  - pattern: '"FASTMCP_SERVER_HOST": "$H"'
+      - metavariable-regex:
+          metavariable: $H
+          regex: ^(?:0\.0\.0\.0|::|\[::\])$
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI03 - Identity and Privilege Abuse"
+      owasp-mcp:
+        - "MCP07:2025 - Insufficient Authentication & Authorization"
+        - "MCP09:2025 - Shadow MCP Servers"
+      owasp-aisvs:
+        - "v1.01-C10.2.1 - Authentication & Authorization"
+        - "v1.01-C10.3.1 - Secure Transport"
+      mitre-atlas:
+        - "AML.T0132 - Misconfigured or Publicly Exposed AI Services"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-1327: Binding to an Unrestricted IP Address"
+      confidence: LOW
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, fastmcp]
+      references:
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/utilities/mcp_server_config/v1/mcp_server_config.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/cli/run.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/docs/deployment/server-configuration.mdx
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP07-2025%E2%80%93Insufficient-Authentication%26Authorization.md
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP09-2025%E2%80%93Shadow-MCP-Servers.md
+        - https://cwe.mitre.org/data/definitions/1327.html

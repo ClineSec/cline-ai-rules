@@ -1,0 +1,21 @@
+[Unit]
+Description=Repo-tools MCP server
+After=network-online.target
+
+[Service]
+User=mcp
+WorkingDirectory=/srv/repo-tools
+# ruleid: mcp-server-bind-all-interfaces-config
+Environment=FASTMCP_HOST=0.0.0.0
+# ruleid: mcp-server-bind-all-interfaces-config
+Environment="FASTMCP_PORT=8000" "FASTMCP_SERVER_HOST=0.0.0.0"
+# ok: mcp-server-bind-all-interfaces-config
+Environment=FASTMCP_LOG_LEVEL=INFO
+# ruleid: mcp-server-bind-all-interfaces-config
+ExecStart=/srv/repo-tools/.venv/bin/fastmcp run server.py --transport http --host 0.0.0.0
+# ok: mcp-server-bind-all-interfaces-config
+ExecStartPre=/srv/repo-tools/.venv/bin/fastmcp run server.py --transport http --host 127.0.0.1 --help
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

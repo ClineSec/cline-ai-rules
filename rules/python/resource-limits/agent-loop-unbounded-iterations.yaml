@@ -1,0 +1,232 @@
+rules:
+  - id: agent-loop-unbounded-iterations
+    languages: [python]
+    severity: WARNING
+    message: >-
+      This agent loop has its step limit switched off or set so high that it no longer works as
+      one: an `AgentExecutor` or OpenAI Agents `Runner` cap set to `None`, a turn, round,
+      iteration, or step cap of 1,000 or more (or infinity), a LangGraph `recursion_limit` of 100,000 or more,
+      or an AutoGen team with neither a termination condition nor `max_turns`. The loop then
+      ends only when the model decides it is done, so a prompt injection in a tool result, a
+      tool that keeps failing, or two agents handing work back and forth can keep it calling
+      the model and its tools until the process is killed, running up token cost and repeating
+      every tool's side effects. Keep a cap near the framework default (10 to 25 steps) and
+      raise it only to what the task needs, such as 50 or 100. For long jobs, add a time or
+      spend limit as well (`max_execution_time`, `max_budget_usd`, AutoGen's
+      `MaxMessageTermination` or `TimeoutTermination`).
+    pattern-either:
+      # 1. The cap set to None where None means "no limit": LangChain's AgentExecutor
+      #    (langchain-classic 1.0.8, default 15, and the helpers that build one), OpenAI Agents
+      #    SDK runs (openai-agents 0.24.0, default 10), and MagenticOneGroupChat (default 20).
+      #    Agent.as_tool(max_turns=None) falls back to the default, so it isn't listed.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  # Only in files that import LangChain.
+                  - pattern-not-regex: \A(?:(?![ \t]*+(?:from|import)[ \t]++langchain\w*)[^\n]*+\n)*+(?![ \t]*+(?:from|import)[ \t]++langchain\w*)[^\n]*+\z
+                  - pattern-either:
+                      - pattern: $F(..., max_iterations=$V, ...)
+                      - pattern: '$F(..., agent_executor_kwargs={..., "max_iterations": $V, ...}, ...)'
+                  - metavariable-regex:
+                      metavariable: $F
+                      regex: ^(?:[\w.]*\.)?(?:AgentExecutor(?:\.from_agent_and_tools)?|initialize_agent|create_\w+_agent)$
+              - pattern: agents.Runner.run(..., max_turns=$V, ...)
+              - pattern: agents.Runner.run_sync(..., max_turns=$V, ...)
+              - pattern: agents.Runner.run_streamed(..., max_turns=$V, ...)
+              - pattern: agents.run_demo_loop(..., max_turns=$V, ...)
+              - pattern: autogen_agentchat.teams.MagenticOneGroupChat(..., max_turns=$V, ...)
+          # A time limit or a termination condition on the same call still bounds the loop.
+          - pattern-not-regex: \b(?:max_execution_time|termination_condition)\s*=\s*(?!None\b)
+          - metavariable-pattern:
+              metavariable: $V
+              pattern: None
+          - focus-metavariable: $V
+      # 1b. The same None cap kept as a class attribute (`route_turns: int | None = None`) and
+      #     passed as `self.route_turns`. Left alone when a method of the class assigns the
+      #     attribute, since the instance value may replace it.
+      - patterns:
+          - pattern-inside: |
+              class $CLS(...):
+                  ...
+                  $ATTR = None
+                  ...
+          - pattern-not-inside: |
+              class $CLS(...):
+                  ...
+                  def $M(...):
+                      ...
+                      self.$ATTR = $X
+                      ...
+                  ...
+          - pattern-either:
+              - patterns:
+                  - pattern-not-regex: \A(?:(?![ \t]*+(?:from|import)[ \t]++langchain\w*)[^\n]*+\n)*+(?![ \t]*+(?:from|import)[ \t]++langchain\w*)[^\n]*+\z
+                  - pattern: $F(..., max_iterations=$V, ...)
+                  - metavariable-regex:
+                      metavariable: $F
+                      regex: ^(?:[\w.]*\.)?(?:AgentExecutor(?:\.from_agent_and_tools)?|initialize_agent|create_\w+_agent)$
+              - pattern: agents.Runner.run(..., max_turns=$V, ...)
+              - pattern: agents.Runner.run_sync(..., max_turns=$V, ...)
+              - pattern: agents.Runner.run_streamed(..., max_turns=$V, ...)
+              - pattern: agents.run_demo_loop(..., max_turns=$V, ...)
+              - pattern: autogen_agentchat.teams.MagenticOneGroupChat(..., max_turns=$V, ...)
+          - pattern-not-regex: \b(?:max_execution_time|termination_condition)\s*=\s*(?!None\b)
+          - metavariable-pattern:
+              metavariable: $V
+              pattern: self.$ATTR
+          - focus-metavariable: $V
+      # 2. A turn, iteration, or step cap of 1,000 or more, or infinity. Defaults: AgentExecutor
+      #    15, CrewAI Agent max_iter 25 and LiteAgent max_iterations 15 (crewai 1.15.30),
+      #    smolagents max_steps 20 (1.26.0), OpenAI Agents max_turns 10, AutoGen
+      #    AssistantAgent max_tool_iterations 1 (autogen-agentchat 0.7.5), AG2 / legacy
+      #    pyautogen GroupChat max_round 10 and max_consecutive_auto_reply 100, where None
+      #    falls back to 100 (ag2 0.14.0, the last release that ships the `autogen` module);
+      #    Claude Agent SDK max_turns and Anthropic tool_runner max_iterations have no default
+      #    cap. 1,000 is 10 to 100 times those defaults; a modest raise (25 to 50 or 200) is
+      #    left alone. Each keyword is checked only in files that import a framework that uses
+      #    it, so scikit-learn's max_iter and Hugging Face's max_steps stay quiet. AG2's
+      #    `autogen` gate and AutoGen 0.4+'s `autogen_agentchat` gates don't match each other
+      #    (`autogen\b` fails before `_agentchat`). AG2's initiate_chat(max_turns=...) isn't
+      #    checked: the turn loop still stops at the recipient's max_consecutive_auto_reply.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-not-regex: \A(?:(?![ \t]*+(?:from|import)[ \t]++(?:langchain\w*|crewai)\b)[^\n]*+\n)*+(?![ \t]*+(?:from|import)[ \t]++(?:langchain\w*|crewai)\b)[^\n]*+\z
+                  - pattern-either:
+                      - pattern: $F(..., max_iterations=$V, ...)
+                      - pattern: '{..., "max_iterations": $V, ...}'
+              - pattern: $C.beta.messages.tool_runner(..., max_iterations=$V, ...)
+              - patterns:
+                  - pattern-not-regex: \A(?:(?![ \t]*+(?:from|import)[ \t]++(?:agents|claude_agent_sdk|autogen_agentchat)\b)[^\n]*+\n)*+(?![ \t]*+(?:from|import)[ \t]++(?:agents|claude_agent_sdk|autogen_agentchat)\b)[^\n]*+\z
+                  - pattern-either:
+                      - pattern: $F(..., max_turns=$V, ...)
+                      - pattern: '{..., "max_turns": $V, ...}'
+              - patterns:
+                  - pattern-not-regex: \A(?:(?![ \t]*+(?:from|import)[ \t]++crewai\b)[^\n]*+\n)*+(?![ \t]*+(?:from|import)[ \t]++crewai\b)[^\n]*+\z
+                  - pattern-either:
+                      - pattern: $F(..., max_iter=$V, ...)
+                      - pattern: '{..., "max_iter": $V, ...}'
+              - patterns:
+                  - pattern-not-regex: \A(?:(?![ \t]*+(?:from|import)[ \t]++smolagents\b)[^\n]*+\n)*+(?![ \t]*+(?:from|import)[ \t]++smolagents\b)[^\n]*+\z
+                  - pattern-either:
+                      - pattern: $F(..., max_steps=$V, ...)
+                      - pattern: '{..., "max_steps": $V, ...}'
+              - patterns:
+                  - pattern-not-regex: \A(?:(?![ \t]*+(?:from|import)[ \t]++autogen_agentchat\b)[^\n]*+\n)*+(?![ \t]*+(?:from|import)[ \t]++autogen_agentchat\b)[^\n]*+\z
+                  - pattern: $F(..., max_tool_iterations=$V, ...)
+              - patterns:
+                  - pattern-not-regex: \A(?:(?![ \t]*+(?:from|import)[ \t]++autogen\b)[^\n]*+\n)*+(?![ \t]*+(?:from|import)[ \t]++autogen\b)[^\n]*+\z
+                  - pattern-either:
+                      - pattern: $F(..., max_round=$V, ...)
+                      - pattern: $F(..., max_consecutive_auto_reply=$V, ...)
+                      - pattern: '{..., "max_consecutive_auto_reply": $V, ...}'
+                      - pattern: $A.update_max_consecutive_auto_reply($V, ...)
+          # A time or spend limit, an AutoGen termination condition, or an AG2 agent that asks
+          # a human every turn still bounds the loop.
+          - pattern-not-regex: \b(?:max_execution_time|max_budget_usd|termination_condition)\s*=\s*(?!None\b)
+          - pattern-not-regex: \bhuman_input_mode\s*=\s*["']ALWAYS["']
+          - pattern-not-regex: '"(?:max_execution_time|max_budget_usd)"\s*:\s*(?!None\b)'
+          # Skip a value that starts with a parenthesized expression, such as
+          # `(cfg.get("agent") or {}).get("max_turns", 20)`: OpenGrep 1.30.2 aborts the whole file
+          # ("Invalid_argument: String.sub") when the comparison below runs on one
+          # (NOT_PAREN_RECEIVER in scripts/gen_mcp_unpinned.py). Such a value reads the cap from
+          # somewhere else; it is never the literal cap itself.
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^(?!(?:\(\s*)*(?<p>\((?:[^()"'`]++|"(?:[^"\\]|\\.)*+"|'(?:[^'\\]|\\.)*+'|`(?:[^`\\]|\\.)*+`|(?&p))*+\))\s*+(?!=>|:|$|\)))
+          - metavariable-pattern:
+              metavariable: $V
+              pattern-either:
+                - pattern: float("$INF")
+                - pattern: math.inf
+                - pattern: numpy.inf
+                - pattern: sys.maxsize
+                - patterns:
+                    - pattern: $N
+                    - metavariable-comparison:
+                        metavariable: $N
+                        comparison: $N >= 1000
+          # float("nan") and friends aren't infinity. A config value with a large fallback
+          # (`cfg.get("max_turns", 5000)`, `cfg.get_value(...)`, `limit or 5000`) or a clamp
+          # (`min(n, 5000)`) is left alone: the number found inside it isn't the value the
+          # loop runs with.
+          - metavariable-regex:
+              metavariable: $V
+              regex: (?s)^(?!float\(\s*["'](?!(?i:[+]?inf(?:inity)?)["']))(?!.*(?:\bor\b|\bmin\s*\(|\.get\w*\s*\(|getenv\s*\())
+          - focus-metavariable: $V
+      # 3. A LangGraph recursion limit of 100,000 or more, or infinity, in a run config
+      #    (invoke/stream config dicts, with_config, RunnableConfig). LangGraph's own default is
+      #    10,007 since langgraph 1.0 (LANGGRAPH_DEFAULT_RECURSION_LIMIT, langgraph 1.2.17), so
+      #    only a value ten times past it is reported; LangChain Core's default is 25.
+      - patterns:
+          - pattern-either:
+              - pattern: $F(..., recursion_limit=$V, ...)
+              - pattern: '{..., "recursion_limit": $V, ...}'
+          # The parenthesized-expression guard, as in 2.
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^(?!(?:\(\s*)*(?<p>\((?:[^()"'`]++|"(?:[^"\\]|\\.)*+"|'(?:[^'\\]|\\.)*+'|`(?:[^`\\]|\\.)*+`|(?&p))*+\))\s*+(?!=>|:|$|\)))
+          - metavariable-pattern:
+              metavariable: $V
+              pattern-either:
+                - pattern: float("$INF")
+                - pattern: math.inf
+                - pattern: numpy.inf
+                - pattern: sys.maxsize
+                - patterns:
+                    - pattern: $N
+                    - metavariable-comparison:
+                        metavariable: $N
+                        comparison: $N >= 100000
+          # float("nan") and friends aren't infinity. A config value with a large fallback
+          # (`cfg.get("max_turns", 5000)`, `cfg.get_value(...)`, `limit or 5000`) or a clamp
+          # (`min(n, 5000)`) is left alone: the number found inside it isn't the value the
+          # loop runs with.
+          - metavariable-regex:
+              metavariable: $V
+              regex: (?s)^(?!float\(\s*["'](?!(?i:[+]?inf(?:inity)?)["']))(?!.*(?:\bor\b|\bmin\s*\(|\.get\w*\s*\(|getenv\s*\())
+          - focus-metavariable: $V
+      # 4. An AutoGen round-robin, selector, or swarm team with no termination condition and
+      #    no max_turns (both default to None in autogen-agentchat 0.7.5). These teams have no
+      #    natural end: the next speaker is always picked, so run() never returns. GraphFlow
+      #    ends at its leaf nodes and MagenticOneGroupChat defaults to 20 turns, so they aren't
+      #    listed. A team built from **kwargs can't be judged and is left alone.
+      - patterns:
+          - pattern-either:
+              - pattern: autogen_agentchat.teams.RoundRobinGroupChat(...)
+              - pattern: autogen_agentchat.teams.SelectorGroupChat(...)
+              - pattern: autogen_agentchat.teams.Swarm(...)
+          - pattern-not: $T(..., **$KW, ...)
+          - pattern-not-regex: \b(?:termination_condition|max_turns)\s*=\s*(?!None\b)
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM06:2026 - Unbounded Consumption"
+        - "LLM10:2025 - Unbounded Consumption"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI08 - Cascading Failures"
+      owasp-aisvs:
+        - "v1.01-C9.1.2 - Execution Budgets, Loop Control, and Circuit Breakers"
+      mitre-atlas:
+        - "AML.T0034.002 - Cost Harvesting: Agentic Resource Consumption"
+      cwe:
+        - "CWE-770: Allocation of Resources Without Limits or Throttling"
+        - "CWE-834: Excessive Iteration"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [langchain, langgraph, openai-agents, crewai, smolagents, autogen, ag2, claude-agent-sdk, anthropic]
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM06_UnboundedConsumption.md
+        - https://github.com/langchain-ai/langchain/blob/langchain-classic%3D%3D1.0.8/libs/langchain/langchain_classic/agents/agent.py
+        - https://github.com/langchain-ai/langgraph/blob/1.2.17/libs/langgraph/langgraph/_internal/_config.py
+        - https://github.com/openai/openai-agents-python/blob/v0.24.0/src/agents/run.py
+        - https://github.com/crewAIInc/crewAI/blob/1.15.30/lib/crewai/src/crewai/agents/agent_builder/base_agent.py
+        - https://github.com/huggingface/smolagents/blob/v1.26.0/src/smolagents/agents.py
+        - https://github.com/microsoft/autogen/blob/python-v0.7.5/python/packages/autogen-agentchat/src/autogen_agentchat/teams/_group_chat/_base_group_chat_manager.py
+        - https://github.com/ag2ai/ag2/blob/v0.14.0/autogen/agentchat/groupchat.py
+        - https://github.com/ag2ai/ag2/blob/v0.14.0/autogen/agentchat/conversable_agent.py
+        - https://github.com/OWASP/AISVS/blob/main/1.01/en/0x10-C09-Orchestration-and-Agentic-Action.md

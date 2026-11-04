@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "./scripts/copilot-session-context.sh",
+        "timeoutSec": 10
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "echo \"$(date -u +%FT%TZ) prompt\" >> .copilot/prompt-times.log",
+        "powershell": "Add-Content -Path .copilot/prompt-times.log -Value (Get-Date -Format o)"
+      }
+    ]
+  }
+}

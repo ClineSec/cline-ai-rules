@@ -1,0 +1,28 @@
+{
+  // .devin/hooks.json or .windsurf/hooks.json (Devin Desktop, formerly Windsurf)
+  "hooks": {
+    "post_write_code": [
+      {
+        // ruleid: agent-hook-runs-local-script
+        "command": "bash ./scripts/format.sh",
+        // ruleid: agent-hook-runs-local-script
+        "powershell": "powershell -File .\\scripts\\format.ps1",
+        "show_output": true,
+        // ok: agent-hook-runs-local-script
+        "working_directory": "scripts"
+      }
+    ],
+    "pre_user_prompt": [
+      {
+        // ok: agent-hook-runs-local-script
+        "command": "npx -y @example-org/prompt-audit@1.4.0",
+        // ok: agent-hook-runs-local-script
+        "powershell": "npx.cmd -y @example-org/prompt-audit@1.4.0"
+      }
+    ],
+    "post_setup_worktree": [
+      // ruleid: agent-hook-runs-local-script
+      { "powershell": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup-worktree.ps1" }
+    ]
+  }
+}

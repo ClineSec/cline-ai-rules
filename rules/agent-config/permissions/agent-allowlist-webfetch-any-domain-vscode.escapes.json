@@ -1,0 +1,23 @@
+{
+  // Names and patterns written with \u escapes, which VS Code decodes.
+  "chat.tools.urls.aut\u006fApprove": {
+    // ok: agent-allowlist-webfetch-any-domain-vscode
+    "https://docs.example.com/*": true,
+    // ruleid: agent-allowlist-webfetch-any-domain-vscode
+    "https://*": true,
+    // ruleid: agent-allowlist-webfetch-any-domain-vscode
+    "https://\u002a.com": { "approveResponse": false, "appr\u006fveRequest": true },
+    // ruleid: agent-allowlist-webfetch-any-domain-vscode
+    "https://docs.ex\u0061mple.com": true,
+    // ok: agent-allowlist-webfetch-any-domain-vscode
+    "https://docs.example.com/search?q=1\u0026page=2": true,
+    // ok: agent-allowlist-webfetch-any-domain-vscode
+    "https://docs.ex\u0061mple.com/api": { "approveRequest": false, "approveResponse": true },
+    // ok: agent-allowlist-webfetch-any-domain-vscode
+    "https://caf\u00e9.example.com": true
+  },
+  "chat.tools.urls.autoApprove\u0073": {
+    // ok: agent-allowlist-webfetch-any-domain-vscode
+    "https://*": true
+  }
+}

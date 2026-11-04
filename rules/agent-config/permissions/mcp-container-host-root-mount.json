@@ -1,0 +1,115 @@
+{
+  "mcpServers": {
+    "tree": {
+      "command": "docker",
+      // ruleid: mcp-container-host-root-mount
+      "args": ["run", "-i", "--rm", "-v", "/:/host:ro", "example-org/tree-mcp:1.4.0"]
+    },
+    "image-tools": {
+      "command": "docker",
+      // ruleid: mcp-container-host-root-mount
+      "args": ["run", "--rm", "-i", "-v", "${HOME}:/home:ro", "ghcr.io/example-org/image-tools-mcp:2.0.1"]
+    },
+    "long-mount": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "--name", "disk-report",
+        "-e", "HOST_ROOT=/host",
+        // ruleid: mcp-container-host-root-mount
+        "--mount", "type=bind,source=/,target=/host,readonly",
+        "example-org/disk-report-mcp:0.9.2"
+      ]
+    },
+    "equals-form": {
+      "command": "podman",
+      // ruleid: mcp-container-host-root-mount
+      "args": ["container", "run", "-i", "--rm", "--mount=type=bind,src=/home/fixture-user,dst=/data", "example-org/notes-mcp:3.1.0"]
+    },
+    "volume-equals": {
+      "command": "docker",
+      // ruleid: mcp-container-host-root-mount
+      "args": ["run", "-i", "--volume=/Users/fixture-user:/workspace", "example-org/notes-mcp:3.1.0"]
+    },
+    "windows-drive": {
+      "command": "docker.exe",
+      // ruleid: mcp-container-host-root-mount
+      "args": ["run", "-i", "--rm", "-v", "C:\\:/host/c:ro", "example-org/disk-report-mcp:0.9.2"]
+    },
+    "windows-home": {
+      "command": "docker",
+      // ruleid: mcp-container-host-root-mount
+      "args": ["run", "-i", "--rm", "-v", "C:\\Users\\Fixture User:/home/user", "example-org/notes-mcp:3.1.0"]
+    },
+    "every-home": {
+      "command": "docker",
+      // ruleid: mcp-container-host-root-mount
+      "args": ["run", "-i", "--rm", "-v", "/home:/host/home:ro", "example-org/notes-mcp:3.1.0"]
+    },
+    "shell-line": {
+      "command": "bash",
+      // ruleid: mcp-container-host-root-mount
+      "args": ["-c", "exec docker run -i --rm -v \"$HOME:/root/host-home\" example-org/notes-mcp:3.1.0"]
+    },
+    "project-only": {
+      "command": "docker",
+      // ok: mcp-container-host-root-mount
+      "args": ["run", "-i", "--rm", "-v", "/home/fixture-user/src/fixture-app:/workspace:ro", "example-org/notes-mcp:3.1.0"]
+    },
+    "named-volume": {
+      "command": "docker",
+      // ok: mcp-container-host-root-mount
+      "args": ["run", "-i", "--rm", "-v", "notes-data:/data", "example-org/notes-mcp:3.1.0"]
+    },
+    "home-default": {
+      "command": "docker",
+      // ruleid: mcp-container-host-root-mount
+      "args": ["run", "-i", "--rm", "-v", "${HOME:-/home/fixture-user}:/home/user", "example-org/notes-mcp:3.1.0"]
+    },
+    "bare-variable-unexpanded": {
+      "command": "docker",
+      // ok: mcp-container-host-root-mount
+      "args": ["run", "-i", "--rm", "-v", "$HOME:/home/user", "example-org/notes-mcp:3.1.0"]
+    },
+    "vscode-variable-unexpanded": {
+      "command": "docker",
+      // ok: mcp-container-host-root-mount
+      "args": ["run", "-i", "--rm", "-v", "${userHome}:/home/user", "--mount", "type=bind,src=${env:HOME},dst=/data", "example-org/notes-mcp:3.1.0"]
+    },
+    "tilde-unexpanded": {
+      "command": "docker",
+      // ok: mcp-container-host-root-mount
+      "args": ["run", "-i", "--rm", "-v", "~:/home/user", "example-org/notes-mcp:3.1.0"]
+    },
+    "after-image": {
+      "command": "docker",
+      // ok: mcp-container-host-root-mount
+      "args": ["run", "-i", "--rm", "example-org/rsync-mcp:1.0.0", "-v", "/:/srv"]
+    },
+    "filesystem-image": {
+      "command": "docker",
+      // ok: mcp-container-host-root-mount
+      "args": ["run", "-i", "--rm", "-v", "/:/projects/host:ro", "mcp/filesystem:1.0.2", "/projects"]
+    },
+    "filesystem-shell": {
+      "command": "sh",
+      // ok: mcp-container-host-root-mount
+      "args": ["-c", "exec docker run -i --rm -v \"$HOME:/projects\" mcp/filesystem:1.0.2 /projects"]
+    },
+    "scratch-only": {
+      "command": "docker",
+      // ok: mcp-container-host-root-mount
+      "args": ["run", "-i", "--rm", "--read-only", "--tmpfs", "/tmp", "-w", "/", "example-org/notes-mcp:3.1.0"]
+    },
+    "socket": {
+      "command": "docker",
+      // ok: mcp-container-host-root-mount
+      "args": ["run", "-i", "--rm", "-v", "/var/run/docker.sock:/var/run/docker.sock", "example-org/docker-mcp:1.2.0"]
+    },
+    "npx-root": {
+      "command": "npx",
+      // ok: mcp-container-host-root-mount
+      "args": ["-y", "example-org-mcp@1.0.0", "-v", "/:/host"]
+    }
+  }
+}

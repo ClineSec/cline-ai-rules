@@ -1,0 +1,37 @@
+{
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "kb-token",
+      "description": "Knowledge base token",
+      "password": true
+    }
+  ],
+  "servers": {
+    "repo-tools": {
+      "type": "stdio",
+      // ruleid: project-mcp-server-no-prompt
+      "command": "python",
+      "args": ["${workspaceFolder}/tools/mcp_server.py"]
+    },
+    "docs": {
+      // ruleid: project-mcp-server-no-prompt
+      "command": "npx",
+      "args": ["-y", "@example-org/mcp-docs@2.3.1"],
+      "env": {
+        // ok: project-mcp-server-no-prompt
+        "DOCS_ROOT": "${workspaceFolder}/docs"
+      }
+    },
+    "kb": {
+      "type": "http",
+      // ok: project-mcp-server-no-prompt
+      "url": "https://mcp.example.com/kb",
+      "headers": { "Authorization": "Bearer ${input:kb-token}" }
+    },
+    "placeholder": {
+      // ok: project-mcp-server-no-prompt
+      "command": ""
+    }
+  }
+}

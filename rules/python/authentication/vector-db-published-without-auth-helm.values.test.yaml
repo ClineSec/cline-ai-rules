@@ -1,0 +1,215 @@
+# Each document below stands for one values file.
+# Qdrant chart values: a cloud load balancer and no API key.
+image:
+  repository: docker.io/qdrant/qdrant
+  tag: v1.20.0
+replicaCount: 3
+service:
+  # ruleid: vector-db-published-without-auth-helm
+  type: LoadBalancer
+  ports:
+    - name: http
+      port: 6333
+      targetPort: 6333
+# apiKey: false
+---
+# The key turned off explicitly, on a NodePort.
+readOnlyApiKey: false
+apiKey: false
+service:
+  # ruleid: vector-db-published-without-auth-helm
+  type: NodePort
+---
+image:
+  repository: qdrant/qdrant
+service:
+  # ok: vector-db-published-without-auth-helm
+  type: LoadBalancer
+apiKey:
+  valueFrom:
+    secretKeyRef:
+      name: qdrant-api-key
+      key: api-key
+---
+image:
+  repository: qdrant/qdrant
+apiKey: true
+service:
+  # ok: vector-db-published-without-auth-helm
+  type: LoadBalancer
+---
+image:
+  repository: qdrant/qdrant
+config:
+  service:
+    api_key: ${QDRANT_API_KEY}
+service:
+  # ok: vector-db-published-without-auth-helm
+  type: LoadBalancer
+---
+image:
+  repository: qdrant/qdrant
+service:
+  # ok: vector-db-published-without-auth-helm
+  type: ClusterIP
+---
+image:
+  repository: qdrant/qdrant
+service:
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internal"
+  # ok: vector-db-published-without-auth-helm
+  type: LoadBalancer
+---
+image:
+  repository: qdrant/qdrant
+service:
+  # ok: vector-db-published-without-auth-helm
+  type: LoadBalancer
+  loadBalancerSourceRanges:
+    - 10.20.0.0/16
+---
+# An override that doesn't name its chart: the chart is chosen on the command line.
+service:
+  # ok: vector-db-published-without-auth-helm
+  type: LoadBalancer
+---
+# Weaviate chart values copied from the chart: anonymous access on, both services public.
+image:
+  registry: cr.weaviate.io
+  tag: 1.40.2
+  repo: semitechnologies/weaviate
+service:
+  name: weaviate
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+  # ruleid: vector-db-published-without-auth-helm
+  type: LoadBalancer
+  loadBalancerSourceRanges: []
+grpcService:
+  enabled: true
+  name: weaviate-grpc
+  # ruleid: vector-db-published-without-auth-helm
+  type: LoadBalancer
+authentication:
+  anonymous_access:
+    enabled: true
+  oidc:
+    enabled: false
+authorization:
+  admin_list:
+    enabled: false
+---
+# Anonymous access off with no other method: Weaviate falls back to anonymous access.
+authentication:
+  anonymous_access:
+    enabled: false
+service:
+  # ruleid: vector-db-published-without-auth-helm
+  type: LoadBalancer
+---
+# The REST service behind an internal load balancer, the gRPC one public.
+grpcService:
+  # ruleid: vector-db-published-without-auth-helm
+  type: LoadBalancer
+service:
+  annotations:
+    networking.gke.io/load-balancer-type: "Internal"
+  # ok: vector-db-published-without-auth-helm
+  type: LoadBalancer
+---
+authentication:
+  anonymous_access:
+    enabled: false
+  apikey:
+    enabled: true
+    allowed_keys:
+      - ${WEAVIATE_ADMIN_KEY}
+    users:
+      - admin
+service:
+  # ok: vector-db-published-without-auth-helm
+  type: LoadBalancer
+---
+authentication:
+  anonymous_access:
+    enabled: true
+authorization:
+  admin_list:
+    enabled: true
+    users:
+      - admin
+service:
+  # ok: vector-db-published-without-auth-helm
+  type: LoadBalancer
+---
+grpcService:
+  enabled: false
+  # ok: vector-db-published-without-auth-helm
+  type: LoadBalancer
+env:
+  AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'false'
+  AUTHENTICATION_APIKEY_ENABLED: 'true'
+service:
+  # ok: vector-db-published-without-auth-helm
+  type: LoadBalancer
+---
+grpcService:
+  # ok: vector-db-published-without-auth-helm
+  type: LoadBalancer
+envSecrets:
+  AUTHENTICATION_APIKEY_ALLOWED_KEYS: weaviate-api-keys
+---
+# Milvus chart values: a public load balancer and authorization off.
+image:
+  all:
+    repository: milvusdb/milvus
+    tag: v3.0.2
+cluster:
+  enabled: false
+service:
+  # ruleid: vector-db-published-without-auth-helm
+  type: LoadBalancer
+  port: 19530
+  loadBalancerSourceRanges:
+  - 0.0.0.0/0
+extraConfigFiles:
+  user.yaml: |+
+    #   common:
+    #     security:
+    #       authorizationEnabled: true
+---
+extraConfigFiles:
+  user.yaml: |+
+    common:
+      security:
+        authorizationEnabled: true
+service:
+  # ok: vector-db-published-without-auth-helm
+  type: LoadBalancer
+---
+pulsarv3:
+  enabled: false
+standalone:
+  extraEnv:
+    - name: COMMON_SECURITY_AUTHORIZATIONENABLED
+      value: "true"
+service:
+  # ok: vector-db-published-without-auth-helm
+  type: NodePort
+---
+woodpecker:
+  enabled: true
+customConfigMap: milvus-config
+service:
+  # ok: vector-db-published-without-auth-helm
+  type: LoadBalancer
+---
+# The community Chroma chart is not covered.
+image:
+  repository: ghcr.io/chroma-core/chroma
+service:
+  # ok: vector-db-published-without-auth-helm
+  type: LoadBalancer

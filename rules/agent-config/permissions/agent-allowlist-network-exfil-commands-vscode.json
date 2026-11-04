@@ -1,0 +1,69 @@
+{
+  "editor.formatOnSave": true,
+  "chat.tools.terminal.autoApprove": {
+    "npm test": true,
+    "rm": false,
+    // ruleid: agent-allowlist-network-exfil-commands-vscode
+    "curl": true,
+    // ruleid: agent-allowlist-network-exfil-commands-vscode
+    "wget": { "approve": true, "matchCommandLine": true },
+    // ruleid: agent-allowlist-network-exfil-commands-vscode
+    "ssh deploy@build.example.com": true,
+    // ruleid: agent-allowlist-network-exfil-commands-vscode
+    "nslookup": true,
+    // ruleid: agent-allowlist-network-exfil-commands-vscode
+    "/^(dig|host)\\b/": true,
+    // ruleid: agent-allowlist-network-exfil-commands-vscode
+    "/usr/bin/curl": true,
+    // ruleid: agent-allowlist-network-exfil-commands-vscode
+    "Invoke-WebRequest": true,
+    // ruleid: agent-allowlist-network-exfil-commands-vscode
+    "nc": true, "socat": true,
+    // ok: agent-allowlist-network-exfil-commands-vscode
+    "curl -s https://status.example.com/healthz": true,
+    // ok: agent-allowlist-network-exfil-commands-vscode
+    "/^curl\\b/": true,
+    // ok: agent-allowlist-network-exfil-commands-vscode
+    "ping": false,
+    // ok: agent-allowlist-network-exfil-commands-vscode
+    "scp": { "approve": false },
+    // ok: agent-allowlist-network-exfil-commands-vscode
+    "hostname": true,
+    // ok: agent-allowlist-network-exfil-commands-vscode
+    "git pull": true,
+    // ok: agent-allowlist-network-exfil-commands-vscode
+    // "telnet": true,
+    // ok: agent-allowlist-network-exfil-commands-vscode
+    "/^git (status|diff)\\b/": true
+  },
+  /*
+  "chat.tools.terminal.autoApprove": {
+    // ok: agent-allowlist-network-exfil-commands-vscode
+    "dig": true
+  },
+  */
+  "chat.agent.terminal.allowList": {
+    // ruleid: agent-allowlist-network-exfil-commands-vscode
+    "whois": true
+  },
+  "roo-cline.allowedCommands": [
+    "npm test",
+    "git log",
+    // ruleid: agent-allowlist-network-exfil-commands-vscode
+    "curl",
+    // ok: agent-allowlist-network-exfil-commands-vscode
+    // "wget",
+    // ruleid: agent-allowlist-network-exfil-commands-vscode
+    "ssh deploy@build.example.com", "dig"
+  ],
+  // ruleid: agent-allowlist-network-exfil-commands-vscode
+  "kilo-code.allowedCommands": ["git status", "nslookup"],
+  "roo-cline.deniedCommands": [
+    // ok: agent-allowlist-network-exfil-commands-vscode
+    "curl"
+  ],
+  "terminal.integrated.commandsToSkipShell": {
+    // ok: agent-allowlist-network-exfil-commands-vscode
+    "curl": true
+  }
+}

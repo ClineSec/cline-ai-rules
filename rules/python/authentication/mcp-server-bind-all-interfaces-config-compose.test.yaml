@@ -1,0 +1,267 @@
+x-mcp-env: &mcp-env
+  FASTMCP_HOST: 0.0.0.0
+  FASTMCP_PORT: "8000"
+
+x-mcp-env-list: &mcp-env-list
+  - FASTMCP_HOST=0.0.0.0
+
+x-local-env: &local-env
+  FASTMCP_HOST: 127.0.0.1
+
+x-mcp-service: &mcp-service
+  image: example-org/repo-tools-mcp:1.4.0
+  environment:
+    LOG_LEVEL: info
+    FASTMCP_HOST: 0.0.0.0
+
+x-mcp-command: &mcp-command
+  image: example-org/repo-tools-mcp:1.4.0
+  command:
+    - fastmcp
+    - run
+    - server.py
+    - --host
+    - 0.0.0.0
+
+x-build-only: &build-only
+  build:
+    context: .
+    args:
+      FASTMCP_HOST: 0.0.0.0
+  environment:
+    LOG_LEVEL: info
+
+services:
+  repo-tools:
+    image: example-org/repo-tools-mcp:1.4.0
+    environment:
+      - LOG_LEVEL=info
+      # ruleid: mcp-server-bind-all-interfaces-config-compose
+      - FASTMCP_HOST=0.0.0.0
+      - FASTMCP_PORT=8000
+    ports:
+      - "8000:8000"
+      - "9100:9100"
+
+  notes:
+    image: example-org/notes-mcp:2.0.1
+    environment:
+      # ruleid: mcp-server-bind-all-interfaces-config-compose
+      FASTMCP_HOST: "0.0.0.0"
+    ports:
+      - 8001:8001
+
+  legacy-notes:
+    image: example-org/notes-mcp:0.9.3
+    environment:
+      # ruleid: mcp-server-bind-all-interfaces-config-compose
+      FASTMCP_SERVER_HOST: ${FASTMCP_SERVER_HOST:-0.0.0.0}
+    ports:
+      - "${NOTES_PORT:-8002}:8002"
+
+  ipv6-tools:
+    image: example-org/repo-tools-mcp:1.4.0
+    environment:
+      # ruleid: mcp-server-bind-all-interfaces-config-compose
+      - "FASTMCP_HOST=::"
+    ports:
+      - "[::]:8003:8003"
+
+  search:
+    image: example-org/search-mcp:0.3.0
+    # ruleid: mcp-server-bind-all-interfaces-config-compose
+    command: ["uv", "run", "fastmcp", "run", "search/server.py:mcp", "--transport", "http", "--host", "0.0.0.0", "--port", "8004"]
+    ports: ["8004:8004"]
+
+  metrics:
+    image: example-org/metrics-mcp:0.3.0
+    # ruleid: mcp-server-bind-all-interfaces-config-compose
+    command:
+      - fastmcp
+      - run
+      - metrics/server.py
+      - --transport=streamable-http
+      - --host=0.0.0.0
+    ports:
+      - target: 8005
+        published: 8005
+
+  builds:
+    image: example-org/build-mcp:0.3.0
+    # ruleid: mcp-server-bind-all-interfaces-config-compose
+    command: >
+      fastmcp run builds/server.py
+      -t sse --host 0.0.0.0 --port 8006
+    network_mode: host
+
+  shell-wrapped:
+    image: example-org/build-mcp:0.3.0
+    # ruleid: mcp-server-bind-all-interfaces-config-compose
+    entrypoint: ["sh", "-c", "uvx fastmcp@4.1.3 run app.py --transport http --host 0.0.0.0"]
+    ports:
+      - "0.0.0.0:8007:8007"
+
+  # Published on loopback only.
+  local-notes:
+    image: example-org/notes-mcp:2.0.1
+    environment:
+      # ok: mcp-server-bind-all-interfaces-config-compose
+      FASTMCP_HOST: "0.0.0.0"
+    ports:
+      - "127.0.0.1:8010:8010"
+
+  local-tools:
+    image: example-org/repo-tools-mcp:1.4.0
+    environment:
+      # ok: mcp-server-bind-all-interfaces-config-compose
+      - FASTMCP_HOST=0.0.0.0
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:8011:8011"
+      - "[::1]:8011:8011"
+
+  local-long:
+    image: example-org/metrics-mcp:0.3.0
+    # ok: mcp-server-bind-all-interfaces-config-compose
+    command: ["fastmcp", "run", "metrics/server.py", "--transport", "http", "--host", "0.0.0.0"]
+    ports:
+      - target: 8012
+        published: 8012
+        host_ip: 127.0.0.1
+
+  # Not published: reached only through the proxy service on the compose network.
+  internal-search:
+    image: example-org/search-mcp:0.3.0
+    environment:
+      # ok: mcp-server-bind-all-interfaces-config-compose
+      FASTMCP_HOST: 0.0.0.0
+    expose:
+      - "8013"
+
+  edge-proxy:
+    image: example-org/auth-proxy:3.1.0
+    environment:
+      UPSTREAM: http://internal-search:8013
+    ports:
+      - "443:8443"
+
+  # The host IP comes from a variable with no default.
+  site-tools:
+    image: example-org/repo-tools-mcp:1.4.0
+    environment:
+      # ok: mcp-server-bind-all-interfaces-config-compose
+      - FASTMCP_HOST=0.0.0.0
+    ports:
+      - "${BIND_ADDR}:8014:8014"
+
+  # Published everywhere, but the server binds loopback, stdio, or an unknown value.
+  loopback-bind:
+    image: example-org/notes-mcp:2.0.1
+    environment:
+      # ok: mcp-server-bind-all-interfaces-config-compose
+      FASTMCP_HOST: 127.0.0.1
+      # ok: mcp-server-bind-all-interfaces-config-compose
+      FASTMCP_PORT: "8015"
+    ports:
+      - "8015:8015"
+
+  stdio-tools:
+    image: example-org/repo-tools-mcp:1.4.0
+    # ok: mcp-server-bind-all-interfaces-config-compose
+    command: ["fastmcp", "run", "tools.py", "--transport", "stdio", "--host", "0.0.0.0"]
+    ports:
+      - "8016:8016"
+
+  passthrough:
+    image: example-org/repo-tools-mcp:1.4.0
+    environment:
+      # ok: mcp-server-bind-all-interfaces-config-compose
+      - FASTMCP_HOST=${FASTMCP_HOST}
+    ports:
+      - "8017:8017"
+
+  web-ui:
+    image: example-org/dashboard:5.0.0
+    # ok: mcp-server-bind-all-interfaces-config-compose
+    command: ["uvicorn", "dashboard.app:app", "--host", "0.0.0.0", "--port", "8018"]
+    ports:
+      - "8018:8018"
+
+  # A build arg, not the server's environment.
+  image-build:
+    build:
+      context: .
+      args:
+        # ok: mcp-server-bind-all-interfaces-config-compose
+        FASTMCP_HOST: 0.0.0.0
+    ports:
+      - "8019:8019"
+
+  # Aliases and merge keys that point at the anchored blocks above.
+  alias-env:
+    image: example-org/repo-tools-mcp:1.4.0
+    # ruleid: mcp-server-bind-all-interfaces-config-compose
+    environment: *mcp-env
+    ports:
+      - "8020:8020"
+
+  merge-env:
+    image: example-org/repo-tools-mcp:1.4.0
+    environment:
+      # ruleid: mcp-server-bind-all-interfaces-config-compose
+      <<: *mcp-env
+      LOG_LEVEL: debug
+    ports:
+      - "8021:8021"
+
+  alias-env-list:
+    image: example-org/repo-tools-mcp:1.4.0
+    # ruleid: mcp-server-bind-all-interfaces-config-compose
+    environment: *mcp-env-list
+    ports:
+      - "8022:8022"
+
+  merge-service:
+    # ruleid: mcp-server-bind-all-interfaces-config-compose
+    <<: *mcp-service
+    ports:
+      - "8023:8023"
+
+  merge-command:
+    # ruleid: mcp-server-bind-all-interfaces-config-compose
+    <<: *mcp-command
+    network_mode: host
+
+  inline-anchor:
+    image: example-org/repo-tools-mcp:1.4.0
+    environment: &inline-env
+      # ruleid: mcp-server-bind-all-interfaces-config-compose
+      FASTMCP_HOST: 0.0.0.0
+    ports:
+      - "8024:8024"
+
+  reuse-inline:
+    image: example-org/repo-tools-mcp:1.4.0
+    # ruleid: mcp-server-bind-all-interfaces-config-compose
+    environment: *inline-env
+    ports:
+      - "8025:8025"
+
+  reuse-on-loopback:
+    image: example-org/repo-tools-mcp:1.4.0
+    # ok: mcp-server-bind-all-interfaces-config-compose
+    environment: *mcp-env
+    ports:
+      - "127.0.0.1:8026:8026"
+
+  alias-local-env:
+    image: example-org/repo-tools-mcp:1.4.0
+    # ok: mcp-server-bind-all-interfaces-config-compose
+    environment: *local-env
+    ports:
+      - "8027:8027"
+
+  merge-build-only:
+    # ok: mcp-server-bind-all-interfaces-config-compose
+    <<: *build-only
+    ports:
+      - "8028:8028"

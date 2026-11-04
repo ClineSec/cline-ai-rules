@@ -1,0 +1,12 @@
+{
+  "fixtures": {
+    // ruleid: project-mcp-server-no-prompt
+    "command": "node",
+    "args": ["./scripts/fixtures-mcp.mjs"]
+  },
+  "search": {
+    "type": "http",
+    // ok: project-mcp-server-no-prompt
+    "url": "https://mcp.example.com/search"
+  }
+}

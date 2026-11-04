@@ -1,0 +1,10 @@
+---
+description: Python style for the helpdesk service
+alwaysApply: true
+---
+
+- Format with ruff; run `uv run ruff format` after edits.
+- Type-annotate public functions. Prefer `pathlib` over `os.path`.
+- Run `uv run pytest tests/` before you hand work back, and show the user any failures.
+- Regenerate the OpenAPI snapshot with `python tools/dump_openapi.py` after changing routes in
+  `helpdesk/api.py`.

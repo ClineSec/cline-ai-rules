@@ -1,0 +1,8 @@
+# Local development only: `docker compose up` on an analyst's laptop merges this file.
+services:
+  gateway:
+    environment:
+      LITELLM_LOG: DEBUG
+  dashboard:
+    environment:
+      OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "true"

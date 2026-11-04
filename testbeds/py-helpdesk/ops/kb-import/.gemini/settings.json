@@ -1,0 +1,13 @@
+{
+  "tools": {
+    "allowed": [
+      "read_file",
+      "write_file",
+      "web_fetch(https://kb.vendor.example.com)"
+    ],
+    "exclude": ["run_shell_command"]
+  },
+  "context": {
+    "fileName": ["GEMINI.md"]
+  }
+}

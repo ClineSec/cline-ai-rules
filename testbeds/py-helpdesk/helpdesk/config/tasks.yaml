@@ -1,0 +1,13 @@
+research_task:
+  description: >
+    List the five most common ticket themes this week, with one example subject each.
+  expected_output: >
+    A bullet list of five themes.
+  agent: trend_researcher
+
+digest_task:
+  description: >
+    Write a weekly digest of the themes for team leads.
+  expected_output: >
+    Three short paragraphs.
+  agent: digest_writer

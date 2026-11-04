@@ -1,0 +1,29 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "permission": {
+    // ok: kilo-opencode-permission-allow
+    "read": { "*": "allow", "*.env": "ask" },
+    // ruleid: kilo-opencode-permission-allow
+    "edit": { "*": "allow", "*.env": "ask" },
+    // ok: kilo-opencode-permission-allow
+    "glob": { "*": "allow" },
+    // ruleid: kilo-opencode-permission-allow
+    "bash": { "*": "allow" },
+    // ok: kilo-opencode-permission-allow
+    "task": { "*": "allow" },
+    // ok: kilo-opencode-permission-allow
+    "webfetch": { "*": "allow" },
+    // ruleid: kilo-opencode-permission-allow
+    "external_directory": { "*": "allow" },
+    // ok: kilo-opencode-permission-allow
+    "doom_loop": { "*": "ask" }
+  },
+  "agent": {
+    // ruleid: kilo-opencode-permission-allow
+    "code": {"permission":"allow","model":"example-org/model-1"},
+    // ruleid: kilo-opencode-permission-allow
+    "debug": {"model": "example-org/model-1", "permission": {"bash": {"*": "ask", "pwsh -Command *": "allow"}}},
+    // ok: kilo-opencode-permission-allow
+    "plan": {"permission": {"bash": {"*": "deny", "git diff *": "allow"}, "edit": "deny"}}
+  }
+}

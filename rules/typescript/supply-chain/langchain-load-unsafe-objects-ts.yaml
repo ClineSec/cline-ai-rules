@@ -1,0 +1,162 @@
+rules:
+  - id: langchain-load-unsafe-objects-ts
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      This revives serialized LangChain.js objects with LangChain's guard turned off:
+      `secretsFromEnv: true` or a `secretsMap` that is the whole of `process.env` (the payload
+      can name any environment variable, and its value is copied into the objects it builds),
+      or a hub prompt pulled with `includeModel: true` and no pinned commit (the manifest
+      configures the chat model, base URL included). A LangChain manifest is executable
+      configuration, not data: whoever can write or change it (a shared prompt store, a cache,
+      a hub prompt, stored run data) can point a model at their own host, so the API key and
+      every prompt go there, or copy your credentials into an object they can read back. Keep
+      `secretsFromEnv` off and pass only the secrets the object needs in `secretsMap`, keep
+      `importMap` and `optionalImportsMap` to the classes you expect, and pin pulled prompts to
+      a reviewed commit (`"owner/name:<commit>"`).
+    # API shapes verified 2026-10-25 against @langchain/core 1.3.0, 1.1.8, 1.1.7, 0.3.80 and
+    # 0.3.79 (dist/load/index.js and index.d.ts) and langchain 1.5.19 (dist/load/index.js,
+    # dist/hub/index.js, dist/hub/node.js).
+    # - @langchain/core load(text, options): secretsFromEnv was added in 0.3.80 / 1.1.8
+    #   (GHSA-r399-636x-v7f6) and defaults to false. Before that, a secret the payload named was
+    #   always read from the environment.
+    # - langchain/load load(text, secretsMap, optionalImportsMap, additionalImportsMap,
+    #   secretsFromEnv) takes the same options positionally, and adds the langchain package's
+    #   own classes to the import map.
+    # - langchain/hub pull(name, { includeModel, secrets, secretsFromEnv }) loads the hub
+    #   manifest with those options; with includeModel, hub/node picks the chat model class the
+    #   manifest names. The LangSmith JS client's pullPromptCommit doesn't revive anything.
+    # Not reported: importMap, optionalImportsMap, and optionalImportEntrypoints, which name
+    # modules the application chose (an allowlist, not a bypass); secretsFromEnv: false; and
+    # load() with the defaults, whose risk depends on where the payload comes from
+    # (langchain-load-untrusted-input-ts reports request data reaching it).
+    pattern-either:
+      # Load or hub-pull options with secretsFromEnv turned on, inline or in a shared options
+      # object. The key is LangChain's; the file must import its load or hub module.
+      - patterns:
+          - pattern-regex: (?s)\A(?=.*?["'](?:@langchain/core/load|langchain/load|langchain/hub(?:/node)?)["']).*
+          - pattern: '{..., secretsFromEnv: $T, ...}'
+          - metavariable-pattern:
+              metavariable: $T
+              pattern: "true"
+          - focus-metavariable: $T
+      # A secretsMap (load) or secrets (hub pull) that is the whole environment. A cast
+      # (`process.env as Record<string, string>`) binds $M with and without it, so the regex
+      # takes the bare form only and the finding is reported once.
+      - patterns:
+          - pattern-regex: (?s)\A(?=.*?["'](?:@langchain/core/load|langchain/load|langchain/hub(?:/node)?)["']).*
+          - pattern-either:
+              - pattern: '{..., secretsMap: $M, ...}'
+              - pattern: '{..., secrets: $M, ...}'
+          - metavariable-regex:
+              metavariable: $M
+              regex: (?s)^(?:process\.env|\{\s*\.\.\.process\.env\b.*\})$
+          - focus-metavariable: $M
+      # langchain/load's positional form: load(text, secretsMap, optionalImportsMap,
+      # additionalImportsMap, secretsFromEnv).
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import { load } from "langchain/load";
+                          ...
+                      - pattern-inside: |
+                          const { load } = require("langchain/load");
+                          ...
+                  - pattern-either:
+                      - pattern: load($TEXT, $SM, $OM, $AM, true)
+                      - pattern: load($TEXT, process.env, ...)
+                      - pattern: 'load($TEXT, {...process.env}, ...)'
+                      # `await load<T>(...)`: see the hub branch below.
+                      - patterns:
+                          - pattern-either:
+                              - pattern: $AW($TEXT, $SM, $OM, $AM, true)
+                              - pattern: $AW($TEXT, process.env, ...)
+                          - metavariable-pattern:
+                              metavariable: $AW
+                              language: generic
+                              pattern: await load
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import { load as $L } from "langchain/load";
+                          ...
+                      - pattern-inside: |
+                          import * as $NS from "langchain/load";
+                          ...
+                  - pattern-either:
+                      - pattern: $L($TEXT, $SM, $OM, $AM, true)
+                      - pattern: $L($TEXT, process.env, ...)
+                      - pattern: $NS.load($TEXT, $SM, $OM, $AM, true)
+                      - pattern: $NS.load($TEXT, process.env, ...)
+      # A hub prompt pulled with its model configuration and no pinned commit.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import { pull } from "=~/^langchain\/hub(?:\/node)?$/";
+                          ...
+                      - pattern-inside: |
+                          const { pull } = require("=~/^langchain\/hub(?:\/node)?$/");
+                          ...
+                  - pattern-either:
+                      - pattern: pull($NAME, $OPTS)
+                      # OpenGrep 1.30.2 parses `await pull<T>(name, opts)` as a call whose
+                      # callee is `await pull`, so a generic call under await needs its own
+                      # shape.
+                      - patterns:
+                          - pattern: $AW($NAME, $OPTS)
+                          - metavariable-pattern:
+                              metavariable: $AW
+                              language: generic
+                              pattern: await pull
+              - patterns:
+                  - pattern-inside: |
+                      import * as $HUB from "=~/^langchain\/hub(?:\/node)?$/";
+                      ...
+                  - pattern-either:
+                      - pattern: $HUB.pull($NAME, $OPTS)
+                      - patterns:
+                          - pattern: $AW($NAME, $OPTS)
+                          - metavariable-pattern:
+                              metavariable: $AW
+                              language: generic
+                              pattern: await $HUB.pull
+          # Options kept in a constant: const PULL_OPTIONS = { includeModel: true, ... }.
+          - pattern-either:
+              - pattern: '$P($NAME, {..., includeModel: true, ...})'
+              - patterns:
+                  - pattern-inside: |
+                      const $OPTS = {..., includeModel: true, ...};
+                      ...
+                  - pattern: $P($NAME, $OPTS)
+          # A prompt pinned to a commit ("owner/name:1a2b3c4d") is a reviewed manifest.
+          # String patterns also resolve a constant (const DIGEST_PROMPT = "...").
+          - pattern-not: $PULLED("=~/:[0-9a-fA-F]{8,64}$/", ...)
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+        - "LLM02:2026 - Sensitive Information Disclosure"
+        - "LLM02:2025 - Sensitive Information Disclosure"
+      owasp-aisvs:
+        - "v1.01-C4.1.2 - AI Workload Sandboxing & Validation"
+      mitre-atlas:
+        - "AML.T0011.000 - User Execution: Unsafe AI Artifacts"
+        - "AML.T0055 - Unsecured Credentials"
+      cwe:
+        - "CWE-502: Deserialization of Untrusted Data"
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      technology: [langchain, langsmith]
+      references:
+        - https://www.npmjs.com/package/@langchain/core/v/1.3.0
+        - https://github.com/advisories/GHSA-r399-636x-v7f6
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md
+        - https://cwe.mitre.org/data/definitions/502.html

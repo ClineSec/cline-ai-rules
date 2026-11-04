@@ -1,0 +1,285 @@
+rules:
+  - id: agent-tool-arg-option-injection-ts
+    # JavaScript/TypeScript twin of agent-tool-arg-option-injection, and agent-framework
+    # sibling of mcp-tool-arg-option-injection-ts: the same sinks and sanitizers after the
+    # first (build.py SHARED_BLOCKS). The pattern-sources block and the first sanitizer are
+    # shared with agent-tool-arg-to-shell-ts: edit both together.
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      An agent tool argument is passed to git (or ssh, rsync, tar, curl, wget, rg) as a
+      command-line argument with no `--` before it and no check for a leading dash. The model
+      chooses tool arguments, and a prompt injection can choose them for it: a value like
+      `--output=/home/user/.bashrc` (git diff), `--upload-pack=...` (git fetch), `--pre=...`
+      (rg), or `-oProxyCommand=...` (ssh) is read as an option, which can overwrite files or
+      run commands. Put `"--"` before user values where the program accepts it, reject values
+      that start with `-`, or validate them against an anchored pattern in the tool's schema
+      (`z.string().regex(/^[\w./]+$/)`).
+    mode: taint
+    pattern-sources:
+      # The execute function's first parameter (the validated input object, destructured or
+      # not). `($ARGS, ...) => {...}` also matches function expressions and expression bodies.
+      - patterns:
+          - pattern-either:
+              # Vercel AI SDK tool({ inputSchema, execute }) and dynamicTool, OpenAI Agents
+              # tool({ parameters, execute }), LangChain.js tool(fn, { schema }). Gated by the
+              # import, since tool() is a common name.
+              - patterns:
+                  - pattern-either:
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  import { $FN } from "$MOD";
+                                  ...
+                              - pattern-inside: |
+                                  const { $FN } = require("$MOD");
+                                  ...
+                          - pattern-either:
+                              - pattern: '$FN({..., execute: ($ARGS, ...) => {...}, ...})'
+                              - pattern: '$FN({..., execute($ARGS, ...) {...}, ...})'
+                              - pattern: $FN(($ARGS, ...) => {...}, ...)
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  import { $FN as $TOOL } from "$MOD";
+                                  ...
+                              - pattern-inside: |
+                                  const { $FN: $TOOL } = require("$MOD");
+                                  ...
+                          - pattern-either:
+                              - pattern: '$TOOL({..., execute: ($ARGS, ...) => {...}, ...})'
+                              - pattern: '$TOOL({..., execute($ARGS, ...) {...}, ...})'
+                              - pattern: $TOOL(($ARGS, ...) => {...}, ...)
+                      # A named function passed as execute, or as LangChain.js tool()'s func,
+                      # declared before the call: a regex over the declaration (signature and
+                      # balanced body) that looks ahead for tool(...) or dynamicTool(...) naming
+                      # it. NAMED must name the function. A statement region from every function
+                      # to a later tool() call took about 11 s on a 5,000-line file (OpenGrep
+                      # 1.30.2).
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  import { $FN } from "$MOD";
+                                  ...
+                              - pattern-inside: |
+                                  const { $FN } = require("$MOD");
+                                  ...
+                          - pattern-regex: |-
+                                  (?x)
+                                  (?(DEFINE)
+                                    (?<str> "(?:[^"\\\n]|\\.)*+" | '(?:[^'\\\n]|\\.)*+' | `(?:[^`\\]|\\.)*+` )
+                                    (?<com> //[^\n]*+ | /\*(?:[^*]++|\*(?!/))*+\*/ )
+                                    (?<br> \{ (?: [^{}"'`/]++ | (?&com) | (?&str) | (?&br) | [/"'`] )*+ \} )
+                                    (?<pa> \( (?: [^()"'`/]++ | (?&com) | (?&str) | (?&pa) | [/"'`] )*+ \) )
+                                    (?<ang> < (?: [^<>=]++ | =>? | (?&ang) )*+ > )
+                                    (?<ty> (?: [^{}()<>=;]++ | (?&ang) | (?&pa) | => )*? )
+                                    (?<reg> \( \s*+ (?: \k<NAMED> \b \s*+ [,)]
+                                      | \{ (?: [^{}"'`/e]++ | (?&com) | (?&str) | (?&br) | [/"'`] | e(?!xecute \s*+ : \s*+ \k<NAMED> \b \s*+ [,}]) )*+
+                                        execute \s*+ : \s*+ \k<NAMED> \b \s*+ [,}] ) )
+                                  )
+                                  (?| (?: \bexport [ \t]++ (?:default [ \t]++)? )? (?: \basync [ \t]++ )? \bfunction\b [ \t]*+ \*? [ \t]*+ (?<NAMED>[\w$]++)
+                                      \s*+ (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? (?&br)
+                                    | (?: \bexport [ \t]++ )? \b(?:const|let|var) [ \t]++ (?<NAMED>[\w$]++) \s*+ (?: : (?&ty) )? = \s*+ (?: async\b \s*+ )?
+                                      (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? => \s*+ (?&br) [ \t]*+ ;? )
+                                  (?= (?: [^(]++ | (?<!\btool)(?<!\bdynamicTool) \( | (?!(?&reg)) \( )*+ (?<=\btool|\bdynamicTool) (?&reg) )
+                          - pattern-either:
+                              - pattern: function $H($ARGS, ...) {...}
+                              - pattern: const $H = ($ARGS, ...) => {...};
+                          - metavariable-comparison:
+                              comparison: str($H) == str($NAMED)
+                  - metavariable-regex:
+                      metavariable: $MOD
+                      regex: ^(?:ai|@openai/agents(?:-core)?|@langchain/core/tools|langchain)$
+                  - metavariable-regex:
+                      metavariable: $FN
+                      regex: ^(?:tool|dynamicTool)$
+              # LangChain.js classes: new DynamicStructuredTool({ func }), and the _call
+              # method of a StructuredTool / Tool subclass.
+              - pattern: 'new DynamicStructuredTool({..., func: ($ARGS, ...) => {...}, ...})'
+              - pattern: 'new DynamicTool({..., func: ($ARGS, ...) => {...}, ...})'
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          class $C extends StructuredTool {...}
+                      - pattern-inside: |
+                          class $C extends Tool {...}
+                  - pattern: |
+                      _call($ARGS, ...) {...}
+          - focus-metavariable: $ARGS
+    pattern-sanitizers:
+      # Shared with agent-tool-arg-to-shell-ts (the first sanitizer; build.py
+      # SHARED_BLOCKS). A field whose schema only admits safe values: z.enum, z.literal,
+      # z.number, z.boolean, or a string with an anchored .regex(/^...$/). The frameworks
+      # validate the model's arguments against the schema before calling execute, so uses
+      # of that field (destructured or input.field) are clean.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: '$TOOL({..., inputSchema: $Z.object({..., $KEY: $TYPE, ...}), ...})'
+              - pattern-inside: '$TOOL({..., parameters: $Z.object({..., $KEY: $TYPE, ...}), ...})'
+              - pattern-inside: '$TOOL($FUNC, {..., schema: $Z.object({..., $KEY: $TYPE, ...}), ...})'
+              - pattern-inside: 'new $CLASS({..., schema: $Z.object({..., $KEY: $TYPE, ...}), ...})'
+          - metavariable-pattern:
+              metavariable: $TYPE
+              pattern-either:
+                - pattern: $Z.enum(...)
+                - pattern: $Z.nativeEnum(...)
+                - pattern: $Z.literal(...)
+                - pattern: $Z.number(...)
+                - pattern: $Z.boolean(...)
+                - pattern: $Z.int(...)
+                - patterns:
+                    - pattern: $STR.regex($RE, ...)
+                    - metavariable-regex:
+                        metavariable: $RE
+                        regex: ^/\^.*\$/[a-z]*$
+          - pattern-either:
+              - pattern: $KEY
+              - pattern: $OBJ.$KEY
+      # A leading-dash or allowlist check before use.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X.startsWith(...)
+              - pattern: $RE.test($X)
+              - pattern: $X.match($RE)
+          - focus-metavariable: $X
+      - exact: true
+        pattern: $X.replace(/^-+/, "")
+      # An allowlist membership check before use: ALLOWED.has(value), ALLOWED.includes(value).
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $ALLOWED.has($X)
+              - pattern: $ALLOWED.includes($X)
+          - focus-metavariable: $X
+      # A simple-git instance built from a tool's path argument is not attacker text.
+      - exact: true
+        pattern: simpleGit(...)
+      - exact: true
+        pattern: Number(...)
+      - exact: true
+        pattern: parseInt(...)
+      - exact: true
+        pattern: parseFloat(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              # spawn("git", [..., value]) and friends, without a shell (a shell is the
+              # *-tool-arg-to-shell-ts rule's).
+              - patterns:
+                  - pattern-inside: $F($PROG, [..., $ARG, ...], ...)
+                  - metavariable-regex:
+                      metavariable: $F
+                      regex: ^(?:(?:\w+\.)?(?:spawn|spawnSync|\w*[eE]xecFile\w*)|execa|execaSync|crossSpawn)$
+                  - metavariable-regex:
+                      metavariable: $PROG
+                      regex: ^["'`](?:[\w./-]*/)?(?:git|ssh|scp|sftp|rsync|tar|curl|wget|rg|zip|hg|svn)["'`]$
+                  - pattern-not-inside: '$F($PROG, $ARGV, {..., shell: true, ...}, ...)'
+                  - pattern-not-inside: '$F($PROG, $ARGV, {..., shell: "$SHELL", ...}, ...)'
+                  - pattern-not-inside: $F($PROG, [..., "--", ..., $ARG, ...], ...)
+                  - pattern-not-inside: $F($PROG, [..., "--end-of-options", ..., $ARG, ...], ...)
+                  - pattern-either:
+                      - pattern-inside: $F($PROG, [$ARG, ...], ...)
+                      - patterns:
+                          - pattern-inside: $F($PROG, [..., $PREV, $ARG, ...], ...)
+                          - metavariable-regex:
+                              metavariable: $PREV
+                              regex: ^(?!["'`](?:-[a-zA-Z]+|--(?:author|committer|grep|since|until|after|before|branch|depth|message|file|origin|reference|template|config|exclude|include|directory|output|max-count|skip|shallow-since|shallow-exclude|jobs|filter|sort|remote|regexp|glob|type|max-depth))["'`]$)
+              # A whole argv in one array: Bun.spawn(["git", "log", ref]), or one built
+              # before the call.
+              - patterns:
+                  - pattern-inside: '[$PROG, ..., $ARG, ...]'
+                  - metavariable-regex:
+                      metavariable: $PROG
+                      regex: ^["'`](?:[\w./-]*/)?(?:git|ssh|scp|sftp|rsync|tar|curl|wget|rg|zip|hg|svn)["'`]$
+                  - pattern-not-inside: '[..., "--", ..., $ARG, ...]'
+                  - pattern-not-inside: '[..., "--end-of-options", ..., $ARG, ...]'
+                  - pattern-either:
+                      - pattern-inside: '[$PROG, $ARG, ...]'
+                      - patterns:
+                          - pattern-inside: '[..., $PREV, $ARG, ...]'
+                          - metavariable-regex:
+                              metavariable: $PREV
+                              regex: ^(?!["'`](?:-[a-zA-Z]+|--(?:author|committer|grep|since|until|after|before|branch|depth|message|file|origin|reference|template|config|exclude|include|directory|output|max-count|skip|shallow-since|shallow-exclude|jobs|filter|sort|remote|regexp|glob|type|max-depth))["'`]$)
+              # simple-git: git.diff([...]), git.checkout(value), git.raw([...]).
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $GIT = $SIMPLEGIT(...);
+                          ...
+                      - pattern-inside: |
+                          const $GIT = $SIMPLEGIT(...);
+                          ...
+                      - pattern-inside: |
+                          $GIT = $SIMPLEGIT(...).$M2(...);
+                          ...
+                  - metavariable-regex:
+                      metavariable: $SIMPLEGIT
+                      regex: ^(?:simpleGit|simplegit|simple_git)$
+                  - pattern-either:
+                      - patterns:
+                          - pattern-inside: $GIT.$METHOD([..., $ARG, ...], ...)
+                          - pattern-not-inside: $GIT.$METHOD([..., "--", ..., $ARG, ...], ...)
+                          - pattern-not-inside: $GIT.$METHOD([..., "--end-of-options", ..., $ARG, ...], ...)
+                          - pattern-either:
+                              - pattern-inside: $GIT.$METHOD([$ARG, ...], ...)
+                              - patterns:
+                                  - pattern-inside: $GIT.$METHOD([..., $PREV, $ARG, ...], ...)
+                                  - metavariable-regex:
+                                      metavariable: $PREV
+                                      regex: ^(?!["'`](?:-[a-zA-Z]+|--(?:author|committer|grep|since|until|after|before|branch|depth|message|file|origin|reference|template|config|exclude|include|directory|output|max-count|skip|shallow-since|shallow-exclude|jobs|filter|sort|remote|regexp|glob|type|max-depth))["'`]$)
+                      # A single value (git.checkout(branch), git.raw(args)). An array is
+                      # checked element by element above, so its "--end-of-options" and
+                      # literal prefixes count. In an options object simple-git 4.0.2 writes
+                      # values as key=value, except log's {from, to}, which become
+                      # `${from}...${to}`, so only `from` can start an argument.
+                      - patterns:
+                          - pattern-inside: $GIT.$METHOD($ARG, ...)
+                          - metavariable-regex:
+                              metavariable: $ARG
+                              regex: ^(?![\[{])
+                      - pattern-inside: '$GIT.$METHOD({..., from: $ARG, ...}, ...)'
+                  - metavariable-regex:
+                      metavariable: $METHOD
+                      regex: ^(?:raw|diff|diffSummary|show|log|checkout|checkoutBranch|revparse|fetch|pull|push|clone|branch|merge|reset|grep|tag)$
+          - pattern: $ARG
+          # A spread (...args) hides which positions hold values, so it isn't reported.
+          - pattern-not: '...$SPREAD'
+          # A value built after a literal prefix (`origin/${branch}`, "refs/heads/" + name)
+          # can't start with "-".
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: ^(?!["'`](?!\$\{)[^"'`])
+      # $`git log ${ref}` (execa, Bun Shell, zx): each interpolation is one argument, so it
+      # can still be an option. Skipped after "--" and right after a short option (-m ${msg}).
+      - patterns:
+          - pattern: $TAG`...`
+          - pattern-regex: (?s)`[ \t]*(?:git|ssh|scp|sftp|rsync|tar|curl|wget|rg|zip|hg|svn)\b(?:(?!\s--(?:end-of-options)?\s)[^`])*?(?<!\s-[a-zA-Z])(?<!\s-[a-zA-Z]{2})(?<!\s-[a-zA-Z]{3})(?<!\s-[a-zA-Z]{4})\s\$\{[^}]*\}
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C7.1.1 - Output Format Enforcement"
+        - "v1.01-C9.3.1 - Component Isolation and Tool Authorization"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-88: Improper Neutralization of Argument Delimiters in a Command ('Argument Injection')"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [vercel-ai-sdk, openai-agents, langchainjs, node, execa, bun, simple-git, git]
+      references:
+        - https://github.com/vercel/ai/blob/ai%407.0.150/packages/provider-utils/src/types/tool.ts
+        - https://github.com/openai/openai-agents-js/blob/v0.21.0/packages/agents-core/src/tool.ts
+        - https://github.com/langchain-ai/langchainjs/blob/%40langchain/core%401.3.0/libs/langchain-core/src/tools/index.ts
+        - https://github.com/modelcontextprotocol/servers/security/advisories/GHSA-9xwc-hfwc-8w59
+        - https://git-scm.com/docs/gitcli
+        - https://cwe.mitre.org/data/definitions/88.html

@@ -1,0 +1,26 @@
+// Claude Desktop's format (claude_desktop_config.json): args reach docker as written, so an
+// unexpanded variable names a folder that doesn't exist and nothing is mounted.
+{
+  "mcpServers": {
+    "desktop-template": {
+      "command": "docker",
+      // ok: mcp-container-host-root-mount-literal
+      "args": ["run", "-i", "--rm", "-v", "$HOME:/home/user", "example-org/notes-mcp:3.1.0"]
+    },
+    "other-forms": {
+      "command": "docker",
+      // ok: mcp-container-host-root-mount-literal
+      "args": ["run", "-i", "--rm", "-v", "${HOME}:/home/user", "--mount", "type=bind,src=${userHome},dst=/data", "example-org/notes-mcp:3.1.0"]
+    },
+    "literal-home": {
+      "command": "docker",
+      // ruleid: mcp-container-host-root-mount-literal
+      "args": ["run", "-i", "--rm", "-v", "/Users/fixture-user:/home/user", "example-org/notes-mcp:3.1.0"]
+    },
+    "shell-line": {
+      "command": "bash",
+      // ruleid: mcp-container-host-root-mount-literal
+      "args": ["-c", "exec docker run -i --rm -v \"$HOME:/home/user\" example-org/notes-mcp:3.1.0"]
+    }
+  }
+}

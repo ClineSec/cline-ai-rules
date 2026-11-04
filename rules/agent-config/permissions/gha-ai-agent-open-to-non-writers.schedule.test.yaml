@@ -1,0 +1,17 @@
+# Fixture for gha-ai-agent-open-to-non-writers: no trigger an outsider can start.
+name: nightly-agent
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # ok: gha-ai-agent-open-to-non-writers
+          allowed_non_write_users: "*"
+          prompt: "Update the dependency report."
+          claude_args: --allowedTools "Edit" "Bash"

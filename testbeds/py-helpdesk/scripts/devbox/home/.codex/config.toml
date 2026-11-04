@@ -1,0 +1,32 @@
+# Codex defaults for helpdesk support laptops. Laptop setup copies this folder into $HOME.
+model = "gpt-5.5"
+
+[mcp_servers.tickets]
+command = "uvx"
+args = [
+  "example-org-helpdesk-mcp@latest",
+  "--project", "HD",
+]
+env_vars = ["HD_TICKETS_TOKEN"]
+
+[mcp_servers]
+runbooks = { command = "npx", args = ["-y", "@example-org/runbook-mcp@3.2.1", "~/helpdesk/docs/runbooks"] }
+
+[mcp_servers.github]
+command = "github-mcp-server"
+args = ["stdio", "--read-only", "--toolsets", "repos,issues"]
+
+[mcp_servers.github.env]
+GITHUB_PERSONAL_ACCESS_TOKEN = "ghp_FAKE0helpdesk0devbox00TEST0000FAKE00"
+GITHUB_HOST = "https://github.com"
+
+[mcp_servers.handbook]
+url = "https://support-handbook-placeholder-name-longer-than-dns-allows-never-resolves.fly.dev/mcp"
+
+[mcp_servers.local-kb]
+url = "http://127.0.0.1:8040/mcp/kb"
+
+# Installed by the laptop setup script (uv tool install example-org-shift-notes==1.3.0).
+[mcp_servers.shift-notes]
+command = "~/.local/bin/hd-shift-notes"
+args = ["mcp", "--team", "helpdesk"]

@@ -1,0 +1,56 @@
+# Fixture for gha-ai-agent-untrusted-trigger: issues (every type), discussions, workflow_run.
+name: community-bot
+on: [issues, discussion_comment, workflow_run]
+jobs:
+  answer:
+    runs-on: ubuntu-latest
+    steps:
+      # "on: issues" with no types includes labeled and assigned, where the actor is a
+      # maintainer and the issue text is someone else's.
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # ruleid: gha-ai-agent-untrusted-trigger
+          prompt: "Reproduce ${{ github.event.issue.body }}"
+          claude_args: >-
+            --max-turns 8
+            --allowedTools "Bash(python -m pytest:*)"
+      - uses: openai/codex-action@v1
+        with:
+          # ruleid: gha-ai-agent-untrusted-trigger
+          prompt: "Answer the discussion: ${{ github.event.discussion.title }}"
+      - uses: openai/codex-action@v1
+        with:
+          # ok: gha-ai-agent-untrusted-trigger
+          prompt: "Answer the discussion comment: ${{ github.event.comment.body }}"
+      # ok: gha-ai-agent-untrusted-trigger
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_args: --allowedTools Bash
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # ok: gha-ai-agent-untrusted-trigger
+          prompt: "Reproduce ${{ github.event.issue.body }}"
+          claude_args: --allowedTools Read --disallowedTools Bash Edit
+  ci-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fix the failing branch
+        env:
+          # ruleid: gha-ai-agent-untrusted-trigger
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: >
+          cursor-agent -p --force
+          "CI failed on $BRANCH. Fix it."
+  copilot-explain:
+    runs-on: ubuntu-latest
+    env:
+      COPILOT_ALLOW_ALL: "1"
+    steps:
+      - env:
+          # ruleid: gha-ai-agent-untrusted-trigger
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: copilot -p "Explain the failure reported in $ISSUE_TITLE"
+      - env:
+          # ok: gha-ai-agent-untrusted-trigger
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: copilot -p "Explain the failure reported in issue $ISSUE_NUMBER"

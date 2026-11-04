@@ -1,0 +1,8 @@
+{
+  "name": "helpdesk (GPU)",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "runArgs": ["--gpus", "all"],
+  // Host setup moved into postCreateCommand (HD-447); left empty so overrides stay obvious.
+  "initializeCommand": "",
+  "postCreateCommand": "pip install -e '.[dev]' && echo gpu ready"
+}

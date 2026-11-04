@@ -1,0 +1,85 @@
+rules:
+  - id: agent-skill-load-time-shell-toml
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This Gemini CLI or Qwen Code custom command runs a shell command through the `!{...}`
+      injection syntax, and the command downloads and runs code, pipes a download into a shell,
+      runs a package straight from a URL or git repo, or runs a script from the repository. The
+      command runs when the `/command` is invoked and its output is spliced into the prompt
+      before the model sees it. The CLI asks for confirmation the first time, but once the
+      command is on the session allow list or the CLI is in YOLO / auto-approve mode it runs
+      with no prompt. Anyone who can change this committed file or the script it names, through a
+      pull request, a compromised dependency, or a worm that writes into the repo, then runs code
+      with the developer's credentials. Inline the output a different way, install the tool
+      outside the command at a pinned version with a checksum, or keep the command to a read-only
+      lookup and review this file under CODEOWNERS like other code that runs on checkout.
+    # Gemini CLI `!{...}` custom-command shell injection, checked against gemini-cli v0.65.0
+    # (SHELL_INJECTION_TRIGGER = '!{' in prompt-processors, ShellProcessor runs it; the policy
+    # engine returns ASK_USER so it prompts unless the command is on sessionShellAllowlist or
+    # policy allows it) and the Qwen Code fork v0.26.1 (same '!{' trigger, YOLO auto-approves),
+    # 2026-10-24. Both load commands from user (~/.gemini|~/.qwen /commands) and project
+    # (.gemini|.qwen /commands) .toml files, and Qwen also .md; the shell danger block is shared
+    # with agent-skill-load-time-shell (SHARED_REGEX).
+    paths:
+      include:
+        - ".gemini/commands/**"
+        - ".qwen/commands/**"
+    patterns:
+      - pattern-regex: (?s)!\{(?<CMD>[^}]+)\}
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: |-
+            (?ix)
+            # --- load-time shell danger command (begin): build.py keeps this block
+            # identical in agent-skill-load-time-shell; edit both together. ---
+            # A dangerous command anywhere in the injected text. (?x): whitespace is
+            # ignored, # starts a comment, so a literal space is \s and a literal # is
+            # \#. A command position (?&at) is the start, a newline, or after ; & | (
+            # or a backtick, so text in an echo string or a comment does not count.
+            (?(DEFINE) (?<at> (?:^|[\r\n;&|(`]|&&|\|\|) [ \t]*
+              (?: (?:sudo|env|exec|nohup|time) [ \t]+ (?:\w+=\S*[ \t]+)* )? ) )
+            # download piped into, or substituted into, a shell or interpreter
+              (?s:.)*? (?&at) (?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b [^\r\n;&|]*
+                \|(?!\|) [ \t]* (?:sudo[ \t]+)? (?:env[ \t]+(?:\w+=\S*[ \t]+)*)?
+                (?:(?:ba|z|da|k)?sh|python[0-9.]*|node|perl|ruby|php|iex|invoke-expression)\b
+            | (?s:.)*? (?&at) (?:(?:ba|z|da|k)?sh|eval|source|\.)[ \t]+ \S* (?:\$\(|<\(|`) [ \t]*
+                (?:curl|wget)\b
+            | (?s:.)*? (?&at) (?:iex|invoke-expression)\b [^\r\n]*?
+                (?:\b(?:iwr|irm|invoke-webrequest|invoke-restmethod|curl|wget)\b|\.downloadstring\b)
+            # a package runner taking a URL, git URL, or user/repo spec
+            | (?s:.)*? (?&at) (?:npx|bunx|pnpm[ \t]+dlx|yarn[ \t]+dlx|npm[ \t]+exec|uvx|uv[ \t]+tool[ \t]+run|pipx[ \t]+run)\b
+                (?:[ \t]+-\S+)* [ \t]+ (?:--(?:package|from|spec)[=\s])? ["']?
+                (?! \S*? [\#@] [0-9a-f]{7,40} (?![\w.-]) )
+                (?: https?:// | git(?:\+\w+)?:// | git@ | (?:github|gitlab|bitbucket): | [a-z0-9][\w.-]*/[\w.-]+ (?=[ \t]|$|["']) )
+            # a script run from the repository: a relative path or project-dir var, run directly or via an interpreter
+            | (?s:.)*? (?&at)
+                (?: (?:node|bun|deno|python[0-9.]*|bash|sh|zsh|pwsh|powershell|ruby|perl|php|tsx|ts-node) (?:[ \t]+-\S+)* [ \t]+ ["']? )?
+                (?: \.{1,2}/ | (?:scripts|script|bin|tools|\.github|\.claude|\.gemini|src)/ | (?:\$\{?|\$env:|%)(?:CLAUDE|GEMINI|CURSOR|QWEN)_PROJECT_DIR[}%]? )
+                [\w./-]* \.(?:sh|bash|zsh|[cm]?js|[cm]?ts|py|rb|pl|ps1|php)\b
+            # --- load-time shell danger command (end) ---
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+        - "ASI04 - Agentic Supply Chain Vulnerabilities"
+      mitre-atlas:
+        - "AML.T0081 - Modify AI Agent Configuration"
+        - "AML.T0050 - Command and Scripting Interpreter"
+      cwe:
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      technology: [gemini-cli, qwen-code]
+      references:
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/cli/src/services/prompt-processors/shellProcessor.ts
+        - https://google-gemini.github.io/gemini-cli/docs/cli/custom-commands.html
+        - https://github.com/QwenLM/qwen-code/blob/v0.26.1/packages/cli/src/services/prompt-processors/shellProcessor.ts
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md

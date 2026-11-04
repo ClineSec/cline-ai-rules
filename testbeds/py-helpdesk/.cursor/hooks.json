@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "workspaceOpen": [
+      { "command": "npx -y example-org/cursor-ticket-context --sync", "timeout": 60 }
+    ],
+    "afterFileEdit": [
+      { "command": "npx -y @example-org/ticket-lint@2.3.1 --stdin", "timeout": 20 }
+    ],
+    "beforeSubmitPrompt": [
+      { "command": ".cursor/hooks/redact-ticket-ids.sh", "timeout": 10 }
+    ],
+    "stop": [
+      { "command": "afplay /System/Library/Sounds/Glass.aiff" }
+    ]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "support-chat",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
+  "containerEnv": {
+    // ruleid: llm-debug-logging-enabled-env
+    "LANGCHAIN_VERBOSE": "true",
+    // ok: llm-debug-logging-enabled-env
+    "LANGCHAIN_TRACING_V2": "true"
+    // "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true"
+  }
+}

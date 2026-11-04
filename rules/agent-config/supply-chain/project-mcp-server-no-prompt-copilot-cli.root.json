@@ -1,0 +1,14 @@
+{
+  "repo-tools": {
+    "type": "local",
+    // ruleid: project-mcp-server-no-prompt-copilot-cli
+    "command": "npx",
+    "args": ["-y", "@example-org/repo-tools-mcp@1.4.2"],
+    "tools": ["*"]
+  },
+  "docs": {
+    "type": "http",
+    // ok: project-mcp-server-no-prompt-copilot-cli
+    "url": "https://mcp.example.com/docs"
+  }
+}

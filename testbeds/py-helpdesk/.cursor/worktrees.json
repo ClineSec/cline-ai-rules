@@ -1,0 +1,11 @@
+{
+  "setup-worktree-unix": "setup-worktree.sh",
+  "setup-worktree-windows": [
+    "uv sync --frozen",
+    "copy %ROOT_WORKTREE_PATH%\\.env .env"
+  ],
+  "setup-worktree": [
+    "uv sync --frozen",
+    "cp $ROOT_WORKTREE_PATH/.env .env"
+  ]
+}

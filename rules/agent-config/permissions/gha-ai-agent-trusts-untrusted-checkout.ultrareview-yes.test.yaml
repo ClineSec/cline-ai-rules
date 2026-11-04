@@ -1,0 +1,34 @@
+# Fixture for gha-ai-agent-trusts-untrusted-checkout: Claude Code on values other than 1/true for
+# CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK, in job and workflow env. The same workflow in
+# the gha-ai-agent-checkout-pr-head fixture shows gha-ai-agent-checkout-pr-head stays quiet on it.
+name: ultrareview-yes
+on:
+  pull_request_target:
+    types: [labeled]
+jobs:
+  env-yes:
+    runs-on: ubuntu-latest
+    env:
+      # ruleid: gha-ai-agent-trusts-untrusted-checkout
+      CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK: yes
+    steps:
+      - run: gh pr checkout ${{ github.event.pull_request.number }}
+      - run: claude ultrareview ${{ github.event.pull_request.number }}
+
+  env-on-quoted:
+    runs-on: ubuntu-latest
+    env:
+      # ruleid: gha-ai-agent-trusts-untrusted-checkout
+      CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK: "On"
+    steps:
+      - run: gh pr checkout ${{ github.event.pull_request.number }}
+      - run: claude ultrareview ${{ github.event.pull_request.number }}
+
+  env-no:
+    runs-on: ubuntu-latest
+    env:
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK: "no"
+    steps:
+      - run: gh pr checkout ${{ github.event.pull_request.number }}
+      - run: claude -p "Summarize the change in one paragraph"

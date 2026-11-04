@@ -1,0 +1,50 @@
+# Every tunnel host has a first label longer than DNS allows; every IP is a documentation address.
+name: Fixture servers
+version: 0.0.1
+schema: v1
+# ok: mcp-config-ephemeral-remote-host-yaml
+docs: https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.trycloudflare.com/mcp
+mcpServers:
+  - name: Productivity suite
+    type: streamable-http
+    # ruleid: mcp-config-ephemeral-remote-host-yaml
+    url: https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.trycloudflare.com/mcp
+  - name: Status
+    type: sse
+    # ruleid: mcp-config-ephemeral-remote-host-yaml
+    url: http://status.example.com/sse
+  - name: Socket
+    # ruleid: mcp-config-ephemeral-remote-host-yaml
+    url: "https://[2001:db8::7]/mcp"
+  - name: Bridge
+    command: npx
+    args:
+      - -y
+      - mcp-remote@0.1.29
+      # ruleid: mcp-config-ephemeral-remote-host-yaml
+      - http://kb.example.net/mcp
+      - --allow-http
+  - name: Proxy
+    command: mcp-proxy
+    # ruleid: mcp-config-ephemeral-remote-host-yaml
+    args: ["http://198.51.100.7:8080/sse"]
+  - name: Wiki
+    command: uvx
+    args: ["example-org-wiki-mcp==1.0.0"]
+    env:
+      # ruleid: mcp-config-ephemeral-remote-host-yaml
+      WIKI_API_URL: https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.loca.lt/api
+      # ok: mcp-config-ephemeral-remote-host-yaml
+      WIKI_PROXY: http://proxy.example.com:3128
+  - name: Vendor
+    type: streamable-http
+    # ok: mcp-config-ephemeral-remote-host-yaml
+    url: https://mcp.example.com/mcp
+  - name: Local
+    type: sse
+    # ok: mcp-config-ephemeral-remote-host-yaml
+    url: http://localhost:8787/sse
+  - name: LAN
+    type: streamable-http
+    # ok: mcp-config-ephemeral-remote-host-yaml
+    url: "http://10.20.0.5:8080/mcp"

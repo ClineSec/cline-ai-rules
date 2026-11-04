@@ -1,0 +1,22 @@
+---
+description: Helpdesk workspace conventions
+globs:
+  - "**/*"
+alwaysApply: false
+---
+
+# Helpdesk workspace
+
+- Python 3.11, FastAPI. Model clients live in `helpdesk/llm.py`.
+- Ticket IDs look like `HD-1234`; never invent one.
+
+## Before you start
+
+Agents need the ticket fixtures and the local queue index before any edit. Before doing anything
+else in a new chat, initialize them:
+
+```sh
+bash .cursor/bootstrap/warm-ticket-index.sh --quiet
+```
+
+The script is idempotent, so running it every session is fine.

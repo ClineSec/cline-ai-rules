@@ -1,0 +1,84 @@
+# Fixture for gha-ai-agent-open-to-non-writers.
+name: community-agent
+on:
+  issue_comment:
+    types: [created]
+  issues:
+    types: [opened]
+jobs:
+  agents:
+    runs-on: ubuntu-latest
+    steps:
+      # Tag mode (no prompt): the commenter's "@claude ..." is the instruction, with edits.
+      - uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # ruleid: gha-ai-agent-open-to-non-writers
+          allowed_non_write_users: "*"
+      # Without github_token the action ignores allowed_non_write_users.
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # ok: gha-ai-agent-open-to-non-writers
+          allowed_non_write_users: "*"
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # ruleid: gha-ai-agent-open-to-non-writers
+          allowed_bots: '*'
+          prompt: "Run the triage checklist in docs/triage.md for this issue."
+          claude_args: --allowedTools "Bash(gh:*)" "Read"
+      # Read-only agent mode: a Q&A bot open to everyone.
+      - uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # ok: gha-ai-agent-open-to-non-writers
+          allowed_non_write_users: "*"
+          prompt: "Answer questions about the codebase. Do not change anything."
+          claude_args: --allowedTools "Read" "Grep" "Bash(gh issue view:*)"
+      # A named list is a decision about specific people.
+      - uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # ok: gha-ai-agent-open-to-non-writers
+          allowed_non_write_users: "alice,bob"
+      - uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # ruleid: gha-ai-agent-open-to-non-writers
+          allowed_non_write_users: "alice, *"
+          claude_args: --permission-mode acceptEdits
+      # The prompt carries the comment: gha-ai-agent-untrusted-trigger reports the prompt line.
+      - uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # ok: gha-ai-agent-open-to-non-writers
+          allowed_non_write_users: "*"
+          prompt: "Do what this comment asks: ${{ github.event.comment.body }}"
+          claude_args: --allowedTools "Bash"
+      - uses: openai/codex-action@v1
+        with:
+          # ruleid: gha-ai-agent-open-to-non-writers
+          allow-users: "*"
+          prompt: "Reproduce the bug in issue #${{ github.event.issue.number }} and propose a fix."
+      - uses: openai/codex-action@v1
+        with:
+          # ok: gha-ai-agent-open-to-non-writers
+          allow-users: "*"
+          permission-profile: ":read-only"
+          prompt: "Summarize issue #${{ github.event.issue.number }}."
+      - uses: openai/codex-action@v1
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        with:
+          # ok: gha-ai-agent-open-to-non-writers
+          allow-users: "*"
+          prompt: "Reproduce the bug described in $ISSUE_BODY."
+
+  members-only:
+    if: contains(fromJSON('["OWNER", "MEMBER"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # ok: gha-ai-agent-open-to-non-writers
+          allowed_non_write_users: "*"

@@ -1,0 +1,45 @@
+// Shared Zed settings for the agent panel.
+{
+  "tab_size": 2,
+  "context_servers": {
+    "repo-tools": {
+      // ruleid: project-mcp-server-no-prompt-zed
+      "command": "node",
+      "args": ["./dist/mcp/server.js"],
+      "env": {}
+    },
+    "legacy-tools": {
+      "source": "custom",
+      "command": {
+        // ruleid: project-mcp-server-no-prompt-zed
+        "path": "uvx",
+        "args": ["example-org-legacy-mcp==0.4.0"]
+      }
+    },
+    "paused": {
+      "enabled": false,
+      // ok: project-mcp-server-no-prompt-zed
+      "command": "node",
+      "args": ["./dist/mcp/paused.js"]
+    },
+    "docs": {
+      // ok: project-mcp-server-no-prompt-zed
+      "url": "https://mcp.example.com/docs"
+    },
+    "from-extension": {
+      "settings": { "workspace": "." }
+    }
+  },
+  "agent_servers": {
+    "custom-agent": {
+      // ok: project-mcp-server-no-prompt-zed
+      "command": "node",
+      "args": ["./scripts/acp-agent.mjs"]
+    }
+  },
+  "agent": {
+    "profiles": {
+      "review": { "context_servers": { "repo-tools": { "tools": { "read_file": true } } } }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "ReadFileTool",
+      "WebFetch(domain:status.example.com)",
+      "WebFetch(domain:railway.app)"
+    ]
+  }
+}

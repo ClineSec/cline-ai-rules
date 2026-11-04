@@ -1,0 +1,13 @@
+customModes:
+  - slug: windows-helper
+    name: Windows Helper
+    groups:
+      - read
+      - - edit
+        - fileRegex: \.ps1$
+      # ruleid: kilo-opencode-permission-allow-modes
+      - command
+  - slug: ask
+    groups:
+      # ok: kilo-opencode-permission-allow-modes
+      - edit

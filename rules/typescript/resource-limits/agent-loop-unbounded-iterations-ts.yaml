@@ -1,0 +1,151 @@
+rules:
+  - id: agent-loop-unbounded-iterations-ts
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      This agent loop has its step limit switched off or set so high that it no longer works as
+      one: an OpenAI Agents run with `maxTurns: null`, a turn, iteration, or step cap of 1,000
+      or more (or `Infinity`), a LangGraph `recursionLimit` of 100,000 or more, or an AI SDK
+      `stopWhen` that never counts steps (`isLoopFinished()`, or only `hasToolCall(...)`). The
+      loop then ends only when the model decides it is done, so a prompt injection in a tool
+      result, a tool that keeps failing, or agents handing work back and forth can keep it
+      calling the model and its tools until the process is killed, running up token cost and
+      repeating every tool's side effects. Keep a cap near the framework default (10 to 25
+      steps) and raise it only to what the task needs, such as 50 or 100; in the AI SDK, put
+      `isStepCount(n)` next to `hasToolCall(...)` in the `stopWhen` array. For long jobs, add
+      a time or spend limit as well (`timeout`, `maxBudgetUsd`).
+    pattern-either:
+      # 1. OpenAI Agents SDK (@openai/agents 0.21.0): maxTurns null means no limit (the
+      #    default is 10, used when maxTurns is undefined). Only in files that import it.
+      - patterns:
+          - pattern-not-regex: \A(?:(?![^\n]*?\bfrom[ \t]*+["']@openai/agents[\w/-]*["'])[^\n]*+\n)*+(?![^\n]*?\bfrom[ \t]*+["']@openai/agents[\w/-]*["'])[^\n]*+\z
+          - pattern: '{..., maxTurns: null, ...}'
+          - pattern: '{..., maxTurns: $V, ...}'
+          - focus-metavariable: $V
+      # 2. A turn or iteration cap of 1,000 or more, or Infinity. Defaults: OpenAI Agents
+      #    maxTurns 10, LangChain.js AgentExecutor maxIterations 15 (@langchain/classic
+      #    1.0.55, where null and undefined fall back to 15), AI SDK ToolLoopAgent 20 steps
+      #    and generateText/streamText 1 (ai 7.0.152), Mastra agents 5 (@mastra/core
+      #    1.79.0); Claude Agent SDK maxTurns and the
+      #    Anthropic toolRunner's max_iterations have no default cap. 1,000 is 40 to 200 times
+      #    those defaults; a modest raise (25 to 50 or 200) is left alone. Each key is checked
+      #    only in files that import a framework that reads it.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-not-regex: \A(?:(?![^\n]*?\bfrom[ \t]*+["'](?:@openai/agents[\w/-]*|@anthropic-ai/claude-agent-sdk)["'])[^\n]*+\n)*+(?![^\n]*?\bfrom[ \t]*+["'](?:@openai/agents[\w/-]*|@anthropic-ai/claude-agent-sdk)["'])[^\n]*+\z
+                  - pattern: '{..., maxTurns: $V, ...}'
+              - patterns:
+                  - pattern-not-regex: \A(?:(?![^\n]*?\bfrom[ \t]*+["'](?:langchain/agents|@langchain/classic(?:/agents)?)["'])[^\n]*+\n)*+(?![^\n]*?\bfrom[ \t]*+["'](?:langchain/agents|@langchain/classic(?:/agents)?)["'])[^\n]*+\z
+                  - pattern: '{..., maxIterations: $V, ...}'
+              - patterns:
+                  # AI SDK 4.x's maxSteps (replaced by stopWhen in 5.0), and Mastra's maxSteps in
+                  # agent.generate/stream options and an Agent's defaultOptions (or the
+                  # *Legacy defaults). Mastra (@mastra/core 1.79.0) stops at 5 steps when
+                  # maxSteps is unset or 0, and at maxSteps otherwise, so Infinity never stops.
+                  - pattern-not-regex: \A(?:(?![^\n]*?\bfrom[ \t]*+["'](?:ai|ai/react|@ai-sdk/[\w-]+|@mastra/core(?:/[\w/-]+)?)["'])[^\n]*+\n)*+(?![^\n]*?\bfrom[ \t]*+["'](?:ai|ai/react|@ai-sdk/[\w-]+|@mastra/core(?:/[\w/-]+)?)["'])[^\n]*+\z
+                  - pattern: '{..., maxSteps: $V, ...}'
+              - pattern: '$C.beta.messages.toolRunner({..., max_iterations: $V, ...}, ...)'
+              - patterns:
+                  - pattern-not-regex: \A(?:(?![^\n]*?\bfrom[ \t]*+["']ai["'])[^\n]*+\n)*+(?![^\n]*?\bfrom[ \t]*+["']ai["'])[^\n]*+\z
+                  - pattern-either:
+                      - pattern: stepCountIs($V)
+                      - pattern: isStepCount($V)
+                  - pattern-not-inside: '{..., timeout: $T, ...}'
+          # A spend cap or a timeout on the same options still bounds the run.
+          - pattern-not-regex: '\b(?:maxBudgetUsd|timeout)\s*:'
+          # Skip a value that starts with a parenthesized expression, such as
+          # `(await loadSettings()).maxTurns` or `(opts as RunOptions).maxTurns`: OpenGrep 1.30.2
+          # aborts the whole file ("Invalid_argument: String.sub") when the comparison below runs
+          # on one (NOT_PAREN_RECEIVER in scripts/gen_mcp_unpinned.py). Such a value reads the cap
+          # from somewhere else; it is never the literal cap itself.
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^(?!(?:\(\s*)*(?<p>\((?:[^()"'`]++|"(?:[^"\\]|\\.)*+"|'(?:[^'\\]|\\.)*+'|`(?:[^`\\]|\\.)*+`|(?&p))*+\))\s*+(?!=>|:|$|\)))
+          - metavariable-pattern:
+              metavariable: $V
+              pattern-either:
+                - pattern: 'Infinity'
+                - pattern: Number.POSITIVE_INFINITY
+                - pattern: Number.MAX_SAFE_INTEGER
+                - pattern: Number.MAX_VALUE
+                - patterns:
+                    - pattern: $N
+                    - metavariable-comparison:
+                        metavariable: $N
+                        comparison: $N >= 1000
+          # A config value with a large fallback (`cfg.maxTurns ?? 5000`) or a clamp
+          # (`Math.min(n, 5000)`) is left alone: the number found inside it isn't the value
+          # the loop runs with.
+          - metavariable-regex:
+              metavariable: $V
+              regex: (?s)^(?!.*(?:\?\?|\|\||\bMath\.min\s*\())
+          - focus-metavariable: $V
+      # 3. A LangGraph recursion limit of 100,000 or more, or Infinity. LangGraph.js defaults
+      #    to 25 (@langchain/langgraph 1.5.2) and LangGraph Python to 10,007; the LangChain
+      #    docs use 1,000 as an example, so only ten times the larger default is reported.
+      - patterns:
+          - pattern: '{..., recursionLimit: $V, ...}'
+          # The parenthesized-expression guard, as in 2.
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^(?!(?:\(\s*)*(?<p>\((?:[^()"'`]++|"(?:[^"\\]|\\.)*+"|'(?:[^'\\]|\\.)*+'|`(?:[^`\\]|\\.)*+`|(?&p))*+\))\s*+(?!=>|:|$|\)))
+          - metavariable-pattern:
+              metavariable: $V
+              pattern-either:
+                - pattern: 'Infinity'
+                - pattern: Number.POSITIVE_INFINITY
+                - pattern: Number.MAX_SAFE_INTEGER
+                - pattern: Number.MAX_VALUE
+                - patterns:
+                    - pattern: $N
+                    - metavariable-comparison:
+                        metavariable: $N
+                        comparison: $N >= 100000
+          - metavariable-regex:
+              metavariable: $V
+              regex: (?s)^(?!.*(?:\?\?|\|\||\bMath\.min\s*\())
+          - focus-metavariable: $V
+      # 4. An AI SDK stopWhen that never counts steps (ai 7.0.152): isLoopFinished() never
+      #    stops the loop, and hasToolCall(...) stops it only when the model calls that tool.
+      #    Setting stopWhen replaces the default step count, so with only these conditions the
+      #    loop has no cap. An array that also holds isStepCount(n) is bounded and left alone,
+      #    as are custom stop functions, which can't be judged.
+      - patterns:
+          - pattern-not-regex: \A(?:(?![^\n]*?\bfrom[ \t]*+["']ai["'])[^\n]*+\n)*+(?![^\n]*?\bfrom[ \t]*+["']ai["'])[^\n]*+\z
+          - pattern: '{..., stopWhen: $V, ...}'
+          - pattern-not-regex: '\btimeout\s*:'
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^(?:(?:isLoopFinished\(\s*\)|hasToolCall\([^()]*\))|\[\s*(?:(?:isLoopFinished\(\s*\)|hasToolCall\([^()]*\))\s*,?\s*)+\])$
+          - focus-metavariable: $V
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM06:2026 - Unbounded Consumption"
+        - "LLM10:2025 - Unbounded Consumption"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI08 - Cascading Failures"
+      owasp-aisvs:
+        - "v1.01-C9.1.2 - Execution Budgets, Loop Control, and Circuit Breakers"
+      mitre-atlas:
+        - "AML.T0034.002 - Cost Harvesting: Agentic Resource Consumption"
+      cwe:
+        - "CWE-770: Allocation of Resources Without Limits or Throttling"
+        - "CWE-834: Excessive Iteration"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [openai-agents, langchain, langgraph, vercel-ai-sdk, mastra, claude-agent-sdk, anthropic]
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM06_UnboundedConsumption.md
+        - https://github.com/openai/openai-agents-js/blob/v0.21.0/packages/agents-core/src/run.ts
+        - https://github.com/langchain-ai/langchainjs/blob/%40langchain/classic%401.0.55/libs/langchain-classic/src/agents/executor.ts
+        - https://github.com/langchain-ai/langgraphjs/blob/%40langchain/langgraph%401.5.2/libs/langgraph-core/src/pregel/utils/config.ts
+        - https://github.com/vercel/ai/blob/ai%407.0.152/packages/ai/src/generate-text/stop-condition.ts
+        - https://ai-sdk.dev/docs/agents/loop-control
+        - https://github.com/mastra-ai/mastra/blob/%40mastra/core%401.79.0/packages/core/src/llm/model/model.loop.ts
+        - https://github.com/OWASP/AISVS/blob/main/1.01/en/0x10-C09-Orchestration-and-Agentic-Action.md

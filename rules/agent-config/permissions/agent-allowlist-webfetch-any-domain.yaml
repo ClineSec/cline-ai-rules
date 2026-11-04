@@ -1,0 +1,141 @@
+rules:
+  - id: agent-allowlist-webfetch-any-domain
+    languages: [json]
+    severity: WARNING
+    message: >-
+      This agent permission lets the agent fetch any web address without asking: a bare
+      WebFetch allow rule, WebFetch(domain:*), or a domain wildcard that covers names anyone
+      can register (*.com, *example.com, *.vercel.app) in Claude Code; web_fetch in Gemini
+      CLI's tools.allowed, where web_fetch(...) approves every URL because Gemini ignores the
+      arguments; or Gemini's auto_edit approval mode, which approves web_fetch along with file
+      edits (Gemini CLI 0.65). A prompt injection in a file, issue, web page, or tool result
+      the agent reads can then have it read a secret (.env, a cloud credential, source code)
+      and send it out in the address of a request to a server the attacker runs, such as
+      https://attacker.example/?d=<secret>, with nobody asked. Allow only the hosts the agent
+      needs (WebFetch(domain:docs.example.com)) and let other fetches ask; in Gemini CLI, leave
+      web_fetch out of tools.allowed (or list it in tools.confirmationRequired) and keep the
+      default approval mode.
+    paths:
+      include:
+        # Claude Code permissions.allow (project, committed local, managed).
+        - ".claude/settings.json"
+        - ".claude/settings.local.json"
+        - "managed-settings.json"
+        # Gemini CLI tools.allowed (and the v1 allowedTools) and general.defaultApprovalMode,
+        # in the project file or the user's own file in a dotfiles repository.
+        - ".gemini/settings.json"
+    pattern-either:
+      # Claude Code: a bare WebFetch (or WebFetch()) rule matches every fetch, and a domain:
+      # wildcard matches every host it covers (Claude Code 2.1.310: domain:* matches all,
+      # *.x matches subdomains of x at any depth, and any other * stays within one label).
+      - patterns:
+          - pattern-inside: '"permissions": {...}'
+          - pattern: '"allow": [..., "$V", ...]'
+          - metavariable-regex:
+              metavariable: $V
+              regex: |-
+                (?x)
+                # --- web fetch any host (begin): build.py keeps this block identical in the
+                # agent-allowlist-webfetch-any-domain rules; edit every copy together. ---
+                (?(DEFINE)
+                  # A DNS label as written, and one with a * in it. In Claude Code and Cursor rules a *
+                  # other than a leading *. matches text within one label.
+                  (?<wflit> [A-Za-z0-9_-]++ )
+                  (?<wfwild> [A-Za-z0-9_-]*+ \* [A-Za-z0-9_*-]*+ )
+                  # Where a host pattern ends: a port, path, closing bracket, quote, separator, or the end.
+                  (?<wfend> (?= [:/)"'`\s,;\]}] | $ ) )
+                  # Top-level names that public DNS never answers (.local is mDNS; the private names of
+                  # scripts/gen_mcp_remote_host.py plus the RFC 2606 / 6761 reserved names), so a wildcard
+                  # under one can't reach an attacker's server.
+                  (?<wfpriv> (?i: local | localhost | internal | lan | home | corp | intranet | private
+                    | consul | proxy | lab | wg | monitor | hammernet | test | invalid | example | onion
+                    | arpa ) (?&wfend) )
+                  # Country-code second levels that anyone can register under (co.uk, com.au).
+                  (?<wfcc2> (?i: co | com | net | org | ne | or ) \. [A-Za-z]{2} )
+                  # Tunnels and free app and page hosts, where anyone can get a subdomain and read its
+                  # request logs (scripts/gen_mcp_remote_host.py's services plus free static page hosts).
+                  (?<wfshared> (?i: trycloudflare\.com | ngrok-free\.(?:app|dev|pizza) | ngrok\.(?:app|dev|io|pizza)
+                    | loca\.lt | localtunnel\.me | lhr\.life | lhr\.rocks | serveo\.net | pinggy(?:-free)?\.link
+                    | tunnelmole\.net | bore\.pub | loclx\.io | devtunnels\.ms | app\.github\.dev
+                    | oast\.(?:pro|live|site|online|fun|me) | oastify\.com | burpcollaborator\.net
+                    | onrender\.com | fly\.dev | herokuapp\.com | vercel\.app | netlify\.app | railway\.app
+                    | workers\.dev | deno\.dev | deno\.net | replit\.app | koyeb\.app | hf\.space | modal\.run
+                    | github\.io | gitlab\.io | pages\.dev | web\.app | firebaseapp\.com | glitch\.me | surge\.sh
+                    # Tailscale Funnel publishes any tailnet's node under ts.net.
+                    | ts\.net ) )
+                  # A host pattern that matches hosts anyone can own: every host (*, *.*), a wildcard in the
+                  # registrable label (*.com, *example.com, docs.*.com, *.co.uk), or any subdomain of a tunnel
+                  # or free hosting domain (*.trycloudflare.com, *.up.railway.app). A wildcard under a domain
+                  # someone owns (*.example.com, api-*.example.com, example.*) or a private name (*.local) is
+                  # scoped.
+                  (?<anyhost>
+                      (?= \.*+ \* ) [*.]++ (?&wfend)
+                    | (?: (?: (?&wflit) | (?&wfwild) ) \. )*? (?&wfwild) \. (?! (?&wfpriv) )
+                      (?: (?&wfcc2) | (?&wflit) ) \.?+ (?&wfend)
+                    | \* \. (?: (?&wflit) \. )*? (?&wfshared) \.?+ (?&wfend) )
+                )
+                # --- web fetch any host (end) ---
+                ^ \s*+ WebFetch (?: \( \s*+ \) | \( domain: (?&anyhost) \) )? \s*+ $
+          - focus-metavariable: $V
+          # Deny and ask rules come first and win over any allow (Claude Code checks deny, then
+          # ask, then allow), so a bare WebFetch or WebFetch(domain:*) there covers every fetch.
+          - pattern-not-inside:
+              patterns:
+                - pattern-either:
+                    - pattern: '"permissions": {..., "deny": [..., "$D", ...], ...}'
+                    - pattern: '"permissions": {..., "ask": [..., "$D", ...], ...}'
+                - metavariable-regex:
+                    metavariable: $D
+                    regex: ^\s*WebFetch(?:\(\s*\)|\(domain:\*\))?\s*$
+      # Gemini CLI: a web_fetch entry allows the tool, with or without arguments (Gemini CLI
+      # 0.65 policy/config.ts keeps arguments only for the shell tool). confirmationRequired
+      # outranks it, and exclude removes the tool.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: '"tools": {...}'
+                  - pattern: '"allowed": [..., "$V", ...]'
+              - pattern: '"allowedTools": [..., "$V", ...]'
+          - metavariable-regex:
+              metavariable: $V
+              regex: ^web_fetch(?:\(.*\))?$
+          - pattern-not-inside: '{..., "tools": {..., "confirmationRequired": [..., "web_fetch", ...], ...}, ...}'
+          - pattern-not-inside: '{..., "tools": {..., "exclude": [..., "web_fetch", ...], ...}, ...}'
+          - pattern-not-inside: '{..., "excludeTools": [..., "web_fetch", ...], ...}'
+          - focus-metavariable: $V
+      # Gemini CLI: auto_edit approves web_fetch for every URL (policies/write.toml), also in
+      # headless runs. A project file can set it; only yolo is ignored there.
+      - patterns:
+          - pattern-inside: '"general": {...}'
+          - pattern: '"defaultApprovalMode": "auto_edit"'
+          - pattern-not-inside: '{..., "tools": {..., "confirmationRequired": [..., "web_fetch", ...], ...}, ...}'
+          - pattern-not-inside: '{..., "tools": {..., "exclude": [..., "web_fetch", ...], ...}, ...}'
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0086 - Exfiltration via AI Agent Tool Invocation"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      # MEDIUM: the allow is certain, but some teams allow every fetch on machines with nothing
+      # to steal, and the fetch still needs a secret in reach to leak one.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code, gemini-cli]
+      references:
+        - https://code.claude.com/docs/en/permissions#webfetch
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/policy/config.ts
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/policy/policies/write.toml
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/cli/src/config/config.ts
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

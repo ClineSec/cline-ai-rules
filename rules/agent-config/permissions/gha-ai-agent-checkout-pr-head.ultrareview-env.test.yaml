@@ -1,0 +1,13 @@
+# Fixture for gha-ai-agent-checkout-pr-head: a workflow-level ultrareview trust switch belongs to
+# gha-ai-agent-trusts-untrusted-checkout.
+name: ultrareview-command
+on: issue_comment
+env:
+  CLAUDE_CODE_DISABLE_ULTRAREVIEW_TRUST_CHECK: "1"
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      # ok: gha-ai-agent-checkout-pr-head
+      - run: gh pr checkout ${{ github.event.issue.number }}
+      - run: claude ultrareview ${{ github.event.issue.number }}

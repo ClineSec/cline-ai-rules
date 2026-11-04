@@ -1,0 +1,217 @@
+rules:
+  - id: agent-hook-remote-exec
+    languages: [json]
+    severity: ERROR
+    message: >-
+      This agent hook or plugin monitor downloads code from the network and runs it every time
+      it fires (on session start, a prompt, or a tool call), with the developer's credentials and
+      no integrity check. Whoever controls that URL, its DNS, or the git repository it names, and
+      any worm that writes this line into the repo, runs code on every machine that opens the
+      project in the agent. The Shai-Hulud, Miasma, and keyv worms persisted through agent
+      config this way. Install the tool outside the hook at a pinned version with a verified
+      checksum, or vendor the script into the repo and review it like other code that runs on
+      checkout.
+    paths:
+      include:
+        - ".claude/settings.json"
+        - ".claude/settings.local.json"
+        - ".gemini/settings.json"
+        - ".cursor/hooks.json"
+        # Devin Desktop (formerly Windsurf) Cascade hooks; .windsurf/hooks.json is the legacy
+        # path, read when .devin/hooks.json is absent or empty.
+        - ".devin/hooks.json"
+        - ".windsurf/hooks.json"
+        # Devin CLI: hooks.v1.json is the hooks object itself; config.json has a "hooks" key.
+        - ".devin/hooks.v1.json"
+        - ".devin/config.json"
+        - ".devin/config.local.json"
+        # GitHub Copilot CLI (and Copilot cloud agent): repository hook files and inline hooks.
+        - ".github/hooks/*.json"
+        - ".github/copilot/settings.json"
+        - ".github/copilot/settings.local.json"
+        # Kiro: workspace hook files and hooks in workspace agent profiles.
+        - ".kiro/hooks/*.json"
+        - ".kiro/agents/*.json"
+        # Claude Code plugins and Gemini CLI extensions ship hooks here. plugin.json can also
+        # name other hook files; in public plugins they sit under hooks/ or .claude-plugin/.
+        - "hooks/*.json"
+        - ".claude-plugin/hooks.json"
+        # Claude Code plugins: inline hooks and monitors in the manifest or a marketplace
+        # entry, and monitor commands, which start with every interactive session.
+        - ".claude-plugin/plugin.json"
+        - ".claude-plugin/marketplace.json"
+        - "monitors/monitors.json"
+        # GitHub Copilot CLI plugins: hooks.json next to plugin.json at the plugin root. This
+        # also covers the other clients' hooks.json files listed above.
+        - "hooks.json"
+      exclude:
+        # Codex runs a hook only after the user trusts it, pinned by its hash (rust-v0.164.0
+        # hooks/src/engine/discovery.rs).
+        - ".codex/hooks.json"
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: '"hooks": {...}'
+                      # plugin.json "hooks" can be an array of hook file paths and inline hooks.
+                      - pattern-inside: '"hooks": [...]'
+                  - pattern-either:
+                      # Shell form: the command string fetches and runs code.
+                      - pattern: '"command": "$CMD"'
+                      # Devin Desktop / Windsurf and Copilot CLI: per-shell commands of the same
+                      # hook.
+                      - pattern: '"powershell": "$CMD"'
+                      - pattern: '"bash": "$CMD"'
+                      # Kiro: a Stop hook's confirmCommand runs before its prompt is shown.
+                      - pattern: '"confirmCommand": "$CMD"'
+                      # Exec form (Claude Code): a shell given the command as an argument,
+                      # "command": "bash", "args": ["-c", "curl ... | sh"].
+                      - patterns:
+                          - pattern-inside: '{..., "args": [...], ...}'
+                          - pattern-inside: '{..., "command": "$SHELL", ...}'
+                          - metavariable-regex:
+                              metavariable: $SHELL
+                              regex: |-
+                                (?x) ^(?:
+                                # --- exec-form shells (begin): build.py keeps this block identical
+                                # in agent-frontmatter-command-remote-exec; edit both together. ---
+                                (?:ba|z|da|k)?sh | pwsh | powershell
+                                # --- exec-form shells (end) ---
+                                )(?:\.exe)?$
+                          - pattern: '"$CMD"'
+              # Plugin monitor: {"name", "command", "description"} in monitors/monitors.json or
+              # inline in a manifest. Gemini CLI hooks share the shape and are matched above.
+              - patterns:
+                  - pattern: '{..., "name": $N, "command": "$CMD", "description": $D, ...}'
+                  - pattern-not-inside: '"hooks": {...}'
+                  - pattern-not-inside: '"hooks": [...]'
+                  - focus-metavariable: $CMD
+          - metavariable-regex:
+              metavariable: $CMD
+              # Verbose mode: whitespace is ignored and # starts a comment, so literal spaces
+              # are \s and a literal # is \#. Matched text keeps JSON escapes (\" for a quote).
+              regex: |-
+                (?ix)
+                # --- remote download-and-run test (begin): build.py keeps this block identical in
+                # agent-settings-command-remote-exec; edit both together. ---
+                # (?&at): a command position, so text inside an echo string doesn't count: the
+                # start, after ; & | ( or a backtick, a quoted -c / -Command argument, or a prefix
+                # such as sudo or env VAR=1.
+                (?(DEFINE) (?<at> ^\s*\\?["']? | [;&|(`]\s* | \s-\w*c\s+\\?["'] | \s-command\s+\\?["']
+                  | \bsudo(?:\s+-\S+)*\s+ | \b(?:env|exec|nohup|time)\s+(?:\w+=\S*\s+)* )
+                  # (?&w): one piece of a command, so ; & | inside quotes or after a backslash don't
+                  # end it (curl "https://example.com/i.sh?a=1&b=2" | sh). A quoted string may keep
+                  # its JSON escapes (\"...\"). An unquoted & still ends the command: the shell runs
+                  # the download in the background and pipes nothing into the shell after it.
+                  (?<w> (?> \\" (?:[^"\\]|\\[^"])*+ \\" | " (?:[^"\\]|\\.)*+ " | '[^']*+' | \\{1,2}[;&|]
+                    | [^;&|"'\\\s]++ | [^;&|] ) ) )
+                # Download piped into a shell or interpreter that reads its program from stdin,
+                # possibly through filters (curl ... | base64 -d | sh). An interpreter given
+                # -c, -e, -m, or a script reads stdin as data (curl ... | python3 -m json.tool).
+                  .*? (?&at) (?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)(?:\.exe)? \b (?&w)*+
+                  (?: \|(?!\|) (?&w)*+ )*?
+                  (?<!\|) \|(?!\|) \s* (?:sudo (?:\s+-\S+)* \s+)? (?:env (?:\s+-\S+)* (?:\s+\w+=\S*)* \s+)?
+                  (?: (?:ba|z|da|k)?sh (?:\s+-[abd-z]+)* (?:\s+(?:-s|--?)(?:\s.*)?)?
+                    | (?:python[0-9.]*|node|perl|ruby|php) (?:\s+-u)? (?:\s+-)?
+                    | iex | invoke-expression )
+                  \s* (?:$|[;&|)`<>]|\\?["']|\d>)
+                # Download substituted into a shell's or interpreter's program:
+                # bash -c "$(curl ...)", bash <(curl ...), eval "$(wget -qO- ...)", source <(...).
+                | .*? (?&at)
+                  (?: (?:ba|z|da|k)?sh (?:\s+-\S+)* | python[0-9.]* \s+ -\w*c | (?:node|perl|ruby) \s+ -\w*e
+                    | eval | source | \. )
+                  \s+ \\?["']? (?:\$\(|<\(|`) \s* (?:curl|wget)(?:\.exe)? \b
+                # PowerShell: iex (irm ...), iex ((New-Object Net.WebClient).DownloadString(...)).
+                | .*? (?&at) (?:iex|invoke-expression) \b .*?
+                  (?:\b(?:iwr|irm|invoke-webrequest|invoke-restmethod|curl|wget)\b|\.downloadstring\b)
+                | .*? \.downloadstring \s* \( .*? \| \s* (?:iex|invoke-expression) \b
+                # A package runner given a URL, a git URL, or a GitHub repo (npm reads a bare
+                # user/repo with one slash as GitHub). A spec pinned to a commit SHA is left out.
+                | .*? (?&at) (?:npx|bunx|pnpm\s+dlx|yarn\s+dlx|npm\s+exec)
+                  (?:\s+-(?!-package=)\S+)* \s+ (?:--package=)? \\?["']?
+                  (?! \S*? [\#@] [0-9a-f]{7,40} (?![\w.-]) )
+                  (?: (?:https?|git(?:\+\w+)?)://\S+ | git@\S+ | (?:github|gitlab|bitbucket): \S+
+                    | [a-z0-9][\w.-]*/[\w.-]+ (?:\#\S*)? (?=\s|$|\\?["']) )
+                # uvx and pipx run take the source from --from / --spec or as the first argument;
+                # later URLs are arguments to the tool (uvx ruff check --config https://...).
+                | .*? (?&at) (?:uvx|uv\s+tool\s+run|pipx\s+run)
+                  (?: (?&w)*? \s--(?:from|spec)[\s=] | (?:\s+-\S+)* \s ) \s* \\?["']?
+                  (?! \S*? @ [0-9a-f]{7,40} (?![\w.-]) )
+                  (?:git\+\w+://|https?://)
+                # Download to a file, then run or chmod that same file, with no checksum or
+                # signature check anywhere in the command.
+                | (?! .* (?:sha(?:1|256|512)?sum|shasum|get-filehash|gpg\s+--verify|cosign\s+verify|minisign) )
+                  .*? (?&at) (?:curl|wget|iwr|invoke-webrequest)(?:\.exe)? \b (?&w)*? \s
+                  (?:-\w*o|--output(?:-document)?|-outfile) [\s=] \s* \\?["']? (?<file>[^\s"'\\;&|]+)
+                  .*? (?:&&|;) \s*
+                  (?: chmod \s+ \S+ \s+
+                    | (?:sudo\s+)? (?:(?:ba|z|da|k)?sh|python[0-9.]*|node|perl|ruby|pwsh|powershell) (?:\s+-\S+)* \s+
+                    | (?:sudo\s+|&\s*)? )
+                  \\?["']? (?:\.[\\/])? \k<file> (?=\s|$|[;&|)]|\\?["'])
+                # --- remote download-and-run test (end) ---
+      # Exec form: a package runner given a remote spec as an argument.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: '"hooks": {...}'
+              # plugin.json "hooks" can be an array of hook file paths and inline hook objects.
+              - pattern-inside: '"hooks": [...]'
+          - pattern-inside: '{..., "args": [...], ...}'
+          - pattern-inside: '{..., "command": "$RUNNER", ...}'
+          - metavariable-regex:
+              metavariable: $RUNNER
+              regex: |-
+                (?x) ^(?:
+                # --- exec-form package runners (begin): build.py keeps this block identical in
+                # agent-frontmatter-command-remote-exec; edit both together. ---
+                npx | bunx | uvx | pipx
+                # --- exec-form package runners (end) ---
+                )$
+          - pattern: '"$ARG"'
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: |-
+                (?x)
+                # --- exec-form remote package spec (begin): build.py keeps this block identical in
+                # agent-frontmatter-command-remote-exec; edit both together. ---
+                # Only package-shaped arguments: a git URL, a hosted-git spec, a tarball or script
+                # URL, or a repository on a git host. Other URLs are file arguments to the tool. A
+                # spec pinned to a commit SHA is left out. (# inside [...] is literal.)
+                ^(?!.*[#@][0-9a-f]{7,40}$)
+                (?: git(?:\+\w+)?:// | git@ | (?:github|gitlab|bitbucket):
+                  | https?://\S+\.(?:tgz|tar\.gz|tar|git|py)(?:\#\S*)?$
+                  | https?://(?:www\.)?(?:github\.com|gitlab\.com|bitbucket\.org)/[\w.-]+/[\w.-]+/?(?:\#\S*)?$ )
+                # --- exec-form remote package spec (end) ---
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+        - "ASI04 - Agentic Supply Chain Vulnerabilities"
+      mitre-atlas:
+        - "AML.T0081 - Modify AI Agent Configuration"
+        - "AML.T0050 - Command and Scripting Interpreter"
+      cwe:
+        - "CWE-494: Download of Code Without Integrity Check"
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code, gemini-cli, cursor, windsurf, copilot-cli, kiro, kiro-cli]
+      references:
+        - https://code.claude.com/docs/en/hooks
+        - https://geminicli.com/docs/hooks/
+        - https://cursor.com/docs/agent/hooks
+        - https://docs.devin.ai/desktop/cascade/hooks
+        - https://docs.devin.ai/cli/extensibility/hooks/overview
+        - https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-hooks-reference
+        - https://kiro.dev/docs/hooks/
+        - https://docs.npmjs.com/cli/v11/using-npm/package-spec
+        - https://docs.astral.sh/uv/guides/tools/
+        - https://www.sonarsource.com/blog/mini-shai-hulud-targets-ai-coding-agents/
+        - https://www.stepsecurity.io/blog/miasma-worm-hits-microsoft-again-azure-functions-action-and-72-other-repositories-disabled-after-supply-chain-attack-targeting-ai-coding-agents
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md

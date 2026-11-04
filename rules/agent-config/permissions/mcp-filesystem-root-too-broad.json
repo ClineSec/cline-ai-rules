@@ -1,0 +1,233 @@
+{
+  // ok: mcp-filesystem-root-too-broad
+  "$comment": "Point the filesystem server at / only for a throwaway VM",
+  "mcpServers": {
+    "home": {
+      "command": "npx",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "~"]
+    },
+    "disk": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem@2.0.0",
+        // ok: mcp-filesystem-root-too-broad
+        "/Users/fixture-user/src/fixture-app",
+        // ruleid: mcp-filesystem-root-too-broad
+        "/"
+      ]
+    },
+    "literal-home": {
+      "command": "npx",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "/Users/fixture-user"]
+    },
+    "linux-home-slash": {
+      "command": "/usr/local/bin/npx",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["--yes", "@modelcontextprotocol/server-filesystem@2.0.0", "/home/fixture-user/"]
+    },
+    "every-home": {
+      "command": "npx",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "/Users"]
+    },
+    "claude-code-variable": {
+      "command": "npx",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${HOME}"]
+    },
+    "claude-code-default": {
+      "command": "npx",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${HOME:-/home/fixture-user}"]
+    },
+    "claude-code-user": {
+      "command": "npx",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "/home/${USER}"]
+    },
+    "unexpanded-bare-variable": {
+      "command": "npx",
+      // ok: mcp-filesystem-root-too-broad
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "$HOME/", "/home/$USER"]
+    },
+    "windows-drive": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem@2.0.0",
+        // ruleid: mcp-filesystem-root-too-broad
+        "C:\\"
+      ]
+    },
+    "windows-bare-drive": {
+      "command": "npx.cmd",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "D:"]
+    },
+    "windows-home": {
+      "command": "npx",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "C:/Users/fixture-user"]
+    },
+    "windows-home-backslashes": {
+      "command": "npx",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "C:\\Users\\Fixture User\\"]
+    },
+    "windows-variable": {
+      "command": "cmd",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["/c", "npx", "-y", "@modelcontextprotocol/server-filesystem@2.0.0", "%USERPROFILE%"]
+    },
+    "wsl-drive": {
+      "command": "npx",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "/mnt/c"]
+    },
+    "local-build": {
+      "command": "node",
+      "args": [
+        "/opt/mcp/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
+        // ruleid: mcp-filesystem-root-too-broad
+        "/root"
+      ]
+    },
+    "deno": {
+      "command": "deno",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["run", "-A", "npm:@modelcontextprotocol/server-filesystem@2.0.0", "~/"]
+    },
+    "global-bin": {
+      "command": "mcp-server-filesystem",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["/"]
+    },
+    "go-server": {
+      "command": "/Users/fixture-user/go/bin/mcp-filesystem-server",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["/Users/fixture-user/src", "/home"]
+    },
+    "rust-server": {
+      "command": "rust-mcp-filesystem",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["--allow-write", "${USERPROFILE}"]
+    },
+    "vscode-syntax": {
+      "command": "rust-mcp-filesystem",
+      // ok: mcp-filesystem-root-too-broad
+      "args": ["--allow-write", "${env:USERPROFILE}", "${userHome}"]
+    },
+    "docker-mount": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        // ruleid: mcp-filesystem-root-too-broad
+        "--mount", "type=bind,src=/,dst=/projects/host",
+        "mcp/filesystem:1.0.2",
+        "/projects"
+      ]
+    },
+    "docker-mount-source-last": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        // ruleid: mcp-filesystem-root-too-broad
+        "--mount=type=bind,readonly,dst=/projects/home,source=/Users/fixture-user",
+        "mcp/filesystem:1.0.2",
+        "/projects"
+      ]
+    },
+    "docker-volume": {
+      "command": "docker",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["run", "-i", "--rm", "-v", "${HOME}:/projects/home:ro", "mcp/filesystem:1.0.2", "/projects"]
+    },
+    "docker-go-image": {
+      "command": "podman",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["run", "-i", "--rm", "--volume=/home/fixture-user:/data", "ghcr.io/mark3labs/mcp-filesystem-server:v0.11.1", "/data"]
+    },
+    "docker-tilde": {
+      "command": "docker",
+      // ok: mcp-filesystem-root-too-broad
+      "args": ["run", "-i", "--rm", "-v", "~:/projects/home", "mcp/filesystem:1.0.2", "/projects"]
+    },
+    "shell-line": {
+      "command": "bash",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["-lc", "cd /tmp && npx -y @modelcontextprotocol/server-filesystem@2.0.0 ~/src/fixture-app ~"]
+    },
+    "shell-docker": {
+      "command": "sh",
+      // ruleid: mcp-filesystem-root-too-broad
+      "args": ["-c", "exec docker run -i --rm -v \"$HOME:/projects\" mcp/filesystem:1.0.2 /projects"]
+    },
+    "project-folder": {
+      "command": "npx",
+      // ok: mcp-filesystem-root-too-broad
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "~/projects/fixture-app"]
+    },
+    "workspace-variable": {
+      "command": "npx",
+      // ok: mcp-filesystem-root-too-broad
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${workspaceFolder}", ".", "/tmp/scratch"]
+    },
+    "desktop": {
+      "command": "npx",
+      // ok: mcp-filesystem-root-too-broad
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "/Users/fixture-user/Desktop", "/Users/Shared", "C:\\Users\\Public"]
+    },
+    "commented-out-root": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem@2.0.0",
+        // ok: mcp-filesystem-root-too-broad
+        // "/",
+        "./docs"
+      ]
+    },
+    "other-server": {
+      "command": "npx",
+      // ok: mcp-filesystem-root-too-broad
+      "args": ["-y", "@example-org/notes-mcp@1.4.0", "/"]
+    },
+    "container-root": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        // ok: mcp-filesystem-root-too-broad
+        "--mount", "type=bind,src=${workspaceFolder},dst=/projects/workspace",
+        "-v", "/var/run/docker.sock:/var/run/docker.sock",
+        "mcp/filesystem:1.0.2",
+        // ok: mcp-filesystem-root-too-broad
+        "/"
+      ]
+    },
+    "other-image": {
+      "command": "docker",
+      // ok: mcp-filesystem-root-too-broad
+      "args": ["run", "-i", "--rm", "-v", "/:/host:ro", "example-org/disk-report:2.1.0"]
+    },
+    "shell-project": {
+      "command": "bash",
+      // ok: mcp-filesystem-root-too-broad
+      "args": ["-c", "npx -y @modelcontextprotocol/server-filesystem@2.0.0 ~/src/fixture-app && echo / done"]
+    },
+    "shell-docker-project": {
+      "command": "bash",
+      // ok: mcp-filesystem-root-too-broad
+      "args": ["-lc", "exec docker run --rm -i --mount type=bind,src=\"$PWD\",dst=/projects/workspace,ro mcp/filesystem:1.0.2 /projects/workspace"]
+    },
+    "look-alike-package": {
+      "command": "npx",
+      // ok: mcp-filesystem-root-too-broad
+      "args": ["-y", "@example-org/mcp-server-filesystem@0.1.0", "/"]
+    }
+  }
+}

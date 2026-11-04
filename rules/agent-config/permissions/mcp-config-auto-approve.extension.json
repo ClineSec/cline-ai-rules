@@ -1,0 +1,13 @@
+{
+  "name": "helpdesk-tools",
+  "version": "1.2.0",
+  "mcpServers": {
+    "tickets": {
+      "command": "node",
+      "args": ["${extensionPath}/dist/server.js"],
+      // ok: mcp-config-auto-approve
+      "trust": true
+    }
+  },
+  "contextFileName": "GEMINI.md"
+}

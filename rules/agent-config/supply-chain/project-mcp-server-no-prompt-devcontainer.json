@@ -1,0 +1,36 @@
+{
+  "name": "api",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
+  // ok: project-mcp-server-no-prompt-devcontainer
+  "postCreateCommand": "npm ci",
+  "customizations": {
+    "vscode": {
+      "extensions": ["dbaeumer.vscode-eslint"],
+      "settings": {
+        "mcp": {
+          "servers": {
+            "old-tools": {
+              // ok: project-mcp-server-no-prompt-devcontainer
+              "command": "node"
+            }
+          }
+        }
+      },
+      "mcp": {
+        "servers": {
+          "repo-tools": {
+            "type": "stdio",
+            // ruleid: project-mcp-server-no-prompt-devcontainer
+            "command": "npx",
+            "args": ["-y", "@example-org/repo-tools-mcp@1.4.2"]
+          },
+          "docs": {
+            "type": "http",
+            // ok: project-mcp-server-no-prompt-devcontainer
+            "url": "https://mcp.example.com/docs"
+          }
+        }
+      }
+    }
+  }
+}

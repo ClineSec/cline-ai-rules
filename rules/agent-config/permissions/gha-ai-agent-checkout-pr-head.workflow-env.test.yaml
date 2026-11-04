@@ -1,0 +1,13 @@
+# Fixture for gha-ai-agent-checkout-pr-head: a workflow-level trust switch belongs to
+# gha-ai-agent-trusts-untrusted-checkout.
+name: pr-docs
+on: issue_comment
+env:
+  GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS: "true"
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      # ok: gha-ai-agent-checkout-pr-head
+      - run: gh pr checkout ${{ github.event.issue.number }}
+      - run: copilot -p "Update the docs" --allow-tool 'write'

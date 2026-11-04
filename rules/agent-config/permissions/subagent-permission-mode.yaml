@@ -1,0 +1,71 @@
+rules:
+  - id: subagent-permission-mode
+    # Regex: the front matter of a Claude Code subagent file.
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This project subagent sets its own permission mode, looser than the session it runs
+      under. When the person running Claude Code is in Manual (`default`) or `dontAsk` mode,
+      which is also how `claude -p` and Agent SDK runs start when no mode is set, Claude Code
+      runs this subagent in the mode the file names: `acceptEdits` approves file edits and
+      `rm`, `mv`, `cp`, and `sed` inside the project without asking, and `auto` lets a
+      classifier approve shell commands and network requests in place of a person.
+      `bypassPermissions` is ignored from Claude Code v2.1.267 on, but earlier versions ran
+      the subagent with every check off. Project settings can't start a session in
+      `auto` or `bypassPermissions`; a committed agent file reaches the same modes for
+      everything Claude delegates to it, including delegations it makes on its own. A prompt
+      injection in a file, issue, or tool result the subagent reads can then change code or
+      run commands that the developer's own mode would have stopped. Leave `permissionMode`
+      unset so the subagent inherits the developer's mode, or use `plan` or `dontAsk` with an
+      explicit `tools` list; grant specific commands with `permissions.allow` rules
+      (`Bash(npm test)`) instead of a whole mode.
+    # Claude Code docs (sub-agents "Permission modes", permission-modes) for v2.1.310, read
+    # 2026-10-25: the main conversation's mode wins when it is acceptEdits, auto, or
+    # bypassPermissions, and plan holds whatever the file says; under default or dontAsk the
+    # file's mode applies, except bypassPermissions (v2.1.267+) and auto when auto mode is
+    # unavailable. dontAsk, plan, default, and its alias manual are as strict as or stricter
+    # than Manual mode, so they stay quiet. Workspace trust gates a subagent's hooks and inline
+    # MCP servers, not its permissionMode (the permissions page's "What runs before you trust
+    # a folder" table). Plugin subagents ignore permissionMode, so a plugin's agents/ folder is
+    # left out. Qwen Code agent files have their own rule (-qwen), and Agent SDK
+    # AgentDefinitions theirs (agent-sdk-subagent-permission-mode).
+    paths:
+      include:
+        - ".claude/agents/**"
+    patterns:
+      # The frontmatter: from a leading --- line to the next --- line.
+      - pattern-regex: \A(?:\x{FEFF})?---[ \t]*\r?\n(?s:.*?)\r?\n---[ \t]*(?:\r?\n|\z)
+      # A top-level permissionMode key with a mode that loosens Manual or dontAsk, plain or
+      # quoted, with an optional trailing comment.
+      - pattern-regex: (?m)^permissionMode[ \t]*:[ \t]*(?:acceptEdits|auto|bypassPermissions|"(?:acceptEdits|auto|bypassPermissions)"|'(?:acceptEdits|auto|bypassPermissions)')[ \t]*(?:\#[^\r\n]*)?(?=\r?$)
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI03 - Identity and Privilege Abuse"
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-269: Improper Privilege Management"
+      # The mode certainly applies under a Manual or dontAsk session; whether a looser mode for
+      # this one subagent is a problem depends on what it reads and can reach. On 2026-10-25
+      # GitHub code search counted about 2,100 public .claude/agents files with
+      # permissionMode acceptEdits and 1,150 with bypassPermissions.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code]
+      references:
+        - https://code.claude.com/docs/en/sub-agents#permission-modes
+        - https://code.claude.com/docs/en/permission-modes
+        - https://code.claude.com/docs/en/permissions#what-runs-before-you-trust-a-folder
+        - https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

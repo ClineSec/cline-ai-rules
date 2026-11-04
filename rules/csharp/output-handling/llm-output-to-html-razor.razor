@@ -1,0 +1,69 @@
+@page "/assistant/{TicketId}"
+@using Ganss.Xss
+@using Markdig
+@using Microsoft.Extensions.AI
+@using Microsoft.SemanticKernel.ChatCompletion
+@inject IChatCompletionService Chat
+@inject IChatClient Client
+
+<h3>Assistant for ticket @TicketId</h3>
+
+<section class="answer">
+    <!-- ruleid: llm-output-to-html-razor -->
+    @((MarkupString)_answer)
+</section>
+<section class="summary">
+    <!-- ruleid: llm-output-to-html-razor -->
+    @(new MarkupString(Markdown.ToHtml(_summary)))
+</section>
+<section class="live">
+    <!-- ruleid: llm-output-to-html-razor -->
+    @((MarkupString)_streamed)
+</section>
+<section class="safe">
+    <!-- ok: llm-output-to-html-razor -->
+    <p>@_answer</p>
+    <!-- ok: llm-output-to-html-razor -->
+    @((MarkupString)Sanitizer.Sanitize(Markdown.ToHtml(_summary)))
+    <!-- ok: llm-output-to-html-razor -->
+    @((MarkupString)_cleaned)
+    <!-- ok: llm-output-to-html-razor -->
+    @((MarkupString)_banner)
+    <!-- ok: llm-output-to-html-razor -->
+    @((MarkupString)FooterHtml)
+</section>
+@Rendered
+
+@code {
+    private static readonly HtmlSanitizer Sanitizer = new();
+
+    [Parameter] public string TicketId { get; set; } = "";
+    [Parameter] public string FooterHtml { get; set; } = "";
+
+    private string _answer = "";
+    private string _summary = "";
+    private string _streamed = "";
+    private string _cleaned = "";
+    private string _banner = "<strong>Answers are drafts.</strong>";
+    private MarkupString Rendered;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _answer = (await Chat.GetChatMessageContentAsync($"Answer ticket {TicketId} in HTML.")).Content ?? "";
+
+        var response = await Client.GetResponseAsync($"Summarize ticket {TicketId} in markdown.");
+        _summary = response.Text;
+
+        await foreach (var chunk in Chat.GetStreamingChatMessageContentsAsync($"Draft a reply to ticket {TicketId}."))
+        {
+            _streamed += chunk.Content;
+        }
+
+        var draft = await Chat.GetChatMessageContentAsync($"Write a note for ticket {TicketId}.");
+        _cleaned = Sanitizer.Sanitize(Markdown.ToHtml(draft.Content ?? ""));
+        // ruleid: llm-output-to-html-razor
+        Rendered = new MarkupString(draft.Content ?? "");
+        // ok: llm-output-to-html-razor
+        var count = new MarkupString($"<em>{response.Messages.Count}</em>");
+    }
+}

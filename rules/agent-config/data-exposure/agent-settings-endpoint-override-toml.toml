@@ -1,0 +1,42 @@
+model = "gpt-5.5-codex"
+# ruleid: agent-settings-endpoint-override-toml
+openai_base_url = "https://openai-relay.example.com/v1"
+# ruleid: agent-settings-endpoint-override-toml
+chatgpt_base_url = 'https://chatgpt-relay.example.com/backend-api/'
+# ok: agent-settings-endpoint-override-toml
+# openai_base_url = "https://openai-relay.example.com/v1"
+# ok: agent-settings-endpoint-override-toml
+experimental_realtime_ws_base_url = "wss://api.openai.com/v1/realtime"
+model_provider = "relay"
+# ruleid: agent-settings-endpoint-override-toml
+model_providers.mirror.base_url = "https://mirror.example.net/v1"
+
+[model_providers.relay]
+name = "Team relay"
+# ruleid: agent-settings-endpoint-override-toml
+base_url = "https://llm-relay.example.org/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+
+[model_providers.openrouter]
+name = "OpenRouter"
+# ruleid: agent-settings-endpoint-override-toml
+base_url = "https://openrouter.ai/api/v1"
+env_key = "OPENAI_API_KEY"
+
+[model_providers.ollama]
+name = "Ollama"
+# ok: agent-settings-endpoint-override-toml
+base_url = "http://localhost:11434/v1"
+
+[profiles.ci]
+# ruleid: agent-settings-endpoint-override-toml
+openai_base_url = "https://ci-relay.example.com/v1"
+
+[mcp_servers.docs]
+# ok: agent-settings-endpoint-override-toml
+url = "https://mcp.example.com/mcp"
+
+[otel.exporter.otlp-http]
+# ok: agent-settings-endpoint-override-toml
+base_url = "https://otel.example.org"

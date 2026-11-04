@@ -1,0 +1,61 @@
+rules:
+  - id: agent-loop-unbounded-iterations-crewai-yaml
+    languages: [yaml]
+    severity: WARNING
+    message: >-
+      This CrewAI agent definition sets `max_iter` to 1,000 or more, 40 times CrewAI's default
+      of 25, so the cap no longer limits the agent's reasoning loop. The agent then stops only
+      when the model decides it is done, so a prompt injection in a tool result or a tool that
+      keeps failing can keep it calling the model and its tools until the process is killed,
+      running up token cost and repeating every tool's side effects. Keep `max_iter` near the
+      default and raise it only to what the task needs, such as 50 or 100, and set
+      `max_execution_time` for long tasks.
+    paths:
+      include:
+        # CrewAI's project layout loads config/agents.yaml (crewai 1.15.30, crew_base.py).
+        - agents.yaml
+        - agents.yml
+    patterns:
+      # A CrewAI agent entry: a top-level name whose mapping has a role.
+      - pattern-inside: |
+          $AGENT:
+            ...
+            role: $ROLE
+            ...
+      - pattern: 'max_iter: $V'
+      # A time limit on the same agent still bounds it.
+      - pattern-not-inside: |
+          $AGENT:
+            ...
+            max_execution_time: $T
+            ...
+      - metavariable-comparison:
+          metavariable: $V
+          comparison: $V >= 1000
+      - focus-metavariable: $V
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM06:2026 - Unbounded Consumption"
+        - "LLM10:2025 - Unbounded Consumption"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI08 - Cascading Failures"
+      owasp-aisvs:
+        - "v1.01-C9.1.2 - Execution Budgets, Loop Control, and Circuit Breakers"
+      mitre-atlas:
+        - "AML.T0034.002 - Cost Harvesting: Agentic Resource Consumption"
+      cwe:
+        - "CWE-770: Allocation of Resources Without Limits or Throttling"
+        - "CWE-834: Excessive Iteration"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [crewai]
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM06_UnboundedConsumption.md
+        - https://github.com/crewAIInc/crewAI/blob/1.15.30/lib/crewai/src/crewai/agents/agent_builder/base_agent.py
+        - https://github.com/crewAIInc/crewAI/blob/1.15.30/lib/crewai/src/crewai/project/crew_base.py
+        - https://docs.crewai.com/en/concepts/agents

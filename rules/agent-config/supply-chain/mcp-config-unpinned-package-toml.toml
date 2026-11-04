@@ -1,0 +1,130 @@
+# Codex config.toml: servers as [mcp_servers.<name>] tables, inline tables, or top-level
+# mcp_servers.<name> = { ... }.
+model = "gpt-5.5"
+# ruleid: mcp-config-unpinned-package-toml
+mcp_servers.top-level = { command = "npx", args = ["-y", "@example-org/mcp-top"] }
+# ok: mcp-config-unpinned-package-toml
+notify = ["npx", "-y", "@example-org/notifier"]
+
+# Dotted keys at the top level.
+mcp_servers.dotted.command = "npx"
+# ruleid: mcp-config-unpinned-package-toml
+mcp_servers.dotted.args = ["-y", "@example-org/mcp-dotted"]
+# ok: mcp-config-unpinned-package-toml
+mcp_servers.dotted-pinned.args = ["-y", "@example-org/mcp-dotted@1.4.0"]
+mcp_servers.dotted-pinned.command = "npx"
+# Command and args belong to different servers: "split-a" runs npx with no args, "split-b"
+# runs node with a package-shaped argument.
+mcp_servers.split-a.command = "npx"
+mcp_servers.split-b.command = "node"
+# ok: mcp-config-unpinned-package-toml
+mcp_servers.split-b.args = ["@example-org/not-a-package"]
+mcp_servers.off.command = "uvx"
+# ok: mcp-config-unpinned-package-toml
+mcp_servers.off.args = ["example-org-mcp-off"]
+mcp_servers.off.enabled = false
+
+[mcp_servers.context]
+command = "npx"
+# ruleid: mcp-config-unpinned-package-toml
+args = ["-y", "@example-org/context-mcp"]
+env_vars = ["LOCAL_TOKEN"]
+
+[mcp_servers.context.env]
+MY_ENV_VAR = "MY_ENV_VALUE"
+
+[mcp_servers.args-first]
+args = [
+  "--yes",   # install without asking
+  # ruleid: mcp-config-unpinned-package-toml
+  "@example-org/mcp-search@next",
+]
+command = "npx"
+
+[mcp_servers."quoted.name"]
+command = 'uvx'
+# ruleid: mcp-config-unpinned-package-toml
+args = ['--python', '3.12', 'example-org-mcp-fetch>=1.2']
+
+[mcp_servers.from-git]
+command = "uvx"
+# ruleid: mcp-config-unpinned-package-toml
+args = ["--from", "git+https://github.com/example-org/mcp-tools@main", "example-mcp"]
+
+[mcp_servers.with-extra]
+command = "uv"
+# ruleid: mcp-config-unpinned-package-toml
+args = ["run", "--with", "example-org-fastmcp", "example-fastmcp", "run", "server.py"]
+
+[mcp_servers.kb]
+command = "docker"
+# ruleid: mcp-config-unpinned-package-toml
+args = ["run", "-i", "--rm", "--env-file", ".env", "ghcr.io/example-org/kb-mcp"]
+
+[mcp_servers.wrapped]
+command = "bash"
+# ruleid: mcp-config-unpinned-package-toml
+args = ["-lc", "source ~/.nvm/nvm.sh && npx -y @example-org/mcp-memory"]
+
+[mcp_servers.wrapped-literal]
+command = "sh"
+# ruleid: mcp-config-unpinned-package-toml
+args = ['-c', 'cd /srv/mcp; exec uvx example-org-mcp-fetch']
+
+[mcp_servers.windows]
+command = "C:\\Program Files\\nodejs\\npx.cmd"
+# ruleid: mcp-config-unpinned-package-toml
+args = ["-y", "@example-org/mcp-memory"]
+
+[mcp_servers.pinned]
+command = "npx"
+# ok: mcp-config-unpinned-package-toml
+args = ["-y", "@example-org/context-mcp@3.2.1"]
+
+[mcp_servers.pinned-uvx]
+command = "uvx"
+# ok: mcp-config-unpinned-package-toml
+args = ["--from", "example-org-mcp-tools[git]==0.6.2", "example-mcp-git"]
+
+[mcp_servers.switched-off]
+# Codex skips a server with enabled = false.
+command = "npx"
+# ok: mcp-config-unpinned-package-toml
+args = ["-y", "@example-org/mcp-legacy"]
+enabled = false
+
+[mcp_servers.docker-pinned]
+command = "docker"
+# ok: mcp-config-unpinned-package-toml
+args = ["run", "-i", "--rm", "ghcr.io/example-org/kb-mcp@sha256:9d2f0c4b7a1e3f5d6c8b9a0e1f2d3c4b5a6978e0f1d2c3b4a59687f0e1d2c3b4"]
+
+[mcp_servers.commented-out]
+command = "npx"
+# ok: mcp-config-unpinned-package-toml
+args = ["-y", "@example-org/context-mcp@3.2.1"] # was: "@example-org/context-mcp"
+
+[mcp_servers.remote]
+# ok: mcp-config-unpinned-package-toml
+url = "https://mcp.example.com/mcp"
+bearer_token_env_var = "MCP_TOKEN"
+
+[mcp_servers]
+# ruleid: mcp-config-unpinned-package-toml
+inline = { command = "uvx", args = ["example-org-mcp-time"] }
+# ok: mcp-config-unpinned-package-toml
+inline-pinned = { command = "uvx", args = ["example-org-mcp-time==2026.1.26"] }
+# ok: mcp-config-unpinned-package-toml
+inline-off = { command = "uvx", args = ["example-org-mcp-time"], enabled = false }
+# Dotted keys inside [mcp_servers], args before command.
+# ruleid: mcp-config-unpinned-package-toml
+in-table.args = ['example-org-mcp-in-table']
+in-table.command = 'uvx'
+
+[model_providers.internal]
+name = "Internal"
+base_url = "https://llm.example.com/v1"
+# ok: mcp-config-unpinned-package-toml
+auth = { command = "npx", args = ["-y", "@example-org/token-helper"] }
+
+[profiles.review]
+model = "gpt-5.5"

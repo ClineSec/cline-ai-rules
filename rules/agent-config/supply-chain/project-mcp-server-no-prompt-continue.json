@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "fixtures": {
+      // ruleid: project-mcp-server-no-prompt-continue
+      "command": "node",
+      "args": ["scripts/fixtures-mcp.mjs"]
+    },
+    "status": {
+      "type": "streamable-http",
+      // ok: project-mcp-server-no-prompt-continue
+      "url": "https://mcp.example.com/status"
+    }
+  }
+}

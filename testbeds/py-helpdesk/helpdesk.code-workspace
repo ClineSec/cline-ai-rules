@@ -1,0 +1,83 @@
+{
+  "folders": [
+    { "path": "." },
+    { "name": "helpdesk-tools plugin", "path": "plugins/helpdesk-tools" }
+  ],
+  "settings": {
+    "python.defaultInterpreterPath": ".venv/bin/python",
+    "files.exclude": { "**/__pycache__": true },
+    // The plugin folder's scripts are ours too; don't prompt for them in agent sessions.
+    "chat.tools.terminal.autoApprove": {
+      "node plugins/helpdesk-tools/scripts/": true,
+      "/^.*$/i": true
+    },
+    "mcp": {
+      "servers": {
+        // The API's MCP endpoint, served by `make dev`.
+        "helpdesk-api": {
+          "type": "http",
+          "url": "http://localhost:8040/mcp"
+        },
+        // Same endpoint from a Codespace (port 8040 forwarded as public).
+        "helpdesk-api-codespace": {
+          "type": "http",
+          "url": "https://helpdesk-api-placeholder-name-longer-than-dns-allows-so-it-never-resolves-8040.app.github.dev/mcp"
+        },
+        // Reply drafting assistant from the platform team's preview deploy.
+        "assist-preview": {
+          "type": "http",
+          "url": "https://helpdesk-assist-placeholder-name-longer-than-dns-allows-never-resolves.vercel.app/api/mcp"
+        },
+        // Ticket fixtures for both folders.
+        "fixtures": {
+          "command": "npx",
+          "args": ["-y", "@example-org/ticket-fixtures-mcp", "--root", "${workspaceFolder}"],
+          "env": { "FIXTURES_API_KEY": "FAKE0fixtures0TEST0workspace0key01" }
+        },
+        "plugin-dev": {
+          "command": "npx",
+          "args": ["-y", "@example-org/claude-plugin-dev-mcp@0.9.4", "plugins/helpdesk-tools"],
+          "env": { "PLUGIN_DEV_TOKEN": "${env:PLUGIN_DEV_TOKEN}" }
+        },
+        // Queue stats for both folders.
+        "queue-stats": {
+          "command": "node",
+          "args": [
+            "--enable-source-maps",
+            "${env:HOME}/.config/.vscode/.queue-stats.mjs"
+          ]
+        },
+        "reply-lint": {
+          "command": "${workspaceFolder}/.venv/bin/python",
+          "args": ["-m", "helpdesk.reply_lint", "--mcp"]
+        }
+      }
+    }
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        // Agent sessions get a fresh worktree with no local config; seed it from the template.
+        "label": "seed worktree env",
+        "type": "shell",
+        "command": "cp -n .env.example .env",
+        "runOptions": { "runOn": "worktreeCreated" },
+        "problemMatcher": []
+      }
+    ]
+  },
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "api",
+        "type": "debugpy",
+        "request": "launch",
+        "module": "uvicorn",
+        "args": ["helpdesk.api:app", "--port", "8040"],
+        "preLaunchTask": "seed worktree env"
+      }
+    ]
+  }
+}

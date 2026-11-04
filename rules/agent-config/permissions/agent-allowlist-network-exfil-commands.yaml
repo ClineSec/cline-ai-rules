@@ -1,0 +1,162 @@
+rules:
+  - id: agent-allowlist-network-exfil-commands
+    languages: [json]
+    severity: WARNING
+    message: >-
+      This agent permission lets the agent run a network tool (curl, wget, nc, ssh, scp,
+      nslookup, dig, ping, Invoke-WebRequest, ...) without asking. A prompt injection in a
+      file, issue, web page, or tool result the agent reads can then have it read a secret
+      (.env, a cloud credential, source code) and send it out in a request, an upload, or a
+      DNS lookup of a name like <secret>.attacker.example, with nobody asked. Narrowing the
+      rule to one URL doesn't help: wildcards and prefix matching still accept extra
+      arguments, such as a second URL or `-d @.env`. Remove the allow so these commands
+      prompt, and fetch documentation through the agent's web tool with a domain allowlist
+      (WebFetch(domain:docs.example.com)) or a sandbox network allowlist.
+    paths:
+      include:
+        # Claude Code permissions.allow (project, committed local, managed).
+        - ".claude/settings.json"
+        - ".claude/settings.local.json"
+        - "managed-settings.json"
+        # Cursor CLI permissions.allow: the project file, and the global file in dotfiles
+        # repos or when CURSOR_CONFIG_DIR points at a repo folder.
+        - ".cursor/cli.json"
+        - ".cursor/cli-config.json"
+        - "cursor/cli-config.json"
+        # Cursor IDE and CLI terminalAllowlist; a repository's file is concatenated with the
+        # user's own.
+        - ".cursor/permissions.json"
+        # Gemini CLI tools.allowed (and the v1 allowedTools).
+        - ".gemini/settings.json"
+    pattern-either:
+      # Claude Code Bash(...) / PowerShell(...), Cursor CLI Shell(...): permissions.allow.
+      - patterns:
+          - pattern-inside: '"permissions": {...}'
+          - pattern: '"allow": [..., "$V", ...]'
+          - metavariable-regex:
+              metavariable: $V
+              regex: |-
+                (?x)
+                # --- network exfil programs (begin): build.py keeps this block identical in
+                # the agent-allowlist-network-exfil-commands rules; edit every copy together. ---
+                (?(DEFINE)
+                  # An optional directory, so /usr/bin/curl counts.
+                  (?<dir> (?: [^\s"'()\[\],:*]* [/\\]{1,2} )? )
+                  # Programs whose main use is sending or fetching data over the network: HTTP
+                  # clients, raw sockets, remote shells and file transfer, and DNS, ICMP, and
+                  # whois lookups (a looked-up name carries data to the name's DNS server).
+                  # General developer tools that can also reach the network (git, gh, npm,
+                  # aws, docker) are left out: approving them is common and is a different
+                  # question.
+                  (?<net> (?: curl | curlie | wget2? | https? | xhs? | aria2c | grpcurl | websocat | wscat
+                            | nc | ncat | netcat | socat | telnet
+                            | ssh | scp | sftp | rsync | ftp | lftp | tftp
+                            | nslookup | dig | host | drill | whois
+                            | ping6? | traceroute6? ) (?i:\.exe)?
+                          | (?i: invoke-webrequest | invoke-restmethod | iwr | irm | resolve-dnsname ) )
+                )
+                # --- network exfil programs (end) ---
+                ^ \s*+
+                (?:
+                    # Claude Code: a rule without * matches one exact command, so it needs a
+                    # wildcard (Bash(curl:*), Bash(curl *), Bash(curl https://example.com/*)).
+                    # A colon is the :* suffix only at the end; elsewhere it is literal, so
+                    # Bash(curl:*example.com*) matches no curl command.
+                    (?: Bash | PowerShell ) \( \s*+ (?&dir) (?&net) (?= [\s*)] | : \s*+ \* \s*+ \) ) [^)]*? \*
+                    # Cursor CLI: Shell(curl) approves every curl command; Shell(curl:args)
+                    # needs a glob in the arguments.
+                  | Shell \( \s*+ (?&dir) (?&net) \s*+ (?: \) | : [^)]*? [*?] )
+                )
+          - focus-metavariable: $V
+      # Gemini CLI: run_shell_command(curl) is a command prefix, so it approves every curl
+      # command (Gemini CLI 0.65 policy/config.ts). tools.allowed, and the v1 allowedTools.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: '"tools": {...}'
+                  - pattern: '"allowed": [..., "$V", ...]'
+              - pattern: '"allowedTools": [..., "$V", ...]'
+          - metavariable-regex:
+              metavariable: $V
+              regex: |-
+                (?x)
+                # --- network exfil programs (begin): build.py keeps this block identical in
+                # the agent-allowlist-network-exfil-commands rules; edit every copy together. ---
+                (?(DEFINE)
+                  # An optional directory, so /usr/bin/curl counts.
+                  (?<dir> (?: [^\s"'()\[\],:*]* [/\\]{1,2} )? )
+                  # Programs whose main use is sending or fetching data over the network: HTTP
+                  # clients, raw sockets, remote shells and file transfer, and DNS, ICMP, and
+                  # whois lookups (a looked-up name carries data to the name's DNS server).
+                  # General developer tools that can also reach the network (git, gh, npm,
+                  # aws, docker) are left out: approving them is common and is a different
+                  # question.
+                  (?<net> (?: curl | curlie | wget2? | https? | xhs? | aria2c | grpcurl | websocat | wscat
+                            | nc | ncat | netcat | socat | telnet
+                            | ssh | scp | sftp | rsync | ftp | lftp | tftp
+                            | nslookup | dig | host | drill | whois
+                            | ping6? | traceroute6? ) (?i:\.exe)?
+                          | (?i: invoke-webrequest | invoke-restmethod | iwr | irm | resolve-dnsname ) )
+                )
+                # --- network exfil programs (end) ---
+                ^ \s*+ (?: run_shell_command | ShellTool ) \( \s*+ (?&dir) (?&net) (?= [\s)] )
+          - focus-metavariable: $V
+      # Cursor terminalAllowlist: entries are command prefixes ("curl", "curl -s"), or
+      # command:args with a glob ("curl:*").
+      - patterns:
+          - pattern: '"terminalAllowlist": [..., "$V", ...]'
+          - metavariable-regex:
+              metavariable: $V
+              regex: |-
+                (?x)
+                # --- network exfil programs (begin): build.py keeps this block identical in
+                # the agent-allowlist-network-exfil-commands rules; edit every copy together. ---
+                (?(DEFINE)
+                  # An optional directory, so /usr/bin/curl counts.
+                  (?<dir> (?: [^\s"'()\[\],:*]* [/\\]{1,2} )? )
+                  # Programs whose main use is sending or fetching data over the network: HTTP
+                  # clients, raw sockets, remote shells and file transfer, and DNS, ICMP, and
+                  # whois lookups (a looked-up name carries data to the name's DNS server).
+                  # General developer tools that can also reach the network (git, gh, npm,
+                  # aws, docker) are left out: approving them is common and is a different
+                  # question.
+                  (?<net> (?: curl | curlie | wget2? | https? | xhs? | aria2c | grpcurl | websocat | wscat
+                            | nc | ncat | netcat | socat | telnet
+                            | ssh | scp | sftp | rsync | ftp | lftp | tftp
+                            | nslookup | dig | host | drill | whois
+                            | ping6? | traceroute6? ) (?i:\.exe)?
+                          | (?i: invoke-webrequest | invoke-restmethod | iwr | irm | resolve-dnsname ) )
+                )
+                # --- network exfil programs (end) ---
+                ^ \s*+ (?&dir) (?&net) (?: \s | $ | : [^"]*? [*?] )
+          - focus-metavariable: $V
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0086 - Exfiltration via AI Agent Tool Invocation"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      # MEDIUM: the allow is certain, but some teams pre-approve curl for health checks on
+      # machines with nothing to steal; Cursor's project allowlists also depend on Run Mode.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code, cursor, gemini-cli]
+      references:
+        - https://code.claude.com/docs/en/permissions
+        - https://cursor.com/docs/cli/reference/permissions
+        - https://cursor.com/docs/reference/permissions
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/policy/config.ts
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/policy/utils.ts
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

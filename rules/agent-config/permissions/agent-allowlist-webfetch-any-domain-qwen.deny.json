@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      // ok: agent-allowlist-webfetch-any-domain-qwen
+      "WebFetch"
+    ],
+    // Deny outranks allow.
+    "deny": [
+      // ok: agent-allowlist-webfetch-any-domain-qwen
+      "web_fetch"
+    ]
+  }
+}

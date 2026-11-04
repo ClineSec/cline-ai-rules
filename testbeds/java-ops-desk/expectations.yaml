@@ -1,0 +1,96 @@
+# Every finding cline-ai-rules must produce in this testbed, and nothing else.
+# Anchors are substrings of the flagged line, so refactors only need the anchor updated.
+findings:
+  - rule: user-input-in-system-prompt-java
+    file: src/main/java/com/example/opsdesk/web/RunbookController.java
+    line_contains: '.param("team", team)'
+    note: >-
+      Gateway header X-Ops-Team fills a {team} parameter of the PromptSystemSpec template in a
+      ChatClient .system(s -> ...) lambda. The persona route next to it picks system text from
+      the PERSONAS table and keeps request fields in the user turn, and must stay quiet.
+  - rule: user-input-in-system-prompt-java
+    file: src/main/java/com/example/opsdesk/web/RunbookController.java
+    line_contains: '.param("tier", tier))'
+    note: X-Ops-Tier header (with a defaultValue) fills the {tier} parameter of the same template.
+  - rule: user-input-in-system-prompt-java
+    file: src/main/java/com/example/opsdesk/web/RunbookController.java
+    line_contains: ".system(scopeFor(body.service()))"
+    note: >-
+      @RequestBody record field passed through a private helper that builds the system text.
+  - rule: user-input-in-system-prompt-java
+    file: src/main/java/com/example/opsdesk/handoff/ShiftHandoffController.java
+    line_contains: 'return writer.write(request.team(), "matter-of-fact", request.shiftLog());'
+    note: >-
+      LangChain4j AI service declared in the same file: the request's team fills {{team}} in a
+      multi-line @SystemMessage({...}) by parameter name (no @V, as with -parameters). The
+      {{tone}} argument is a constant and the shift log is the @UserMessage, so only the first
+      argument is reported; review()'s LocalDate @V parameter is a converted type.
+  - rule: user-input-in-system-prompt-java
+    file: src/main/java/com/example/opsdesk/handoff/ShiftHandoffController.java
+    line_contains: '.systemMessageProvider(id -> "You are the shift assistant for the "'
+    note: >-
+      AiServices builder per request whose systemMessageProvider lambda splices the request's
+      site into the system message; the engineer goes to @MemoryId and the message to the user
+      turn.
+  - rule: llm-output-to-html-java
+    file: src/main/java/com/example/opsdesk/web/RunbookController.java
+    line_contains: '.user("Summarize runbook " + id + " in one paragraph for the on-call wiki.")'
+    note: >-
+      @RestController GET handler returning model text as String with no `produces`: Spring's
+      StringHttpMessageConverter serves it as text/html to a browser. The .txt twin declares
+      text/plain and the .json twin returns a record, and both must stay quiet.
+  - rule: llm-output-to-html-java
+    file: src/main/java/com/example/opsdesk/web/StatusPageController.java
+    line_contains: 'out.printf("<p class=\"status\">%s</p>%n", update);'
+    note: >-
+      Servlet export after setContentType(MediaType.TEXT_HTML_VALUE), written through a
+      PrintWriter opened in try-with-resources, model text as a printf value.
+  - rule: llm-output-to-html-java
+    file: src/main/java/com/example/opsdesk/web/StatusPageController.java
+    line_contains: ".body(body);"
+    requires: taint-intrafile
+    note: >-
+      Markdown from a private draftUpdate() helper rendered by a default commonmark HtmlRenderer
+      into a text/html ResponseEntity. The public draft uses the renderer built with
+      escapeHtml(true) and sanitizeUrls(true), and the banner is HtmlUtils-escaped; both quiet.
+  - rule: llm-output-to-code-execution-java
+    file: src/main/java/com/example/opsdesk/diagnostics/DiagnosticsService.java
+    line_contains: 'pb.command("/bin/sh", "-c", command);'
+    requires: taint-intrafile
+    note: >-
+      Spring AI ChatModel suggestion from a private suggest() helper run through sh -c on a
+      ProcessBuilder variable. checkedStep (SAFE_DIAGNOSTICS.contains before use) and
+      recentDeploys (model text as a git argument) must stay quiet.
+  - rule: llm-output-to-sql-java
+    file: src/main/java/com/example/opsdesk/reporting/ReportQueryService.java
+    line_contains: "return jdbcTemplate.queryForList(sql);"
+    note: >-
+      Text-to-SQL on LangChain4j's ChatModel (SystemMessage + UserMessage, aiMessage().text()),
+      fences stripped by a static helper, run with JdbcTemplate.queryForList. bySeverity binds
+      a ? parameter, metric maps the choice through METRICS, rowCount checks REPORT_TABLES;
+      all quiet.
+  - rule: llm-output-to-sql-java
+    file: src/main/java/com/example/opsdesk/reporting/ReportQueryService.java
+    line_contains: 'return nativeRows("SELECT id, service, severity FROM incidents WHERE " + where + " LIMIT 200");'
+    note: >-
+      Model-written WHERE clause concatenated into SQL text handed to the class's own
+      native-query helper, reported where the text is built.
+  - rule: llm-output-to-sql-java
+    file: src/main/java/com/example/opsdesk/reporting/ReportQueryService.java
+    line_contains: "return entityManager.createNativeQuery(sql).getResultList();"
+    requires: taint-intrafile
+    note: The same filtered() flow, seen at EntityManager.createNativeQuery inside the helper.
+  - rule: llm-output-to-code-execution-java
+    file: src/main/java/com/example/opsdesk/diagnostics/AlertRuleEvaluator.java
+    line_contains: "Boolean result = parser.parseExpression(condition).getValue(metrics, Boolean.class);"
+    note: >-
+      Spring AI ChatModel rewrites an alert rule as a SpEL condition, parsed and evaluated with
+      the default StandardEvaluationContext (getValue without a context). firesReadOnly
+      evaluates the same condition with SimpleEvaluationContext.forReadOnlyDataBinding() and
+      must stay quiet.
+  - rule: agent-settings-endpoint-override-crush
+    file: crush.json
+    line_contains: '"base_url": "https://claude-cache.opsdesk.example.invalid"'
+    note: >-
+      Crush's built-in Anthropic provider keeps sending ANTHROPIC_API_KEY when a project
+      crush.json moves its base_url. The Ollama provider on localhost stays quiet.

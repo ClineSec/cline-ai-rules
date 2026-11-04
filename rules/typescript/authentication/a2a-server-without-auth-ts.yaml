@@ -1,0 +1,127 @@
+rules:
+  - id: a2a-server-without-auth-ts
+    # JavaScript/TypeScript twin of a2a-server-without-auth. Sources (checked 2026-10-24):
+    # @a2a-js/sdk (a2aproject/a2a-js) v1.3.0 and v0.3.14, and the A2A specification v1.0.1.
+    # - 1.x serves A2A with Express middleware from @a2a-js/sdk/server/express:
+    #   jsonRpcHandler({ requestHandler, userBuilder }), restHandler({ ... }) and
+    #   agentCardHandler(...), and gRPC with grpcService({ requestHandler, userBuilder }) from
+    #   @a2a-js/sdk/server/grpc. userBuilder is required. UserBuilder.noAuthentication returns
+    #   an UnauthenticatedUser for every request; a custom builder can throw, which rejects the
+    #   request. Nothing on the server reads the card's securitySchemes, and the extended agent
+    #   card is returned to any caller.
+    # - 0.3.x also has A2AExpressApp (deprecated in 0.3, removed in 1.0): new
+    #   A2AExpressApp(requestHandler, userBuilder = UserBuilder.noAuthentication), and
+    #   setupRoutes(app, baseUrl, middlewares) puts the middlewares in front of the routes.
+    # Reported: a userBuilder that never looks at the request (noAuthentication, or a builder
+    # that takes no request), or A2AExpressApp with the default builder and no middlewares, in
+    # a file that also starts listening on something other than loopback only. Node's
+    # listen(port) binds every interface, so a bare port counts. Authentication elsewhere in
+    # the file (auth middleware, a credential header check) silences it; a router exported to
+    # another file isn't reported, because the file that mounts it may add auth.
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      This A2A agent accepts every request without authentication: the user builder treats
+      each caller the same, and the file adds no auth middleware before the A2A routes.
+      Anyone who can reach the port can send the agent tasks, read and cancel other callers'
+      tasks, and have it do whatever its skills and tools can do. The SDK doesn't check
+      credentials itself: `securitySchemes` on the agent card only tells clients what to
+      send, and the extended agent card is served to anyone. Verify a token in Express
+      middleware mounted before the A2A handlers (or in a gRPC interceptor), pass a
+      `userBuilder` that builds the user from the verified token and throws when there is
+      none, and declare the scheme in the card. If a gateway authenticates every request
+      before it reaches this server, say so in a `// nosemgrep` comment.
+    patterns:
+      # The file uses the A2A SDK's server side.
+      - pattern-either:
+          - pattern-inside: |
+              import $I from "=~/^@a2a-js\/sdk\/server(\/|$)/";
+              ...
+          - pattern-inside: |
+              import {...} from "=~/^@a2a-js\/sdk\/server(\/|$)/";
+              ...
+          - pattern-inside: |
+              import * as $I from "=~/^@a2a-js\/sdk\/server(\/|$)/";
+              ...
+          - pattern-inside: |
+              $I = require("=~/^@a2a-js\/sdk\/server(\/|$)/");
+              ...
+      # The file serves it: an HTTP listen() or a gRPC bindAsync().
+      - pattern-either:
+          - pattern-regex: (?s)\A(?=.*?\.listen\s*\().*
+          - pattern-regex: (?s)\A(?=.*?\.bindAsync\s*\().*
+      - pattern-either:
+          # A user builder that never authenticates.
+          - patterns:
+              - pattern: '{..., userBuilder: $UB, ...}'
+              - focus-metavariable: $UB
+              - metavariable-regex:
+                  metavariable: $UB
+                  regex: >-
+                    (?s)^(?:(?:[\w$]+\.)?UserBuilder\.noAuthentication|(?:async\s*)?\(\s*\)\s*(?::[^=]*?)?=>.*|(?:async\s*)?(?:\(\s*[\w$]*\s*(?::[^)]*)?\)|[\w$]+)\s*(?::[^=]*?)?=>\s*(?:Promise\.resolve\(\s*)?new\s+(?:[\w$]+\.)?UnauthenticatedUser\s*\(\s*\)\s*\)?)$
+          # 0.3: A2AExpressApp with its default builder (or noAuthentication) and routes set
+          # up without middlewares.
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $X = new A2AExpressApp($RH);
+                      ...
+                  - pattern-inside: |
+                      $X = new A2AExpressApp($RH, $NOAUTH.noAuthentication);
+                      ...
+              - pattern-either:
+                  - pattern: $X.setupRoutes($APP)
+                  - pattern: $X.setupRoutes($APP, $BASE)
+          - pattern: new A2AExpressApp($RH).setupRoutes($APP)
+          - pattern: new A2AExpressApp($RH).setupRoutes($APP, $BASE)
+          - pattern: new A2AExpressApp($RH, $NOAUTH.noAuthentication).setupRoutes($APP)
+          - pattern: new A2AExpressApp($RH, $NOAUTH.noAuthentication).setupRoutes($APP, $BASE)
+      # Listening on loopback only: a literal host, a constant or config field holding one
+      # (also as an environment default), or a gRPC address on localhost.
+      - pattern-not-regex: (?s)\A(?=.*?\.listen\s*\(\s*[^,()]++,\s*["'](?:127\.0\.0\.1|localhost|::1)["']).*
+      - pattern-not-regex: (?s)\A(?=.*?\.listen\s*\(\s*[^,()]++,\s*(?:[\w$]+\.)*(?<h>[\w$]+)\s*[,)])(?=.*?\b\k<h>\s*[=:]\s*(?:[^;\n]*?(?:\?\?|\|\|)\s*)?["'](?:127\.0\.0\.1|localhost|::1)["']).*
+      - pattern-not-regex: (?s)\A(?=.*?\.listen\s*\(\s*\{[^}]*?\bhost\s*:\s*["'](?:127\.0\.0\.1|localhost|::1)["']).*
+      - pattern-not-regex: (?s)\A(?=.*?\.bindAsync\s*\(\s*["'`](?:127\.0\.0\.1|localhost|\[::1\]):).*
+      # The executor checks the caller (requestContext.context.user.isAuthenticated).
+      - pattern-not-regex: (?s)\A(?=.*?\.isAuthenticated\b).*
+      # A function whose name says auth applied to the app or router (installAuth(app)).
+      - pattern-not-regex: (?s)\A(?=.*?(?<![\w$.])[\w$]*?(?i:auth)[\w$]*\s*\(\s*(?:app|router|server|expressApp|a2aApp|api)\b).*
+      # --- authentication signals (shared with mcp-server-exposed-without-auth-ts and
+      # mcp-http-transport-without-host-validation-ts through build.py SHARED_BLOCKS; edit all
+      # three together) ---
+      - pattern-not-regex: (?s)\A(?=.*?requireBearerAuth\s*\().*
+      - pattern-not-regex: (?s)\A(?=.*?\b(?:authenticate|auth)\s*[:(]).*
+      - pattern-not-regex: (?s)\A(?=.*?\.(?:use|all|get|post|put|delete|patch|route|addHook|register)\s*\([^;]{0,300}?(?i:(?<!\.no)(?<!new un)auth(?!ors?\b)|jwt|bearer|passport|api[-_]?key|(?:verify|check|require|validate)[\w$]*token)).*
+      - pattern-not-regex: (?s)\A(?=.*?(?i:headers\s*(?:\.\s*authorization|\[\s*["'](?:authorization|x-api-key)["']))).*
+      - pattern-not-regex: (?s)\A(?=.*?(?i:\.(?:get|header)\s*\(\s*["'](?:authorization|x-api-key)["'])).*
+      - pattern-not-regex: (?s)\A(?=.*?\b(?:expressjwt|jwtVerify|bearerAuth|basicAuth)\s*\().*
+      - pattern-not-regex: (?s)\A(?=.*?\bjwt\.verify\s*\().*
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI07 - Insecure Inter-Agent Communication"
+        - "ASI03 - Identity and Privilege Abuse"
+      owasp-aisvs:
+        - "v1.01-C5.2.1 - AI Resource Authorization & Classification"
+        - "v1.01-C9.5.5 - Agent Authorization, Delegation, and Continuous Enforcement"
+      mitre-atlas:
+        - "AML.T0132 - Misconfigured or Publicly Exposed AI Services"
+      cwe:
+        - "CWE-306: Missing Authentication for Critical Function"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [a2a, a2a-js, express, grpc, node]
+      references:
+        - https://github.com/a2aproject/A2A/blob/v1.0.1/docs/specification.md#74-server-authentication-responsibilities
+        - https://github.com/a2aproject/a2a-js/blob/v1.3.0/src/server/express/common.ts
+        - https://github.com/a2aproject/a2a-js/blob/v1.3.0/src/server/express/json_rpc_handler.ts
+        - https://github.com/a2aproject/a2a-js/blob/v1.3.0/src/server/grpc/grpc_service.ts
+        - https://github.com/a2aproject/a2a-js/blob/v1.3.0/docs/migration-guide.md
+        - https://github.com/a2aproject/a2a-js/blob/v0.3.14/src/server/express/a2a_express_app.ts
+        - https://cwe.mitre.org/data/definitions/306.html

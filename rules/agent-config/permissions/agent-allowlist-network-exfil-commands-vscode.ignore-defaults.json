@@ -1,0 +1,15 @@
+{
+  "chat.tools.terminal.ignoreDefaultAutoApproveRules": true,
+  "chat.tools.terminal.autoApprove": {
+    // ruleid: agent-allowlist-network-exfil-commands-vscode
+    "curl -s": true,
+    // ruleid: agent-allowlist-network-exfil-commands-vscode
+    "/^wget\\b/i": true,
+    // ruleid: agent-allowlist-network-exfil-commands-vscode
+    "curl": true,
+    // ok: agent-allowlist-network-exfil-commands-vscode
+    "curl --version": false,
+    // ok: agent-allowlist-network-exfil-commands-vscode
+    "npm test": true
+  }
+}

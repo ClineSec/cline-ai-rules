@@ -1,0 +1,19 @@
+trend_researcher:
+  role: >
+    Support trend researcher
+  goal: >
+    Find the recurring themes in this week's closed tickets
+  backstory: >
+    You have read every ticket the helpdesk closed this week and you notice patterns.
+  # Theme mining walks every queue; it kept stopping at the default cap of 25.
+  max_iter: 5000
+  verbose: true
+
+digest_writer:
+  role: >
+    Digest writer
+  goal: >
+    Turn the researcher's findings into a short weekly digest
+  backstory: >
+    You write for busy team leads.
+  max_iter: 30

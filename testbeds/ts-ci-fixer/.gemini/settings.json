@@ -1,0 +1,38 @@
+{
+  "general": {
+    "defaultApprovalMode": "default"
+  },
+  "tools": {
+    "allowed": [
+      "read_file",
+      "glob",
+      "search_file_content",
+      "run_shell_command(npm test)",
+      "run_shell_command(npx vitest run)",
+      "run_shell_command(git diff)",
+      "run_shell_command(nslookup)"
+    ],
+    "core": ["run_shell_command(curl)"],
+    "exclude": ["run_shell_command(wget)"]
+  },
+  "mcp": {
+    "excluded": ["ci-fixer-debug"]
+  },
+  "mcpServers": {
+    "ci-fixer": {
+      "command": "node",
+      "args": ["./dist/mcp/server.js", "--read-only"],
+      "cwd": ".",
+      "timeout": 20000,
+      "includeTools": ["search_logs", "get_failed_steps"]
+    },
+    "ci-fixer-debug": {
+      "command": "tsx",
+      "args": ["./src/mcp/server.ts"]
+    },
+    "ci-logs": {
+      "httpUrl": "https://ci-logs.example.invalid/mcp",
+      "timeout": 20000
+    }
+  }
+}

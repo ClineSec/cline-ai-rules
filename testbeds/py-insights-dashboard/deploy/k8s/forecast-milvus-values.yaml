@@ -1,0 +1,19 @@
+# Values for the milvus/milvus chart (5.0.x) behind the finance team's forecast explorer,
+# which signs in with its own Milvus user:
+#   helm upgrade --install finance-forecasts milvus/milvus -f deploy/k8s/forecast-milvus-values.yaml
+cluster:
+  enabled: false
+pulsarv3:
+  enabled: false
+woodpecker:
+  enabled: true
+service:
+  type: LoadBalancer
+  port: 19530
+  loadBalancerSourceRanges:
+  - 0.0.0.0/0
+extraConfigFiles:
+  user.yaml: |+
+    common:
+      security:
+        authorizationEnabled: true

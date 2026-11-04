@@ -1,0 +1,62 @@
+rules:
+  - id: devcontainer-initialize-command
+    languages: [json]
+    severity: WARNING
+    message: >-
+      "initializeCommand" runs on the host machine, outside the container, every time this dev
+      container is created or started (Dev Containers spec). The reference devcontainer CLI runs
+      it with /bin/sh -c and no prompt, and cloud workspaces run it on their VM. Anyone who can
+      change this file, through a pull request, a compromised dependency, or a worm that writes
+      into the repo, gets code execution on the developer's machine with their credentials, with
+      none of the container's isolation. Move setup into "onCreateCommand" or
+      "postCreateCommand", which run inside the container. If host setup is unavoidable, keep it
+      to a fixed command that runs no repo script or download, and protect .devcontainer/ with
+      CODEOWNERS review like any code that runs on checkout.
+    paths:
+      include:
+        # The three locations the spec defines; subfolders are one level deep.
+        - ".devcontainer/devcontainer.json"
+        - ".devcontainer.json"
+        - ".devcontainer/*/devcontainer.json"
+    patterns:
+      - pattern-either:
+          # String: run through the shell. The CLI skips blank strings.
+          - patterns:
+              - pattern: '"initializeCommand": "$CMD"'
+              - metavariable-regex:
+                  metavariable: $CMD
+                  regex: .*\S
+          # Array (argv, no shell) or object (named commands run in parallel). Empty ones are
+          # skipped.
+          - patterns:
+              - pattern-either:
+                  - pattern: '"initializeCommand": [...]'
+                  - pattern: '"initializeCommand": {...}'
+              - pattern-not: '"initializeCommand": []'
+              - pattern-not: '"initializeCommand": {}'
+      # Only the top-level property runs; the same key nested in another object does nothing.
+      - pattern-not-inside: '"$KEY": {..., "initializeCommand": $V, ...}'
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      mitre-atlas:
+        - "AML.T0011 - User Execution"
+      cwe:
+        - "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+      # Many repositories use it for harmless host setup (creating a Docker network or a
+      # directory), and it runs only when someone builds or starts the container.
+      confidence: LOW
+      likelihood: LOW
+      impact: HIGH
+      technology: [devcontainers, vscode]
+      references:
+        - https://containers.dev/implementors/json_reference/#lifecycle-scripts
+        - https://github.com/devcontainers/spec/blob/c95ffeed1d059abfe9ffbe79762dc2fa4e7c2421/docs/specs/devcontainerjson-reference.md
+        - https://github.com/devcontainers/cli/blob/v0.89.0/src/spec-node/utils.ts
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md

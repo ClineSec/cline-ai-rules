@@ -1,0 +1,8 @@
+{
+  "mcpAllowlist": [
+    "ci-logs:search_logs",
+    "flake-history:get_*",
+    "pr-labels:*"
+  ],
+  "terminalAllowlist": ["npm test", "npx vitest run", "git status", "gh run view", "dig +short"]
+}

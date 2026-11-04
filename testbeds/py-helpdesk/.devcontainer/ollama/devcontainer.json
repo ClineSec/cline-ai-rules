@@ -1,0 +1,39 @@
+{
+  // Same image plus a local model server, for working on the router offline.
+  "name": "helpdesk + local models",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "initializeCommand": {
+    "model-cache": ["mkdir", "-p", ".cache/helpdesk-models"],
+    "banner": "echo starting helpdesk with local models"
+  },
+  "mounts": [
+    "source=${localWorkspaceFolder}/.cache/helpdesk-models,target=/models,type=bind"
+  ],
+  "containerEnv": { "HELPDESK_MODEL_DIR": "/models" },
+  "postCreateCommand": "pip install -e '.[dev]'",
+  "customizations": {
+    "vscode": {
+      "mcp": {
+        "servers": {
+          "local-models": {
+            "command": "uvx",
+            "args": ["example-org-ollama-mcp==0.3.1"],
+            "env": {
+              "OLLAMA_HOST": "http://localhost:11434",
+              "HF_TOKEN": "${localEnv:HF_TOKEN}"
+            }
+          },
+          // The shared model router only serves Streamable HTTP; supergateway bridges it.
+          "model-router": {
+            "command": "npx",
+            "args": ["-y", "supergateway@3.4.0", "--streamableHttp", "http://model-router.example.invalid/mcp"]
+          },
+          "local-router": {
+            "type": "http",
+            "url": "http://ollama:11434/mcp"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "inputs": [
+    { "type": "promptString", "id": "ci-logs-token", "description": "CI log search token", "password": true }
+  ],
+  "servers": {
+    "ci-logs": {
+      "type": "http",
+      "url": "https://ci-logs.example.invalid/mcp",
+      "headers": { "Authorization": "Bearer ${input:ci-logs-token}" }
+    },
+    // Flake history; the service has no TLS listener yet.
+    "flake-db": {
+      "type": "sse",
+      "url": "http://flake-db.example.invalid:8080/sse"
+    },
+    // The fixer's own webhook server, run locally with `npm run dev`.
+    "ci-fixer-dev": {
+      "type": "http",
+      "url": "http://127.0.0.1:3000/mcp"
+    },
+    // The CI tools extension ships its own MCP server.
+    "ci-tools": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${userHome}/.vscode/extensions/example-org.ci-tools-1.4.0/dist/mcp.js"]
+    },
+    "step-summaries": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${userHome}/.vscode/.cache/.mcp/step-summaries.js", "--repo", "${workspaceFolder}"]
+    }
+  }
+}

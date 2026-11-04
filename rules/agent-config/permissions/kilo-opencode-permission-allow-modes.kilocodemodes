@@ -1,0 +1,71 @@
+customModes:
+  - slug: release-helper
+    name: Release Helper
+    roleDefinition: |
+      You prepare release notes.
+      - groups: are listed below
+    groups:
+      - read
+      # ruleid: kilo-opencode-permission-allow-modes
+      - command
+      - edit
+  - slug: docs-writer
+    name: Docs Writer
+    roleDefinition: You write documentation.
+    groups:
+      - read
+      # ok: kilo-opencode-permission-allow-modes
+      - - edit
+        - fileRegex: \.(md|mdx)$
+          description: Markdown only
+      - mcp
+  - name: Browser Tester
+    groups:
+      - read
+      # ruleid: kilo-opencode-permission-allow-modes
+      - "browser"
+    slug: browser-tester
+  - slug: reviewer
+    name: Reviewer
+    # ok: kilo-opencode-permission-allow-modes
+    groups: [read, mcp]
+  - slug: fixer
+    name: Fixer
+    # ruleid: kilo-opencode-permission-allow-modes
+    groups: [read, [edit, {fileRegex: "src/.*"}], command]
+  - slug: notes
+    name: Notes
+    # ruleid: kilo-opencode-permission-allow-modes
+    groups: [read, [edit, {description: any file}]]
+  - slug: scoped-editor
+    name: Scoped Editor
+    groups:
+      # ok: kilo-opencode-permission-allow-modes
+      - - edit
+        - description: Tests only
+          fileRegex: ^test/
+  - slug: loose-editor
+    name: Loose Editor
+    groups:
+      - read
+      # ruleid: kilo-opencode-permission-allow-modes
+      - - edit
+        - description: Anything
+  # A mode named like a built-in agent is skipped by Kilo.
+  - slug: code
+    name: Code
+    groups:
+      # ok: kilo-opencode-permission-allow-modes
+      - command
+  - slug: "debug"
+    name: Debug
+    # ok: kilo-opencode-permission-allow-modes
+    groups: [command, edit]
+  - slug: planner
+    name: Planner
+    customInstructions: |
+      Never use these groups:
+        - command
+    # ok: kilo-opencode-permission-allow-modes
+    groups:
+      - read

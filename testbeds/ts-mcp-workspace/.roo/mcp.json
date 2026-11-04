@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "workspace": {
+      "command": "node",
+      "args": ["dist/src/index.js", "--stdio"],
+      "env": { "WORKSPACE_ROOT": "." },
+      "alwaysAllow": ["workspace_search_code", "workspace_git_log"]
+    },
+    "workspace-compat": {
+      "command": "node",
+      "args": ["dist/src/compat/lowlevel.js"],
+      "disabled": true
+    },
+    "hosted": {
+      "type": "streamable-http",
+      "url": "https://workspace-mcp.example.invalid/mcp"
+    }
+  }
+}

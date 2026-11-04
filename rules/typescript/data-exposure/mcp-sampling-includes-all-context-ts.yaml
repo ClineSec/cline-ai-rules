@@ -1,0 +1,82 @@
+rules:
+  - id: mcp-sampling-includes-all-context-ts
+    # JavaScript/TypeScript twin of mcp-sampling-includes-all-context: an MCP server's
+    # sampling request (sampling/createMessage) asking the client to attach context from
+    # every connected MCP server, includeContext "allServers". Sources: the MCP spec schema
+    # 2025-06-18 ("The client MAY ignore this request"), 2025-11-25 ("thisServer" and
+    # "allServers" soft-deprecated; servers SHOULD only use them if the client declares
+    # ClientCapabilities.sampling.context), and 2026-07-28 (deprecated under SEP-2596, to be
+    # removed no later than Sampling itself, which SEP-2577 deprecates). Call shapes, all
+    # taking the request params as one object: MCP TypeScript SDK v2.4.0
+    # (@modelcontextprotocol/server Server.createMessage(params), reached from an McpServer
+    # as server.server.createMessage, ctx.mcpReq.requestSampling(params), and
+    # inputRequired.createMessage(params) for 2026-07-28 multi-round-trip requests) and
+    # 1.32.2 (@modelcontextprotocol/sdk Server.createMessage(params), or
+    # request({method: "sampling/createMessage", params})); punkpeye fastmcp 4.23.7
+    # session.requestSampling(params), which passes them to createMessage. None of them
+    # checks sampling.context before sending. "thisServer" is deliberately not reported: the
+    # spec defines it as context from the requesting server itself, which doesn't cross a
+    # server boundary.
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      This MCP server asks the client to attach context from every connected MCP server to a
+      sampling request (`includeContext: "allServers"`). A client that honors it puts other
+      servers' data (their tool results, resources, and the conversation around them) into a
+      prompt this server wrote and sends this server the completion, so the server can read
+      data that belongs to other servers: a prompt that says "repeat the context above" is
+      enough, and a sampling prompt built from tool input can be steered the same way. The
+      value has been soft-deprecated since MCP spec 2025-11-25 and is deprecated in 2026-07-28
+      (SEP-2596), which also deprecates sampling itself (SEP-2577); servers SHOULD NOT send it
+      unless the client declares the `sampling.context` capability, and the MCP SDKs send it
+      without checking. Leave `includeContext` out (the default is "none") and put the text
+      the request needs into `messages`. If this server came from someone else, don't connect
+      it next to servers that hold private data.
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              # The params object, wherever it is built: inline in createMessage(...),
+              # requestSampling(...), or inputRequired.createMessage(...), a shared
+              # defaults object spread into one, or a request({method, params}) call.
+              - pattern: '{..., includeContext: $V, ...}'
+              # Set on a params object after it is built.
+              - pattern: $O.includeContext = $V
+              - pattern: $O["includeContext"] = $V
+              # A settings class field.
+              - pattern: 'class $C { ... includeContext = $V; ... }'
+          - focus-metavariable: $V
+          # The literal, a constant holding it (constant propagation), or either arm of a
+          # conditional expression; `"allServers" as const` once, not also without the cast.
+          - metavariable-pattern:
+              metavariable: $V
+              patterns:
+                - pattern: '"allServers"'
+                - pattern-not-inside: $X as $T
+      # A wrapper's destructured option default, ({ includeContext = "allServers" }) => ...,
+      # which OpenGrep patterns don't match: the name right after `{` or `,`, so a plain
+      # `const includeContext = ...` (reported where it is used) and `===` stay out.
+      - pattern-regex: '[{,]\s*+includeContext\s*+=\s*+\K(["''`])allServers\1'
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM02:2026 - Sensitive Information Disclosure"
+        - "LLM02:2025 - Sensitive Information Disclosure"
+      owasp-mcp:
+        - "MCP10:2025 - Context Injection & Over-Sharing"
+      mitre-atlas:
+        - "AML.T0057 - LLM Data Leakage"
+      cwe:
+        - "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      technology: [mcp, fastmcp, node]
+      references:
+        - https://modelcontextprotocol.io/specification/2026-07-28/client/sampling
+        - https://modelcontextprotocol.io/specification/2026-07-28/deprecated
+        - https://modelcontextprotocol.io/specification/2025-11-25/client/sampling
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP10-2025%E2%80%93ContextInjection%26OverSharing.md
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.4.0/packages/server/src/server/server.ts
+        - https://github.com/punkpeye/fastmcp/blob/v4.23.7/src/FastMCP.ts

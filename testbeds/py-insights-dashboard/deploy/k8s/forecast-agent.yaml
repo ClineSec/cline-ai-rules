@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: insights-forecast-agent
+  labels:
+    app: insights-forecast-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: insights-forecast-agent
+  template:
+    metadata:
+      labels:
+        app: insights-forecast-agent
+    spec:
+      containers:
+        - name: forecast-agent
+          image: ghcr.io/example-org/insights-forecast-agent:0.9.1
+          env:
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.observability:4317
+            - name: OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT
+              value: "true"
+            - name: LITELLM_LOG
+              value: INFO

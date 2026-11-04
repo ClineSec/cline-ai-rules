@@ -1,0 +1,9 @@
+{
+  // .cursor/worktrees.json pointing at an installed tool
+  // ok: agent-settings-command-runs-local-script
+  "setup-worktree-unix": "/usr/local/bin/worktree-bootstrap",
+  // ok: agent-settings-command-runs-local-script
+  "setup-worktree-windows": "%LOCALAPPDATA%\\wt\\bootstrap.cmd",
+  // ok: agent-settings-command-runs-local-script
+  "setup-worktree": ["pnpm install --frozen-lockfile"]
+}

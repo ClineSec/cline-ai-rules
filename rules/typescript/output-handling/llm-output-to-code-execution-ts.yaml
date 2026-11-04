@@ -1,0 +1,641 @@
+rules:
+  - id: llm-output-to-code-execution-ts
+    # JavaScript/TypeScript twin of llm-output-to-code-execution. Shared blocks (build.py
+    # SHARED_BLOCKS), so edit them together: the first 21 pattern-sources and the first 2
+    # pattern-propagators come from llm-output-to-html-ts (model-output sources), and the
+    # pattern-sinks and every pattern-sanitizer after the first come from
+    # mcp-tool-arg-to-shell-ts and agent-tool-arg-to-shell-ts (shell and code sinks). All
+    # sources, propagators and sanitizers are also shared with llm-output-to-vm2-sandbox, and
+    # all sources, both propagators and the first 6 sanitizers with llm-output-to-sql-ts.
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Model output reaches a code or shell execution sink. Treat completions as untrusted
+      input: anyone who can influence the prompt, directly or through a web page, document,
+      or tool result the model reads, can choose what runs here, with this process's
+      credentials and files. Parse the output into a constrained structure (a schema with
+      enums) and dispatch to an allowlist of operations instead of executing it; run fixed
+      programs with execFile or spawn and an argument array, without `shell`. Node's `vm`
+      module is not a sandbox: if model-written code must run, run it in an isolated sandbox
+      (a separate isolate such as isolated-vm, a container, or a microVM) with no secrets
+      or network.
+    mode: taint
+    pattern-sources:
+      # Vercel AI SDK (server): the result object and every field of it (`text`, `steps`,
+      # `textStream`, `content`, `object`).
+      - pattern: generateText(...)
+      - pattern: streamText(...)
+      - pattern: generateObject(...)
+      - pattern: streamObject(...)
+      # AI SDK agents: `agent.generate()` / `agent.stream()` on a ToolLoopAgent built in this
+      # file, or on a receiver named like an agent.
+      - patterns:
+          - pattern-inside: |
+              $AGENT = new $CLASS(...);
+              ...
+          - metavariable-regex:
+              metavariable: $CLASS
+              regex: ^(?:ToolLoopAgent|Experimental_Agent)$
+          - pattern-either:
+              - pattern: $AGENT.generate(...)
+              - pattern: $AGENT.stream(...)
+      - patterns:
+          - pattern-either:
+              - pattern: $AGENT.generate(...)
+              - pattern: $AGENT.stream(...)
+          - metavariable-regex:
+              metavariable: $AGENT
+              regex: (?i)^(?:[\w$]+\.)*[\w$]*agent$
+      # AI SDK (client): messages, completions, and streamed objects from the React hooks.
+      - pattern: useChat(...)
+      - pattern: useCompletion(...)
+      - pattern: useObject(...)
+      - pattern: experimental_useObject(...)
+      # A value typed as an AI SDK chat message or text part (a message component's props).
+      - pattern: '($M : UIMessage)'
+      - pattern: '($M : TextUIPart)'
+      - pattern: '($M : UIMessage[])'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: 'function $F({..., $P, ...}: $TY, ...) {...}'
+              - pattern-inside: '({..., $P, ...}: $TY, ...) => $BODY'
+              - pattern-inside: '({..., $P, ...}: $TY, ...) => {...}'
+          - metavariable-regex:
+              metavariable: $TY
+              regex: (?s)^\{.*:\s*(?:Array<|ReadonlyArray<)?(?:UIMessage|TextUIPart)\b
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      type $TY = $DEF;
+                      ...
+                  - metavariable-regex:
+                      metavariable: $DEF
+                      regex: (?s)^\{.*:\s*(?:Array<|ReadonlyArray<)?(?:UIMessage|TextUIPart)\b
+              - patterns:
+                  - pattern-inside: |
+                      interface $TY { $K: $DEF }
+                      ...
+                  - metavariable-regex:
+                      metavariable: $DEF
+                      regex: ^(?:Array<|ReadonlyArray<)?(?:UIMessage|TextUIPart)\b
+          - pattern-either:
+              - pattern-inside: 'function $F({..., $P, ...}: $TY, ...) {...}'
+              - pattern-inside: '({..., $P, ...}: $TY, ...) => $BODY'
+              - pattern-inside: '({..., $P, ...}: $TY, ...) => {...}'
+          - pattern: $P
+      # OpenAI Node: Chat Completions (also legacy Completions) and Responses.
+      - patterns:
+          - pattern: $CLIENT.completions.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:create|parse|stream|runTools)$
+      - patterns:
+          - pattern: $CLIENT.responses.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:create|parse|stream|retrieve)$
+      # Anthropic TypeScript SDK (also `client.beta.messages`).
+      - patterns:
+          - pattern: $CLIENT.messages.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:create|parse|stream|toolRunner)$
+      # Google Gen AI SDK.
+      - patterns:
+          - pattern: $CLIENT.models.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:generateContent|generateContentStream)$
+      - patterns:
+          - pattern-inside: |
+              $CHAT = $CLIENT.chats.create(...);
+              ...
+          - pattern-either:
+              - pattern: $CHAT.sendMessage(...)
+              - pattern: $CHAT.sendMessageStream(...)
+      # LangChain.js / LangGraph.js runnables. `.invoke` is a common method name (Electron's
+      # ipcRenderer.invoke), so require a LangChain import in the file or a receiver named like
+      # a model, chain, agent, or graph.
+      - patterns:
+          - pattern-either:
+              - pattern: $RUNNABLE.invoke(...)
+              - pattern: $RUNNABLE.stream(...)
+              - pattern: $RUNNABLE.batch(...)
+          - pattern-either:
+              - pattern-inside: |
+                  import $IMPORT from "=~/^@?langchain(?:\/|$)/";
+                  ...
+              - pattern-inside: |
+                  import {...} from "=~/^@?langchain(?:\/|$)/";
+                  ...
+              - patterns:
+                  - pattern: $RUNNABLE.invoke(...)
+                  - metavariable-regex:
+                      metavariable: $RUNNABLE
+                      regex: (?i)^(?:[\w$]+\.)*[\w$]*(?:llm|model|chain|agent|graph|runnable)$
+      # Agent SDKs: the messages of the Claude Agent SDK's query() (`message.result`) and the
+      # result of the OpenAI Agents SDK's run() and Runner.run() (`result.finalOutput`). Gated
+      # on the import, since query and run are common names.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      import { $NAME } from "$MOD";
+                      ...
+                  - pattern: $NAME(...)
+              - patterns:
+                  - pattern-inside: |
+                      import { $NAME as $ALIAS } from "$MOD";
+                      ...
+                  - pattern: $ALIAS(...)
+          - metavariable-comparison:
+              comparison: >-
+                (str($MOD) == "@anthropic-ai/claude-agent-sdk" and str($NAME) == "query")
+                or (re.match("^@openai/agents(?:-core)?$", str($MOD)) and str($NAME) == "run")
+      - patterns:
+          - pattern-inside: |
+              import {...} from "=~/^@openai\/agents(?:-core)?$/";
+              ...
+          - pattern-inside: |
+              $RUNNER = new Runner(...);
+              ...
+          - pattern: $RUNNER.run(...)
+    pattern-propagators:
+      # Array callbacks over tainted messages (`messages.map((m) => ...)`, then
+      # `m.parts.map((p) => ...)`) taint the callback's element parameter.
+      - patterns:
+          - pattern-either:
+              - pattern: $XS.$METHOD(($X, ...) => $BODY)
+              - pattern: $XS.$METHOD(($X, ...) => {...})
+              - pattern: $XS.$METHOD(function ($X, ...) {...})
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:map|flatMap|forEach|filter|find|findLast|reduce)$
+        from: $XS
+        to: $X
+      # Stream event listeners: `stream.on("text", (delta, snapshot) => ...)` (Anthropic) and
+      # `stream.on("content", ...)` (OpenAI).
+      - patterns:
+          - pattern-either:
+              - pattern: $XS.on($EVENT, ($X, ...) => $BODY)
+              - pattern: $XS.on($EVENT, ($X, ...) => {...})
+              - pattern: $XS.on($EVENT, ($A, $X, ...) => $BODY)
+              - pattern: $XS.on($EVENT, ($A, $X, ...) => {...})
+        from: $XS
+        to: $X
+      # In --taint-intrafile mode, OpenGrep drops taint from the result of an array method that
+      # takes a callback (`const part = message.parts.find((p) => p.type === "text")`); carry it
+      # when the result is assigned. Default mode doesn't need this.
+      - patterns:
+          - pattern: $R = $XS.$METHOD($CALLBACK)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(?:find|findLast|filter)$
+        from: $XS
+        to: $R
+    pattern-sanitizers:
+      # Values that can't carry code: a lookup in a constant table (`RECIPES[choice]`,
+      # `COMMANDS.get(choice)`), which is the allowlist dispatch the message recommends, and
+      # metadata fields (counts, IDs, roles, finish reasons).
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: $TABLE[$KEY]
+                      - pattern: $TABLE.get($KEY)
+                  - metavariable-regex:
+                      metavariable: $TABLE
+                      regex: ^(?:[\w$]+\.)*[A-Z][A-Z0-9_]*$
+              - patterns:
+                  - pattern: $OBJ.$FIELD
+                  - metavariable-regex:
+                      metavariable: $FIELD
+                      regex: ^(usage|id|role|type|model|created|length|status|finish_reason|finishReason|stop_reason|stopReason|totalUsage|duration_ms|num_turns|total_cost_usd)$
+      # An allowlist check before use: /^...$/.test(value).
+      - by-side-effect: true
+        patterns:
+          - pattern: $RE.test($X)
+          - metavariable-regex:
+              metavariable: $RE
+              regex: ^/\^.*\$/[a-z]*$
+          - focus-metavariable: $X
+      # An allowlist membership check before use: ALLOWED.has(value), ALLOWED.includes(value).
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $ALLOWED.has($X)
+              - pattern: $ALLOWED.includes($X)
+          - focus-metavariable: $X
+      - exact: true
+        pattern: Number(...)
+      - exact: true
+        pattern: parseInt(...)
+      - exact: true
+        pattern: parseFloat(...)
+      # shell-quote's quote([...]) and shell-escape's shellescape([...]).
+      - exact: true
+        pattern: quote([...])
+      - exact: true
+        pattern: $Q.quote([...])
+      - exact: true
+        pattern: shellescape([...])
+      - exact: true
+        pattern: shellEscape([...])
+      # execa's options object in the template form (cwd, env) is not part of the command.
+      - patterns:
+          - pattern-inside: '$EXECA({..., shell: $SH, ...})`...`'
+          - pattern: '{..., shell: $SH, ...}'
+    pattern-sinks:
+      # child_process exec and execSync always use a shell: the command string.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import * as $CP from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          import $CP from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          $CP = require("$MOD");
+                          ...
+                  - pattern-inside: $CP.$FN($CMD, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import { $FN } from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          const { $FN } = require("$MOD");
+                          ...
+                  - pattern-inside: $FN($CMD, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import { $FN as $ALIAS } from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          const { $FN: $ALIAS } = require("$MOD");
+                          ...
+                  - pattern-inside: $ALIAS($CMD, ...)
+              # const run = promisify(exec) / util.promisify(cp.exec). The import and the
+              # promisify call are separate conditions: one region from the import through
+              # the promisify call is several times slower on large files.
+              - patterns:
+                  - pattern-either:
+                      - patterns:
+                          - pattern-inside: |
+                              import { $FN } from "$MOD";
+                              ...
+                          - pattern-inside: |
+                              const $RUN = $PROMISIFY($FN);
+                              ...
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  import * as $CP from "$MOD";
+                                  ...
+                              - pattern-inside: |
+                                  import $CP from "$MOD";
+                                  ...
+                          - pattern-inside: |
+                              const $RUN = $PROMISIFY($CP.$FN);
+                              ...
+                  - metavariable-regex:
+                      metavariable: $PROMISIFY
+                      regex: ^(?:\w+\.)?promisify$
+                  - pattern-inside: $RUN($CMD, ...)
+          - metavariable-regex:
+              metavariable: $MOD
+              regex: ^(?:node:)?child_process$
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(?:exec|execSync)$
+          - pattern: $CMD
+      # spawn, execFile, fork and execa with a `shell` option: the shell joins the program
+      # and its arguments into one command line, so both count.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: '$F($CMD, $ARGV, {..., shell: $SH, ...}, ...)'
+                  - pattern-not-inside: '$F($CMD, $ARGV, {..., shell: false, ...}, ...)'
+                  - pattern-either:
+                      - pattern: $CMD
+                      - pattern: $ARGV
+              - patterns:
+                  - pattern-inside: '$F($CMD, {..., shell: $SH, ...}, ...)'
+                  - pattern-not-inside: '$F($CMD, {..., shell: false, ...}, ...)'
+                  - pattern: $CMD
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(?:(?:\w+\.)?(?:spawn|spawnSync|\w*[eE]xecFile\w*)|execa|execaSync|execaCommand|execaCommandSync|crossSpawn)$
+      # execa / $ template form with a shell: execa({shell: true})`git log ${ref}`.
+      - patterns:
+          - pattern: '$EXECA({..., shell: $SH, ...})`...`'
+          - pattern-not: '$EXECA({..., shell: false, ...})`...`'
+      # Bun Shell escapes interpolations unless they are wrapped as { raw: ... }.
+      - patterns:
+          - pattern-inside: $SHELL`...`
+          - pattern: '{ raw: $RAW }'
+          - focus-metavariable: $RAW
+      # An argv that starts a shell on the next item: spawn("bash", ["-c", cmd]),
+      # execa("sh", ["-lc", cmd]), Bun.spawn(["sh", "-c", cmd]).
+      - patterns:
+          - pattern-either:
+              - pattern: '$F($SHELLBIN, [..., $FLAG, $CMD, ...], ...)'
+              - pattern: '[..., $SHELLBIN, $FLAG, $CMD, ...]'
+          - metavariable-regex:
+              metavariable: $SHELLBIN
+              regex: ^["'`](?:[\w./-]*/)?(?:(?:ba|da|z|k|fi|c|tc)?sh|cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh)["'`]$
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^["'`](?:-[a-zA-Z]*c[a-zA-Z]*|/[cCkK]|-(?i:command))["'`]$
+          - focus-metavariable: $CMD
+      # An argv that starts an interpreter on inline code: spawn("node", ["-e", code]),
+      # execFile(process.execPath, ["--eval", code]), ["python3", "-I", "-c", code],
+      # ["deno", "eval", code]. The eval flag comes first or after one option that takes no
+      # value, so a script's own `-c` argument (`python3 tool.py -c x`) doesn't count. Each
+      # interpreter is paired with its own eval flag, so `node -c` (syntax check) doesn't.
+      - patterns:
+          - pattern-either:
+              - pattern: '$F($BIN, [$FLAG, $CODE, ...], ...)'
+              - pattern: '[..., $BIN, $FLAG, $CODE, ...]'
+              - patterns:
+                  - pattern-either:
+                      - pattern: '$F($BIN, [$OPT, $FLAG, $CODE, ...], ...)'
+                      - pattern: '[..., $BIN, $OPT, $FLAG, $CODE, ...]'
+                  - metavariable-regex:
+                      metavariable: $OPT
+                      regex: ^["'`](?:-(?![WXmr]["'`])[a-zA-Z]{1,3}|--[a-z][\w-]*(?<!require)(?<!import)(?<!loader))["'`]$
+          - metavariable-comparison:
+              comparison: >-
+                ((re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:node|nodejs|bun|tsx|ts-node)(?:[.]exe)?$", str($BIN))
+                or str($BIN) == "process.execPath")
+                and re.match("^(?:-e|--eval|-p|--print|-pe)$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?deno(?:[.]exe)?$", str($BIN)) and str($FLAG) == "eval")
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:python[0-9.]*|py)(?:[.]exe)?$", str($BIN)) and str($FLAG) == "-c")
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:ruby|perl)(?:[.]exe)?$", str($BIN)) and re.match("^-[eE]$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?php(?:[.]exe)?$", str($BIN)) and str($FLAG) == "-r")
+          - focus-metavariable: $CODE
+      # Code written to a file and then run in the same function: writeFile(file, code) and
+      # later spawn("node", [file]), execFile(file), fork(file), exec(`python3 ${file}`),
+      # import(pathToFileURL(file).href), require(file), or new Worker(file). Only the written
+      # contents count; a file handed to a program that only reads it (git, a linter) doesn't.
+      - patterns:
+          # Each region starts at a named write call (bare, on any object such as fs or
+          # fs.promises, or Bun.write). A region from every two-argument call ($WRITE(...) then
+          # a metavariable-regex) took about 5 s on a 5,000-line file in OpenGrep 1.30.2, and a
+          # pattern-regex gate drops every finding of a taint sink.
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: "writeFile($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "writeFileSync($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "outputFile($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "outputFileSync($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "$FS.writeFile($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "$FS.writeFileSync($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "$FS.outputFile($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "$FS.outputFileSync($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "Bun.write($PATH, $CODE, ...);\n...\n$RUN($BIN, [..., $PATH, ...], ...);"
+                      - pattern-inside: "writeFile($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                      - pattern-inside: "writeFileSync($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                      - pattern-inside: "outputFile($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                      - pattern-inside: "outputFileSync($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                      - pattern-inside: "$FS.writeFile($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                      - pattern-inside: "$FS.writeFileSync($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                      - pattern-inside: "$FS.outputFile($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                      - pattern-inside: "$FS.outputFileSync($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                      - pattern-inside: "Bun.write($PATH, $CODE, ...);\n...\n$RUN([$BIN, ..., $PATH, ...], ...);"
+                  - metavariable-regex:
+                      metavariable: $BIN
+                      regex: ^(?:["'`](?:[\w./-]*/)?(?:node|nodejs|deno|bun|tsx|ts-node|python[\d.]*|py|ruby|perl|php|(?:ba|da|z|k|fi|c|tc)?sh|pwsh|powershell)(?:\.exe)?["'`]|process\.execPath)$
+                  - metavariable-regex:
+                      metavariable: $RUN
+                      regex: ^(?:[\w$]+\.)*(?:spawn|spawnSync|\w*[eE]xecFile\w*|execa|execaSync|crossSpawn)$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: "writeFile($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                      - pattern-inside: "writeFileSync($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                      - pattern-inside: "outputFile($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                      - pattern-inside: "outputFileSync($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                      - pattern-inside: "$FS.writeFile($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                      - pattern-inside: "$FS.writeFileSync($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                      - pattern-inside: "$FS.outputFile($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                      - pattern-inside: "$FS.outputFileSync($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                      - pattern-inside: "Bun.write($PATH, $CODE, ...);\n...\n$RUN($PATH, ...);"
+                  - metavariable-regex:
+                      metavariable: $RUN
+                      regex: ^(?:[\w$]+\.)*(?:spawn|spawnSync|\w*[eE]xecFile\w*|fork|execa|execaSync|execaNode|crossSpawn|require)$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: "writeFile($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                      - pattern-inside: "writeFileSync($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                      - pattern-inside: "outputFile($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                      - pattern-inside: "outputFileSync($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                      - pattern-inside: "$FS.writeFile($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                      - pattern-inside: "$FS.writeFileSync($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                      - pattern-inside: "$FS.outputFile($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                      - pattern-inside: "$FS.outputFileSync($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                      - pattern-inside: "Bun.write($PATH, $CODE, ...);\n...\n$RUN($CMD, ...);"
+                  - metavariable-regex:
+                      metavariable: $RUN
+                      regex: (?i)^(?:[\w$]+\.)*\w*(?:exec|run|shell|spawn)\w*$
+                  - metavariable-regex:
+                      metavariable: $CMD
+                      regex: ^`\s*(?:[\w./-]*/)?(?:node|nodejs|deno(?:\s+run)?|bun|tsx|ts-node|python[\d.]*|py|ruby|perl|php|(?:ba|da|z|k|fi|c|tc)?sh)\s
+                  - metavariable-pattern:
+                      metavariable: $CMD
+                      pattern: <... $PATH ...>
+              - pattern-either:
+                  - pattern-inside: "writeFile($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+                  - pattern-inside: "writeFileSync($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+                  - pattern-inside: "outputFile($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+                  - pattern-inside: "outputFileSync($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+                  - pattern-inside: "$FS.writeFile($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+                  - pattern-inside: "$FS.writeFileSync($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+                  - pattern-inside: "$FS.outputFile($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+                  - pattern-inside: "$FS.outputFileSync($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+                  - pattern-inside: "Bun.write($PATH, $CODE, ...);\n...\nimport(<... $PATH ...>);"
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: "writeFile($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                      - pattern-inside: "writeFileSync($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                      - pattern-inside: "outputFile($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                      - pattern-inside: "outputFileSync($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                      - pattern-inside: "$FS.writeFile($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                      - pattern-inside: "$FS.writeFileSync($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                      - pattern-inside: "$FS.outputFile($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                      - pattern-inside: "$FS.outputFileSync($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                      - pattern-inside: "Bun.write($PATH, $CODE, ...);\n...\nnew $WORKER(<... $PATH ...>, ...);"
+                  - metavariable-regex:
+                      metavariable: $WORKER
+                      regex: ^(?:[\w$]+\.)?Worker$
+          # The written contents themselves, not a later use of the same name.
+          - pattern-inside: $WRITE($PATH, $CODE, ...)
+          - metavariable-regex:
+              metavariable: $WRITE
+              regex: ^(?:(?:[\w$]+\.)*(?:writeFile|writeFileSync|outputFile|outputFileSync)|Bun\.write)$
+          - pattern: $CODE
+      # Code execution: eval (also indirect, `(0, eval)(x)`), new Function and its async and
+      # generator siblings, setTimeout / setInterval with a string (browsers evaluate it), a
+      # worker_threads Worker with `eval: true`, and dynamic import() of a chosen specifier (a
+      # data: URL runs inline).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: eval($CODE)
+              - pattern-inside: (0, eval)($CODE)
+              # AsyncFunction, GeneratorFunction, AsyncGeneratorFunction: the constructor of a
+              # function literal (`Object.getPrototypeOf(async function () {}).constructor`),
+              # bound to a name or used inline.
+              - patterns:
+                  - pattern-either:
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  $CTOR = Object.getPrototypeOf($FNLIT).constructor;
+                                  ...
+                              - pattern-inside: |
+                                  $CTOR = $FNLIT.constructor;
+                                  ...
+                          - pattern-either:
+                              - pattern-inside: new $CTOR(..., $CODE, ...)
+                              - pattern-inside: $CTOR(..., $CODE, ...)
+                      - pattern-inside: new (Object.getPrototypeOf($FNLIT).constructor)(..., $CODE, ...)
+                      - pattern-inside: new ($FNLIT.constructor)(..., $CODE, ...)
+                  - metavariable-regex:
+                      metavariable: $FNLIT
+                      regex: (?s)^\(*\s*(?:async\b|function\b|\([^()]*\)\s*=>|[\w$]+\s*=>)
+              - patterns:
+                  - pattern-inside: $GLOBAL.eval($CODE)
+                  - metavariable-regex:
+                      metavariable: $GLOBAL
+                      regex: ^(?:globalThis|window|self|global)$
+              - pattern-inside: new Function(..., $CODE, ...)
+              - pattern-inside: Function(..., $CODE, ...)
+              - patterns:
+                  - pattern-inside: $TIMER($CODE, ...)
+                  - metavariable-regex:
+                      metavariable: $TIMER
+                      regex: ^(?:(?:globalThis|window|self)\.)?(?:setTimeout|setInterval)$
+              - patterns:
+                  - pattern-inside: 'new $WORKER($CODE, {..., eval: true, ...})'
+                  - metavariable-regex:
+                      metavariable: $WORKER
+                      regex: ^(?:[\w$]+\.)?Worker$
+              - pattern-inside: import($CODE)
+          - pattern: $CODE
+      # The node:vm module, which Node documents as "not a security mechanism": the code
+      # argument of runInNewContext, runInContext, runInThisContext, compileFunction, new Script,
+      # and new SourceTextModule. A compiled Script's own run methods take a context object,
+      # which is data.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import * as $VM from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          import $VM from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          $VM = require("$MOD");
+                          ...
+                  - pattern-either:
+                      - pattern-inside: $VM.$FN($CODE, ...)
+                      - pattern-inside: new $VM.$FN($CODE, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import { $FN } from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          const { $FN } = require("$MOD");
+                          ...
+                  - pattern-either:
+                      - pattern-inside: $FN($CODE, ...)
+                      - pattern-inside: new $FN($CODE, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import { $FN as $ALIAS } from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          const { $FN: $ALIAS } = require("$MOD");
+                          ...
+                  - pattern-either:
+                      - pattern-inside: $ALIAS($CODE, ...)
+                      - pattern-inside: new $ALIAS($CODE, ...)
+          - metavariable-regex:
+              metavariable: $MOD
+              regex: ^(?:node:)?vm$
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(?:runInNewContext|runInContext|runInThisContext|compileFunction|Script|SourceTextModule)$
+          - pattern: $CODE
+      # vm2's NodeVM with `nesting: true`: sandboxed code can build its own NodeVM that
+      # requires any host module, so vm2's README says it grants the sandbox your own trust.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: 'new $NODEVM({..., nesting: true, ...}).run($CODE, ...)'
+              - pattern-inside: |
+                  $SANDBOX = new $NODEVM({..., nesting: true, ...});
+                  ...
+                  $SANDBOX.run($CODE, ...);
+              # Kept on a class: a field initialiser or a constructor assignment.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          class $K { ... $FIELD = new $NODEVM({..., nesting: true, ...}); ... }
+                      - pattern-inside: |
+                          class $K { ... constructor(...) { ... this.$FIELD = new $NODEVM({..., nesting: true, ...}); ... } ... }
+                  - pattern-inside: this.$FIELD.run($CODE, ...)
+          - metavariable-regex:
+              metavariable: $NODEVM
+              regex: ^(?:[\w$]+\.)?NodeVM$
+          - pattern-inside: $RUNNER.run($CODE, ...)
+          - pattern: $CODE
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C7.1.1 - Output Format Enforcement"
+      mitre-atlas:
+        - "AML.T0051 - LLM Prompt Injection"
+        - "AML.T0050 - Command and Scripting Interpreter"
+      cwe:
+        - "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [vercel-ai-sdk, openai, anthropic, google-genai, langchain, claude-agent-sdk, openai-agents, node, execa, bun]
+      # API shapes checked 2026-10-22: model-output sources as in llm-output-to-html-ts (ai
+      # 7.0.150, @ai-sdk/react 4.0.154, openai 7.42.0, @anthropic-ai/sdk 1.1.0, @google/genai
+      # 2.30.0), plus @anthropic-ai/claude-agent-sdk 0.3.308 (query, SDKResultMessage.result)
+      # and @openai/agents 0.21.0 (run, Runner.run, RunResult.finalOutput). Sinks: Node.js
+      # v24.22.1 docs for vm ("not a security mechanism"), worker_threads (Worker `eval`),
+      # child_process, cli (-e, -p), and timers (Node rejects a string callback; browsers
+      # evaluate it); execa 10.2.0; Bun 1.4.4 shell; vm2 3.12.2 (NodeVM `nesting`).
+      # Deliberately not sinks: vm2 without `nesting` (reported at WARNING by
+      # llm-output-to-vm2-sandbox, decided 2026-10-22),
+      # isolated-vm 7.0.1 and quickjs-emscripten 0.32.0 (separate isolates or a WebAssembly
+      # engine), and Node's own vm.Script run methods (their argument is a context object).
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md
+        - https://cwe.mitre.org/data/definitions/94.html
+        - https://github.com/nodejs/node/blob/v24.22.1/doc/api/vm.md
+        - https://github.com/nodejs/node/blob/v24.22.1/doc/api/worker_threads.md#new-workerfilename-options
+        - https://github.com/nodejs/node/blob/v24.22.1/doc/api/cli.md#-e---eval-script
+        - https://github.com/patriksimek/vm2/blob/v3.12.2/README.md
+        - https://github.com/sindresorhus/execa/blob/v10.2.0/docs/shell.md

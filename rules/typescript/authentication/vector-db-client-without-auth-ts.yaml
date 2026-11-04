@@ -1,0 +1,171 @@
+rules:
+  - id: vector-db-client-without-auth-ts
+    # A Chroma, Qdrant, Weaviate, or Milvus client pointed at a host outside the local machine
+    # and the private network, sending no credentials. The client works only if the server
+    # takes anonymous requests, so the collection is open to anyone who can reach that host.
+    # SDKs checked 2026-10-25 from package source:
+    # - chromadb 3.5.0: new ChromaClient({host, port, ssl, tenant, database, headers,
+    #   fetchOptions, path (deprecated)}); the deprecated auth: {provider, credentials} is still
+    #   turned into an x-chroma-token header. No environment variable carries a credential.
+    #   The open-source server has no built-in auth since 1.0.0 (see the Python rule).
+    # - @qdrant/js-client-rest 1.20.0: new QdrantClient({url, host, apiKey, headers, ...});
+    #   with neither url nor host it connects to 127.0.0.1.
+    # - weaviate-client 3.15.1: connectToCustom({httpHost, ..., authCredentials, headers}) and
+    #   connectToLocal({host, ..., authCredentials, headers}); headers usually carry
+    #   vectorizer keys (X-OpenAI-Api-Key), so only an Authorization header counts.
+    # - @zilliz/milvus2-sdk-node 3.0.6: new MilvusClient({address, token, username,
+    #   password, ...}) or new MilvusClient(address, ssl, username, password).
+    # - @langchain/community 1.1.29: new Chroma(embeddings, {url, clientParams,
+    #   chromaCloudAPIKey}) builds ChromaClient({path: url, ...clientParams}); new
+    #   Milvus(embeddings, {url, username, password, clientConfig}) builds MilvusClient and
+    #   reads only MILVUS_URL from the environment. Both have fromTexts/fromDocuments that take
+    #   the same arguments last. @langchain/qdrant 1.0.3 falls back to QDRANT_API_KEY from the
+    #   environment, and @langchain/weaviate takes a ready client, so neither is matched.
+    # Hosts are judged as in vector-db-client-without-auth; a host read from the environment
+    # (process.env.X ?? "default") can't be judged and is skipped.
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      This vector database client connects to a remote host without sending any credentials
+      (no API key, token, user and password, or auth header), so it only works if that server
+      accepts anonymous requests. Anyone who can reach the host can then do the same: read
+      every collection (embeddings can be inverted back to much of their source text), and
+      insert, change, or delete documents, which poisons what the RAG app retrieves. Turn on
+      the server's auth (a Qdrant `api_key`, Weaviate API-key or OIDC auth with anonymous
+      access off, Milvus `common.security.authorizationEnabled`, or an authenticating proxy in
+      front of Chroma, which has no built-in auth since 1.0) and pass the credential from a
+      secret store or the environment. If an authenticating proxy already guards this host
+      and the client gets its credential some other way, this finding is safe to ignore.
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-regex: (?s)\A(?=.*?["']chromadb["']).*
+              - pattern-either:
+                  - pattern: 'new ChromaClient({..., host: "$H", ...})'
+                  - pattern: 'new ChromaClient({..., path: "$H", ...})'
+              - pattern-not: 'new ChromaClient({..., headers: $X, ...})'
+              - pattern-not: 'new ChromaClient({..., auth: $X, ...})'
+              - pattern-not: 'new ChromaClient({..., fetchOptions: $X, ...})'
+              - pattern-not: 'new ChromaClient({..., ...$X, ...})'
+          - patterns:
+              - pattern-regex: (?s)\A(?=.*?["']@qdrant/(?:js-client-rest|qdrant-js)["']).*
+              - pattern-either:
+                  - pattern: 'new QdrantClient({..., url: "$H", ...})'
+                  - pattern: 'new QdrantClient({..., host: "$H", ...})'
+              - pattern-not: 'new QdrantClient({..., apiKey: $X, ...})'
+              - pattern-not: 'new QdrantClient({..., headers: $X, ...})'
+              - pattern-not: 'new QdrantClient({..., ...$X, ...})'
+          - patterns:
+              - pattern-regex: (?s)\A(?=.*?["']weaviate-client["']).*
+              - pattern-either:
+                  - pattern: '$W.connectToCustom({..., httpHost: "$H", ...})'
+                  - pattern: '$W.connectToLocal({..., host: "$H", ...})'
+                  - pattern: 'connectToCustom({..., httpHost: "$H", ...})'
+                  - pattern: 'connectToLocal({..., host: "$H", ...})'
+              - pattern-not: '$F({..., authCredentials: $X, ...})'
+              - pattern-not: '$F({..., ...$X, ...})'
+              # Headers count only when they visibly carry an Authorization header, or can't
+              # be read (a variable).
+              - pattern-not-inside:
+                  patterns:
+                    - pattern: '$F({..., headers: $HD, ...})'
+                    - metavariable-regex:
+                        metavariable: $HD
+                        regex: (?is)^(?:(?!\{)|.*?["']?authorization["']?\s*:)
+          - patterns:
+              - pattern-regex: (?s)\A(?=.*?["']@zilliz/milvus2-sdk-node["']).*
+              - pattern-either:
+                  - pattern: 'new MilvusClient({..., address: "$H", ...})'
+                  - pattern: 'new MilvusClient("$H")'
+                  - pattern: 'new MilvusClient("$H", $SSL)'
+              - pattern-not: 'new MilvusClient({..., token: $X, ...})'
+              - pattern-not: 'new MilvusClient({..., username: $X, ...})'
+              - pattern-not: 'new MilvusClient({..., password: $X, ...})'
+              - pattern-not: 'new MilvusClient({..., ...$X, ...})'
+          # LangChain.js stores that build these clients from their own arguments.
+          - patterns:
+              - pattern-regex: (?s)\A(?=.*?["']@langchain/community/vectorstores/chroma["']).*
+              - pattern-either:
+                  - pattern: 'new Chroma($E, {..., url: "$H", ...})'
+                  - pattern: 'Chroma.$CM(..., {..., url: "$H", ...})'
+              - pattern-not: 'new Chroma($E, {..., clientParams: $X, ...})'
+              - pattern-not: 'Chroma.$CM(..., {..., clientParams: $X, ...})'
+              - pattern-not: 'new Chroma($E, {..., chromaCloudAPIKey: $X, ...})'
+              - pattern-not: 'Chroma.$CM(..., {..., chromaCloudAPIKey: $X, ...})'
+              - pattern-not: 'new Chroma($E, {..., ...$X, ...})'
+              - pattern-not: 'Chroma.$CM(..., {..., ...$X, ...})'
+          - patterns:
+              - pattern-regex: (?s)\A(?=.*?["']@langchain/community/vectorstores/milvus["']).*
+              - pattern-either:
+                  - pattern: 'new Milvus($E, {..., url: "$H", ...})'
+                  - pattern: 'Milvus.$CM(..., {..., url: "$H", ...})'
+              - pattern-not: 'new Milvus($E, {..., username: $X, ...})'
+              - pattern-not: 'Milvus.$CM(..., {..., username: $X, ...})'
+              - pattern-not: 'new Milvus($E, {..., password: $X, ...})'
+              - pattern-not: 'Milvus.$CM(..., {..., password: $X, ...})'
+              - pattern-not: 'new Milvus($E, {..., clientConfig: $X, ...})'
+              - pattern-not: 'Milvus.$CM(..., {..., clientConfig: $X, ...})'
+              - pattern-not: 'new Milvus($E, {..., ...$X, ...})'
+              - pattern-not: 'Milvus.$CM(..., {..., ...$X, ...})'
+      - metavariable-regex:
+          metavariable: $H
+          regex: |-
+            (?xi)
+            # --- vector DB remote host (begin): build.py keeps this block identical in
+            # the vector-db-client-without-auth rules; edit every copy together. ---
+            (?(DEFINE)
+              (?<oct> 25[0-5] | 2[0-4]\d | 1\d\d | [1-9]?\d )
+              (?<lab> [a-z0-9] [a-z0-9-]*+ )
+              (?<tail> (?: : \d*+ )?+ (?: [/?\#] \S*+ )?+ \z ) )
+            # An optional scheme, and no user name or password in the URL (a credential).
+            \A (?: [a-z] [a-z0-9+.-]*+ :// )?+
+            (?! [^/?\#\s]*+ @ )
+            # A public IPv4 address: not unspecified, private, loopback, link-local, or shared
+            # (carrier-grade NAT, Tailscale).
+            (?: (?! (?: 0 | 10 | 127 ) \. | 169\.254\. | 192\.168\. | 172\.(?:1[6-9]|2\d|3[01])\.
+                  | 100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\. )
+                (?&oct) (?: \. (?&oct) ){3}
+              # A public IPv6 address: not loopback, unique-local, or link-local.
+              | \[ (?! ::1?\] | f[cd] | fe[89ab] ) [0-9a-f:.]++ \]
+              # A dotted host name with no internal-network label, outside the vendors'
+              # managed clouds (which always require a key), and not a Milvus Lite .db file.
+              | (?! [a-z0-9.-]*? (?<![a-z0-9-])
+                    (?: localhost | internal | intranet | local | localdomain | lan | svc | cluster
+                      | private | corp | home ) (?![a-z0-9-]) )
+                (?! [a-z0-9.-]*? (?<![a-z0-9-])
+                    (?: cloud\.qdrant\.io | weaviate\.cloud | weaviate\.network | semi\.network
+                      | zilliz(?:cloud)?\.com | trychroma\.com ) \.?+ (?![a-z0-9.-]) )
+                (?: (?&lab) \. )++ (?! db (?&tail) ) [a-z] [a-z0-9-]*+ \.?+ )
+            (?&tail)
+            # --- vector DB remote host (end) ---
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM09:2026 - Vector and Embedding Weaknesses"
+        - "LLM08:2025 - Vector and Embedding Weaknesses"
+      owasp-aisvs:
+        - "v1.01-C5.2.1 - AI Resource Authorization & Classification"
+      mitre-atlas:
+        - "AML.T0132 - Misconfigured or Publicly Exposed AI Services"
+        - "AML.T0085.000 - Data from AI Services: RAG Databases"
+      cwe:
+        - "CWE-306: Missing Authentication for Critical Function"
+      # The server may sit behind an authenticating proxy.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [chromadb, qdrant, weaviate, milvus, langchain]
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM09_VectorAndEmbeddingWeaknesses.md
+        - https://github.com/OWASP/AISVS/blob/v1.01/1.01/en/0x10-C05-Access-Control-and-Identity.md
+        - https://cwe.mitre.org/data/definitions/306.html
+        - https://www.npmjs.com/package/chromadb/v/3.5.0
+        - https://github.com/chroma-core/chroma/blob/1.5.9/rust/frontend/src/auth/mod.rs
+        - https://github.com/qdrant/qdrant-js/tree/v1.20.0/packages/js-client-rest
+        - https://www.npmjs.com/package/weaviate-client/v/3.15.1
+        - https://www.npmjs.com/package/@zilliz/milvus2-sdk-node/v/3.0.6
+        - https://www.npmjs.com/package/@langchain/community/v/1.1.29
+        - https://www.legitsecurity.com/blog/the-risks-lurking-in-publicly-exposed-genai-development-services
+        - https://www.upguard.com/blog/open-chroma-databases-ai-attack-surface

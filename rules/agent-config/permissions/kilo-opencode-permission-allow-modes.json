@@ -1,0 +1,37 @@
+{
+  "customModes": [
+    {
+      "slug": "builder",
+      "name": "Builder",
+      "roleDefinition": "You build features. Prefer \"groups\": [\"read\"] style answers.",
+      # ruleid: kilo-opencode-permission-allow-modes
+      "groups": ["read", "edit", "browser", "command", "mcp"]
+    },
+    {
+      "slug": "translator",
+      "name": "Translator",
+      # ok: kilo-opencode-permission-allow-modes
+      "groups": ["read", ["edit", { "fileRegex": "locales/.*\\.json$", "description": "Locale files" }]]
+    },
+    {
+      "name": "Shell",
+      "groups": [
+        "read",
+        # ruleid: kilo-opencode-permission-allow-modes
+        ["command", { "description": "Runs anything" }]
+      ],
+      "slug": "shell"
+    },
+    {
+      "slug": "architect",
+      "name": "Architect",
+      # ok: kilo-opencode-permission-allow-modes
+      "groups": ["read", "edit", "command"]
+    },
+    {
+      "slug": "auditor",
+      # ok: kilo-opencode-permission-allow-modes
+      "groups": ["read", "mcp"]
+    }
+  ]
+}

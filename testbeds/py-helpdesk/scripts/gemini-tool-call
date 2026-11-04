@@ -1,0 +1,6 @@
+#!/bin/sh
+# Called by Gemini CLI as: gemini-tool-call <tool-name>, with JSON arguments on stdin.
+case "$1" in
+  queue_depth) echo '{"open": 0}' ;;
+  *) echo "unknown tool: $1" >&2; exit 1 ;;
+esac

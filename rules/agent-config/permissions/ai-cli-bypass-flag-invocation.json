@@ -1,0 +1,17 @@
+{
+  "name": "helpdesk-tools",
+  // ok: ai-cli-bypass-flag-invocation
+  "description": "Wraps claude --dangerously-skip-permissions for the sandbox image",
+  "scripts": {
+    // ruleid: ai-cli-bypass-flag-invocation
+    "ai:fix": "claude -p \"summarize the failing tests\" --dangerously-skip-permissions",
+    // ruleid: ai-cli-bypass-flag-invocation
+    "ai:review": "COPILOT_ALLOW_ALL=1 copilot -p 'review the diff'",
+    // ruleid: ai-cli-bypass-flag-invocation
+    "ai:npx": "npm test || npx -y @anthropic-ai/claude-code -p 'x' --permission-mode bypassPermissions",
+    // ok: ai-cli-bypass-flag-invocation
+    "ai:safe": "codex exec --sandbox read-only 'review the diff'",
+    // ok: ai-cli-bypass-flag-invocation
+    "ai:help": "echo \"run claude --dangerously-skip-permissions only in the container\""
+  }
+}

@@ -1,0 +1,228 @@
+rules:
+  - id: unsafe-model-deserialization
+    languages: [python]
+    severity: WARNING
+    message: >-
+      This loads a model, checkpoint, vector index, array, or graph checkpoint with a
+      deserializer that can run arbitrary Python: pickle, Keras lambdas, or LangGraph's
+      import-anything revivers. Either the code turns off the library's safe loader, uses a
+      loader that is unsafe by default, or unpickles a file fetched from a model hub. Anyone who
+      can write or swap that file (a hub repo owner, a shared bucket, a user upload) gets code
+      execution in this process when it loads. Keep the safe defaults (`weights_only=True`,
+      `allow_pickle=False`, `safe_mode=True`, no `allow_dangerous_deserialization`,
+      `pickle_fallback`, or allow-all module lists; give skops a reviewed type list, not
+      `get_untrusted_types()`), store weights as safetensors, and load pickle-based files only
+      from storage you control. For a hub file you cannot avoid, pin `revision=` to a reviewed
+      commit SHA.
+    pattern-either:
+      # --- PyTorch ------------------------------------------------------------------------
+      # torch.load is weights-only by default since 2.6, so only the explicit opt-out counts.
+      # The keyword also appears on Lightning's loaders (load_from_checkpoint, Fabric.load,
+      # Trainer.fit/validate/test/predict) with the same meaning. On save functions
+      # (Trainer.save_checkpoint) it means "save only weights", so callees whose last name
+      # contains save/dump/export/write are skipped. A dict(...) of load options matches too.
+      - patterns:
+          - pattern: $FN(..., weights_only=False, ...)
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(?!.*(?i:save|dump|export|write)\w*$)
+      # An explicit pickle_module turns weights_only off by default (and weights_only=True
+      # with a pickle_module raises), so it always means a full unpickle.
+      - patterns:
+          - pattern-either:
+              - pattern: torch.load(..., pickle_module=$PM, ...)
+              - pattern: torch.load($F, $ML, $PM, ...)
+          - pattern-not: torch.load(..., pickle_module=None, ...)
+          - pattern-not: torch.load($F, $ML, None, ...)
+      # Hub URL loaders still default to weights_only=False (torch 2.14.1), so leaving it out
+      # counts. Any explicit value is left to the branch above (False fires there; a variable
+      # can't be resolved and is left alone).
+      - patterns:
+          - pattern-either:
+              - pattern: torch.hub.load_state_dict_from_url(...)
+              - pattern: torch.utils.model_zoo.load_url(...)
+          - pattern-not: $LOADER(..., weights_only=$W, ...)
+      # Lightning defaults weights_only to False for http(s) checkpoint paths
+      # (LightningModule.load_from_checkpoint, Trainer.fit/validate/test/predict, Fabric.load).
+      - patterns:
+          - pattern-either:
+              - pattern: $M.load_from_checkpoint("$URL", ...)
+              - pattern: $M.load_from_checkpoint(..., checkpoint_path="$URL", ...)
+              - pattern: $M.$RUN(..., ckpt_path="$URL", ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $M = lightning.Fabric(...)
+                          ...
+                      - pattern-inside: |
+                          $M = lightning.fabric.Fabric(...)
+                          ...
+                  - pattern: $M.load("$URL", ...)
+          - pattern-not: $M.$ANY(..., weights_only=$W, ...)
+          - metavariable-regex:
+              metavariable: $URL
+              regex: (?i)https?://
+      # Process-wide opt-out: torch.load calls without an explicit weights_only unpickle.
+      - patterns:
+          - pattern-either:
+              - pattern: os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "$V"
+              - pattern: os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "$V")
+              - pattern: os.putenv("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "$V")
+              - pattern: os.environ.update(..., TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD="$V", ...)
+              - pattern: '{..., "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD": "$V", ...}'
+          - metavariable-regex:
+              metavariable: $V
+              regex: (?i)(1|y|yes|true)$
+      # --- NumPy --------------------------------------------------------------------------
+      # np.load, NpzFile, and format.read_array default to allow_pickle=False. np.save and
+      # friends default to True, which only affects writing, so save/write callees are
+      # skipped.
+      - patterns:
+          - pattern: $FN(..., allow_pickle=True, ...)
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(?!.*(?i:save|dump|export|write)\w*$)
+      - pattern: numpy.load($F, $MM, True, ...)
+      # --- LangChain ----------------------------------------------------------------------
+      # FAISS / Annoy / ScaNN / TileDB load_local, FAISS.deserialize_from_bytes,
+      # TFIDFRetriever.load, the Databricks and SelfHosted LLM wrappers, and load_llm all
+      # unpickle when this is True.
+      - pattern: $FN(..., allow_dangerous_deserialization=True, ...)
+      # --- LangGraph (JsonPlusSerializer) -------------------------------------------------
+      # pickle_fallback unpickles "pickle" entries; allowed_json_modules=True and
+      # allowed_msgpack_modules=True import any module and call any class named in the
+      # checkpoint.
+      - pattern: $FN(..., pickle_fallback=True, ...)
+      - pattern: $FN(..., allowed_json_modules=True, ...)
+      - pattern: $FN(..., allowed_msgpack_modules=True, ...)
+      # --- Keras 3 and tf.keras / tf_keras ------------------------------------------------
+      # safe_mode=False lets a .keras file deserialize Python lambdas (bytecode). The keyword
+      # is generic, so only Keras's loader names count.
+      - patterns:
+          - pattern: $FN(..., safe_mode=False, ...)
+          - metavariable-regex:
+              metavariable: $FN
+              regex: (.*\.)?(load_model|deserialize_keras_object|from_config|SafeModeScope)$
+      - pattern-either:
+          - pattern: keras.saving.load_model($F, $CO, $C, False, ...)
+          - pattern: keras.models.load_model($F, $CO, $C, False, ...)
+          - pattern: tensorflow.keras.models.load_model($F, $CO, $C, False, ...)
+          - pattern: tensorflow.keras.saving.load_model($F, $CO, $C, False, ...)
+          - pattern: tf_keras.models.load_model($F, $CO, $C, False, ...)
+          - pattern: tf_keras.saving.load_model($F, $CO, $C, False, ...)
+      - patterns:
+          - pattern: $SCOPE(False)
+          - metavariable-regex:
+              metavariable: $SCOPE
+              regex: (.*\.)?SafeModeScope$
+      # Process-wide: keras.config.enable_unsafe_deserialization() (Keras 3),
+      # tf_keras.__internal__.enable_unsafe_deserialization() (Keras 2).
+      - patterns:
+          - pattern: $FN()
+          - metavariable-regex:
+              metavariable: $FN
+              regex: (.*\.)?enable_unsafe_deserialization$
+      # --- skops --------------------------------------------------------------------------
+      # Passing get_untrusted_types() back as trusted= approves whatever types the file
+      # declares, which defeats the check. (trusted=True was the same bypass before 0.10.)
+      - pattern: skops.io.$LOAD(..., trusted=<... skops.io.get_untrusted_types(...) ...>, ...)
+      - pattern: skops.io.$LOAD($F, <... skops.io.get_untrusted_types(...) ...>)
+      - pattern: skops.io.$LOAD(..., trusted=True, ...)
+      - patterns:
+          - pattern-inside: |
+              $U = skops.io.get_untrusted_types(...)
+              ...
+          - pattern-either:
+              - pattern: skops.io.$LOAD(..., trusted=$U, ...)
+              - pattern: skops.io.$LOAD($F, $U)
+      # --- Pickle-format files from the Hugging Face Hub ----------------------------------
+      # A plain pickle loader has no safe mode, so only a file that comes from a hub counts.
+      # This rule flags the download when it names a pickle-format file, wherever the path
+      # goes next. Every other hub or URL download that reaches a pickle loader is the taint
+      # rule pickle-load-from-model-hub's (its sources exclude these downloads, so the two
+      # never report the same file). A download pinned to a commit SHA is treated like a
+      # pinned trust_remote_code load and left alone.
+      - patterns:
+          - pattern-either:
+              - pattern: $DL(..., filename="=~/(?i)\.(pkl|pickle|joblib|dill|cloudpickle)$/", ...)
+              - pattern: $DL($REPO, "=~/(?i)\.(pkl|pickle|joblib|dill|cloudpickle)$/", ...)
+              # The same check on an f-string filename such as f"{name}.joblib".
+              - patterns:
+                  - pattern-either:
+                      - pattern: $DL(..., filename=$NAME, ...)
+                      - pattern: $DL($REPO, $NAME, ...)
+                  - metavariable-regex:
+                      metavariable: $NAME
+                      regex: (?is)^f["'].*\.(pkl|pickle|joblib|dill|cloudpickle)["']$
+          - pattern-not: $DL(..., revision="=~/^[0-9a-fA-F]{40}$/", ...)
+          # metavariable-pattern matches anywhere inside the binding, so first make sure the
+          # binding is a bare (dotted) name.
+          - metavariable-regex:
+              metavariable: $DL
+              regex: ^[\w.]+$
+          - metavariable-pattern:
+              metavariable: $DL
+              pattern-either:
+                - pattern: huggingface_hub.hf_hub_download
+                - pattern: $API.hf_hub_download
+      # pandas.read_pickle fetches URLs itself, so a URL literal is a remote pickle.
+      - patterns:
+          - pattern: pandas.read_pickle("$URL", ...)
+          - metavariable-regex:
+              metavariable: $URL
+              regex: (?i)https?://
+      # --- fastai ---------------------------------------------------------------------------
+      # from_pretrained_fastai downloads a repo snapshot and calls load_learner on its
+      # model.pkl, which is torch.load with pickle_module and weights_only=False (fastai
+      # 2.8.12, huggingface-hub 2.2.0). It is always hub-sourced, so it counts unless the
+      # revision (or a repo_id@revision suffix) is a commit SHA. load_learner on a local
+      # file is left alone like any local pickle; fed a hub or URL download, it is a sink of
+      # pickle-load-from-model-hub.
+      - patterns:
+          - pattern: huggingface_hub.from_pretrained_fastai(...)
+          - pattern-not: huggingface_hub.from_pretrained_fastai(..., revision="=~/^[0-9a-fA-F]{40}$/", ...)
+          - pattern-not: huggingface_hub.from_pretrained_fastai("=~/@[0-9a-fA-F]{40}$/", ...)
+          - pattern-not: huggingface_hub.from_pretrained_fastai(repo_id="=~/@[0-9a-fA-F]{40}$/", ...)
+      # --- Load options kept in a dict and passed as **kwargs -----------------------------
+      # The finding sits on the dict. safe_mode is too generic a key to match in a dict.
+      - pattern: '{..., "weights_only": False, ...}'
+      - pattern: '{..., "allow_pickle": True, ...}'
+      - pattern: '{..., "allow_dangerous_deserialization": True, ...}'
+      - pattern: '{..., "pickle_fallback": True, ...}'
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-aisvs:
+        - "v1.01-C4.1.2 - AI Workload Sandboxing & Validation"
+        - "v1.01-C6.1.1 - Model Artifact Integrity"
+      mitre-atlas:
+        - "AML.T0011.000 - User Execution: Unsafe AI Artifacts"
+        - "AML.T0010.003 - AI Supply Chain Compromise: Model"
+      cwe:
+        - "CWE-502: Deserialization of Untrusted Data"
+      confidence: HIGH
+      likelihood: LOW
+      impact: HIGH
+      technology: [pytorch, lightning, numpy, langchain, langgraph, keras, tensorflow, skops, huggingface, fastai]
+      # API shapes verified 2026-10-21 against: torch v2.14.1 (torch/serialization.py load,
+      # torch/hub.py load_state_dict_from_url, torch/utils/model_zoo.py) and v2.6.0;
+      # lightning 2.6.6; numpy v2.5.4 (lib/_npyio_impl.py, lib/_format_impl.py);
+      # langchain-community 0.4.2; langgraph-checkpoint 4.3.0 (serde/jsonplus.py);
+      # keras 3.15.1; tf-keras 2.21.0; skops 0.16.0 (io/_persist.py); huggingface-hub 2.2.0
+      # (file_download.py, fastai_utils.py); fastai 2.8.12 (learner.py load_learner).
+      references:
+        - https://docs.pytorch.org/docs/stable/notes/serialization.html
+        - https://github.com/pytorch/pytorch/blob/v2.14.1/torch/hub.py
+        - https://github.com/advisories/GHSA-53q9-r3pm-6pq6
+        - https://numpy.org/doc/stable/reference/generated/numpy.load.html
+        - https://github.com/langchain-ai/langchain-community/blob/libs/community/v0.4.2/libs/community/langchain_community/vectorstores/faiss.py
+        - https://github.com/advisories/GHSA-wwqv-p2pp-99h5
+        - https://keras.io/api/models/model_saving_apis/model_saving_and_loading/
+        - https://skops.readthedocs.io/en/stable/persistence.html
+        - https://huggingface.co/docs/hub/en/security-pickle
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md
+        - https://cwe.mitre.org/data/definitions/502.html

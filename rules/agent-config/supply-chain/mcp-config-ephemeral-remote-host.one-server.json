@@ -1,0 +1,10 @@
+{
+  // Continue's one-server file format: a remote server at the root, no mcpServers wrapper.
+  "type": "sse",
+  // ruleid: mcp-config-ephemeral-remote-host
+  "url": "http://203.0.113.50/sse",
+  "headers": {
+    // ok: mcp-config-ephemeral-remote-host
+    "X-Team": "helpdesk"
+  }
+}

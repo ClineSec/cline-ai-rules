@@ -1,0 +1,19 @@
+{
+  // .gemini/settings.json with installed tools only
+  "tools": {
+    // ok: agent-settings-command-runs-local-script
+    "discoveryCommand": "helpdesk-tools discover",
+    "shell": {
+      // ok: agent-settings-command-runs-local-script
+      "pager": "less -FRX"
+    }
+  },
+  "mcp": {
+    // ok: agent-settings-command-runs-local-script
+    "serverCommand": "uvx --from helpdesk-mcp==1.4.2 helpdesk-mcp"
+  },
+  "hooksConfig": {
+    // ok: agent-settings-command-runs-local-script
+    "discoveryCommand": "./scripts/not-a-gemini-key.sh"
+  }
+}

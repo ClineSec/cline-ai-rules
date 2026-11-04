@@ -1,0 +1,234 @@
+rules:
+  - id: ai-cli-bypass-flag-invocation
+    # Regex over command lines in CI files, shell scripts, Makefiles, and package.json scripts.
+    # Python and JS/TS argv lists are covered by ai-cli-bypass-flag-invocation-py and -ts, and
+    # agent GitHub Actions inputs by ai-cli-bypass-flag-invocation-gha.
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This command starts a coding agent with its approvals or sandbox turned off, so every
+      shell command and file edit the model decides on runs at once with the job's or user's
+      full access: its checkout, network, and secrets (a GitHub token, cloud and model API keys).
+      In CI and scripts the agent usually reads text other people control (an issue, a pull
+      request, a failing test log, a web page), and a prompt injection in that text can then run
+      arbitrary commands or push code. If the job runs in a disposable container or VM with no
+      secrets and no write token, that may be intended; otherwise allowlist only the tools the
+      job needs (claude --permission-mode dontAsk --allowedTools "Bash(npm test)" "Read", codex
+      --sandbox workspace-write, gemini --approval-mode auto_edit or a policy file, copilot
+      --allow-tool 'shell(npm test)' or --sandbox, kiro-cli --trust-tools=read_file,grep_search
+      or --sandbox, GOOSE_MODE=smart_approve, cline --auto-approve false), and keep write tokens and deploy secrets out of the agent's step.
+    paths:
+      include:
+        - ".github/workflows/*.yml"
+        - ".github/workflows/*.yaml"
+        - ".gitlab-ci.yml"
+        - ".circleci/config.yml"
+        - "azure-pipelines.yml"
+        - "bitbucket-pipelines.yml"
+        - "Jenkinsfile"
+        - "*.sh"
+        - "*.bash"
+        - "*.zsh"
+        - "Makefile"
+        - "GNUmakefile"
+        - "*.mk"
+        - "justfile"
+        - "Justfile"
+        - "package.json"
+      # Dockerfiles, compose files, and dev containers are left out on purpose: running the
+      # agent unattended inside a container is the setup the vendors document for these flags,
+      # and whether that container is a real boundary is not visible in the file.
+    pattern-regex: |-
+      (?xm)
+      (?(DEFINE)
+        # --- shared command-position groups (begin): build.py keeps this block identical in
+        # ai-cli-default-auto-approve and subagent-permission-mode-cli; edit all three together. ---
+        # A quoted string, consumed whole so text inside it (a prompt, an echo message) is
+        # never read as a program or a flag. \" escapes inside "..." are skipped.
+        (?<q> " (?: [^"\\\n]++ | \\. )*+ " | ' [^'\n]*+ ' )
+        # A quote with no partner later on the line (an apostrophe in a plain YAML scalar).
+        (?<lone> " (?![^"\n]*") | ' (?![^'\n]*') )
+        # The rest of one command: words, quoted strings, \-newline continuations, and
+        # redirections like 2>&1. It stops at a newline, a comment, and ; & | separators.
+        # Each step is atomic and takes a whole word, so a long line costs one step per word,
+        # not per character: per-character steps hit PCRE's match limit on a line of about
+        # 25 KB, and OpenGrep then drops every finding in the file.
+        (?<g> (?> (?&q) | (?&lone) | \\\r?\n | \\[^\r\n] | \d?[<>]&\d? | [^\s"'\#;&|\\<>]++
+          | [^\n"'\#;&|\\] )*? )
+        # Everything before the program on its line, which may span earlier commands. A # that
+        # follows whitespace starts a comment and ends the search. A quoted string is stepped
+        # into only where it holds a command: a YAML or JSON value (run: "...", package.json
+        # scripts), an assignment (CMD="...", alias x='...'), or the argument of sh -c, eval,
+        # and Jenkins' sh '...'. Other strings (echo, grep, prompts) are skipped whole.
+        (?<pre> (?> (?<= : | :\s | = | -c\s | -lc\s | -ec\s | \beval\s | \bsh\s | \bbash\s | \bzsh\s ) ["']
+          | (?&q) | (?&lone) | \\[^\r\n] | (?<=\S)\#
+          # A run of plain words in one atomic step (a program never starts inside one, for
+          # the same match limit); it stops before a shell keyword, which a program can follow.
+          | (?: (?! (?:then|do|else|if|elif|while|until) [ \t] ) [^\s"'\#\\;&|(`{]++ [ \t]*+ )++
+          | [^\n"'\#\\] )*? )
+        # The program is in command position: at the start of the line (after indentation, a
+        # YAML list dash, a key such as run: or script:, a NAME = assignment, or a Makefile
+        # recipe's @ - + prefix), after ; & | ( ` { or a shell keyword (then, do, else, if,
+        # elif, while, until, maybe with !), or at the start of a
+        # quoted string stepped into above.
+        # Prose that mentions a CLI (a prompt: | block, a message) is not in command position.
+        # NAME=value assignments and wrappers like sudo, env, timeout, nohup, exec and xargs
+        # may come before the program. A program run by docker run or ssh is not followed.
+        (?<cmd>
+          (?: ^ (?: \t [@+-]{1,2}
+                  | [ \t]*+ (?: - [ \t]++ )?
+                    # A shell case arm's label (cline) or a|b)), consumed whole so the label
+                    # itself is never read as the program.
+                    (?: \(? [^\s()|;&"'$]++ (?: \| [^\s()|;&"'$]++ )*+ \) [ \t]++ )?+
+                    (?: [\w.-]++ [ \t]*+ : [ \t]++ | [\w.-]++ [ \t]*+ [:?+!]?= [ \t]*+ )? )
+            | (?<=[;&|(`{]) [ \t]*+
+            | (?<![\w-]) (?:then|do|else|if|elif|while|until) [ \t]++ (?: ! [ \t]++ )?
+            | (?<= : ["'] | :\s["'] | =["'] | c\s["'] | \beval\s["'] | \bsh\s["'] | \bbash\s["'] | \bzsh\s["'] ) )
+          (?: [A-Za-z_]\w*+ = (?: (?&q) | [^\s"'\#;&|]*+ ) [ \t]++
+            | (?: sudo | env | exec | nohup | time | command | timeout | xargs | nice | setsid | stdbuf )
+              (?: [ \t]++ (?: -u [ \t]++ [^\s;&|]++ | -[^\s=;&|]++ (?:=[^\s;&|]*+)? | \d+[smhd]? | [A-Za-z_]\w*=[^\s;&|]*+ ) )*+
+              [ \t]++ )*
+          # A path to the binary, maybe quoted: ./node_modules/.bin/claude, "$HOME/bin/codex".
+          ["']?+ (?: [\w.~${}-]*+ / )*+
+        )
+        (?<ws> [ \t]++ | [ \t]*+ \\\r?\n [ \t]*+ )
+        (?<v> (?:=|(?&ws)) \\?["']? )
+        (?<end> (?= \\?["'`)\s;&|] | $ ) )
+        # A package runner in front of a package name: npx -y @anthropic-ai/claude-code.
+        (?<runner> (?: npx | bunx | pnpx | pnpm (?&ws) dlx | yarn (?&ws) dlx | npm (?&ws) exec )
+          (?: (?&ws) (?: -y | --yes | -q | --quiet | -- ) )*+ (?&ws) )
+        (?<pkgv> (?: @[\w.^~*-]+ )? )
+        # --- shared command-position groups (end) ---
+        # A word start, for the COPILOT_ALLOW_ALL assignment (export, env:, docker -e).
+        (?<at> (?: ^ | (?<=[\s"'`(;&|{]) ) (?<!echo\s)(?<!echo\s["'])(?<!printf\s)(?<!printf\s["']) )
+        # (?&pre) for that assignment: its word runs also stop before the variable's name, which
+        # is not a program and so may sit inside a run (export COPILOT_ALLOW_ALL=1).
+        (?<envpre> (?> (?<= : | :\s | = | -c\s | -lc\s | -ec\s | \beval\s | \bsh\s | \bbash\s | \bzsh\s ) ["']
+          | (?&q) | (?&lone) | \\[^\r\n] | (?<=\S)\#
+          | (?: (?! (?:COPILOT_ALLOW_ALL|GOOSE_MODE) [ \t]*+ [:=] ) [^\s"'\#\;&|(`{]++ [ \t]*+ )++
+          | [^\n"'\#\\] )*? )
+        # A variable that names the tool: $(CLAUDE), ${CODEX_BIN}, $GEMINI.
+        (?<claude> claude | (?&runner) @anthropic-ai/claude-code (?&pkgv)
+          | \$ (?: \( (?i:\w*claude\w*) \) | \{ (?i:\w*claude\w*) \} | (?i:\w*claude\w*) ) )
+        (?<codex> codex | (?&runner) @openai/codex (?&pkgv)
+          | \$ (?: \( (?i:\w*codex\w*) \) | \{ (?i:\w*codex\w*) \} | (?i:\w*codex\w*) ) )
+        (?<gemini> gemini | (?&runner) @google/gemini-cli (?&pkgv)
+          | \$ (?: \( (?i:\w*gemini\w*) \) | \{ (?i:\w*gemini\w*) \} | (?i:\w*gemini\w*) ) )
+        (?<copilot> copilot | gh (?&ws) copilot | (?&runner) @github/copilot (?&pkgv)
+          | \$ (?: \( (?i:\w*copilot\w*) \) | \{ (?i:\w*copilot\w*) \} | (?i:\w*copilot\w*) ) )
+        (?<qwen> qwen | (?&runner) @qwen-code/qwen-code (?&pkgv)
+          | \$ (?: \( (?i:\w*qwen\w*) \) | \{ (?i:\w*qwen\w*) \} | (?i:\w*qwen\w*) ) )
+        (?<opencode> opencode | (?&runner) opencode-ai (?&pkgv)
+          | \$ (?: \( (?i:\w*opencode\w*) \) | \{ (?i:\w*opencode\w*) \} | (?i:\w*opencode\w*) ) )
+        (?<cline> cline | (?&runner) (?:cline|@cline/cli) (?&pkgv)
+          | \$ (?: \( (?i:\w*cline\w*) \) | \{ (?i:\w*cline\w*) \} | (?i:\w*cline\w*) ) )
+        # Kiro CLI and the Amazon Q Developer CLI it replaces.
+        (?<kiro> kiro-cli | kiro | q (?&ws) chat )
+        # Sandbox switches that keep auto-approval inside an OS or container sandbox.
+        (?<gemsb> (?: --sandbox (?:=true)? | -s | --sandbox-image ) (?&end) )
+        # Qwen Code's --sandbox / -s takes an optional value; false or 0 turns it off.
+        (?<qwensb> (?: --sandbox | -s ) (?! [\w-] | = \\?["']?(?:false|0)\b | [ \t]++ (?:false|0)\b ) )
+        (?<sb> --sandbox (?! [\w-] | = \\?["']?(?:false|disabled) | (?&ws) disabled ) )
+      )
+      # Prose keys (a step's name:, a package.json "description") are not commands.
+      ^ (?! [ \t]*+ (?:-[ \t]+)? "? (?:name|description|summary|title|message) "? [ \t]*+ : )
+      # The finding starts at the program, so a command split over \-continued lines is
+      # reported on its first line.
+      (?&pre)
+      (?:
+        (?&cmd) \K
+        (?:
+          # Claude Code 2.1.308: --dangerously-skip-permissions is --permission-mode
+          # bypassPermissions. --allow-dangerously-skip-permissions only adds the mode to the
+          # interactive Shift+Tab cycle, and auto and dontAsk keep checks, so none of those match.
+          (?&claude) (?&end) (?&g) (?<=\s)
+          (?: --dangerously-skip-permissions | --permission-mode (?&v) bypassPermissions ) (?&end)
+          # Codex 0.163: --yolo is an alias of --dangerously-bypass-approvals-and-sandbox (and
+          # --not-so-yolo is the sandboxed auto-review mode, which the (?<=\s) skips).
+        | (?&codex) (?&end) (?&g) (?<=\s)
+          (?: --dangerously-bypass-approvals-and-sandbox | --yolo
+            | (?:-s|--sandbox) (?&v) danger-full-access
+            | (?:-c|--config) (?&v) (?: sandbox_mode [ \t]*=[ \t]* \\?["']? danger-full-access
+                                     | default_permissions [ \t]*=[ \t]* \\?["']? :danger-full-access ) ) (?&end)
+          # Gemini CLI 0.65: --yolo / -y / --approval-mode yolo, unless --sandbox is on.
+        | (?&gemini) (?&end) (?! (?&g) (?<=\s) (?&gemsb) ) (?&g) (?<=\s)
+          (?: --yolo (?:=true)? | -y | --approval-mode (?&v) yolo ) (?&end)
+          # Qwen Code 0.26 (a Gemini CLI fork): the same --yolo / -y / --approval-mode yolo.
+        | (?&qwen) (?&end) (?! (?&g) (?<=\s) (?&qwensb) ) (?&g) (?<=\s)
+          (?: --yolo (?:=true)? | -y | --approval-mode (?&v) yolo ) (?&end)
+          # opencode 1.19: --auto, with hidden aliases --yolo and --dangerously-skip-permissions,
+          # approves every request not explicitly denied (opencode run and the TUI).
+        | (?&opencode) (?&end) (?&g) (?<=\s)
+          (?: --auto | --yolo | --dangerously-skip-permissions ) (?&end)
+          # Cline CLI 3.0.73: --yolo / -y, or --auto-approve true, turn approval on for every
+          # tool. A run with neither is ai-cli-default-auto-approve (Cline's default).
+        | (?&cline) (?&end) (?&g) (?<=\s)
+          (?: --yolo | -y | --auto-approve (?&v) true ) (?&end)
+          # GitHub Copilot CLI 1.0.102: --yolo and --allow-all imply --allow-all-tools.
+        | (?&copilot) (?&end) (?! (?&g) (?<=\s) (?&sb) ) (?&g) (?<=\s)
+          (?: --allow-all-tools | --allow-all | --yolo ) (?&end)
+          # Kiro CLI and q chat: --trust-all-tools, unless --sandbox is required. -a is its short
+          # form in q chat 1.19 (not documented for kiro-cli, so only q chat -a matches).
+        | (?: (?&kiro) (?&end) (?! (?&g) (?<=\s) (?&sb) ) (?&g) (?<=\s) --trust-all-tools
+            | q (?&ws) chat (?&end) (?! (?&g) (?<=\s) (?&sb) ) (?&g) (?<=\s) -a ) (?&end)
+          # Cursor CLI: --force / -f / --yolo, or --sandbox disabled. The bare "agent" binary
+          # name is generic, so it counts only with -p/--print on the same command.
+        | (?: cursor-agent | agent (?= (?&g) (?<=\s) (?:-p|--print) (?&end) ) ) (?&end)
+          (?! (?&g) (?<=\s) --sandbox (?&v) enabled ) (?&g) (?<=\s)
+          (?: --force | -f | --yolo | --sandbox (?&v) disabled ) (?&end)
+        )
+      )
+      # COPILOT_ALLOW_ALL is --allow-all as an environment variable (true also trusts the
+      # folder; 1, yes, on, y only approve tools). GOOSE_MODE=auto is goose's autonomous
+      # mode (goose 1.55: its default, but setting it overrides a configured approve mode).
+      | ^ (?! [ \t]*+ (?:-[ \t]+)? "? (?:name|description|summary|title|message) "? [ \t]*+ : )
+        (?&envpre) (?&at) \K
+        (?: COPILOT_ALLOW_ALL [ \t]*+ [:=] [ \t]*+ \\?["']? (?i: true | 1 | yes | on | y ) \\?["']?
+          | GOOSE_MODE [ \t]*+ [:=] [ \t]*+ \\?["']? auto \\?["']? ) (?= [\s;&|] | $ )
+      # A flag kept in a variable for later use (CLAUDE_FLAGS="...", UNATTENDED_ARGS := ...,
+      # AGENT_OPTS=(...)). Only flags that no other common tool has, and only in variables
+      # named for arguments, since the program is not in view. claude_args and codex-args
+      # are action inputs, reported by ai-cli-bypass-flag-invocation-gha.
+      | ^ [ \t]*+ (?: (?: export | readonly | local | declare (?:[ \t]++-\w++)*+ | - ) [ \t]++ )?
+        (?! ["']? (?:claude_args|codex-args) ["']? [ \t]*+ : )
+        ["']? (?i: [\w.-]*? (?:flags? | args? | argv | opts | options | cmd | command | params) [\w.-]*? ) ["']?
+        # Word-sized atomic steps, as in (?&g), so a long value doesn't hit the match limit.
+        [ \t]*+ (?: [:?+!]?= | : ) [ \t]*+ (?> [^\s"'(=:,\[\#]++ | [^\n\#] )*? (?<=[\s"'(=:,\[]) \K
+        (?: --dangerously-skip-permissions | --permission-mode (?&v) bypassPermissions
+          | --dangerously-bypass-approvals-and-sandbox | --trust-all-tools | --allow-all-tools ) (?&end)
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0112.000 - Machine Compromise: Local AI Agent"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code, codex, gemini-cli, qwen-code, copilot-cli, kiro-cli, cursor-cli, cline-cli, opencode, goose]
+      references:
+        - https://code.claude.com/docs/en/cli-reference
+        - https://code.claude.com/docs/en/permission-modes
+        - https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/utils/cli/src/shared_options.rs
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/cli/src/config/config.ts
+        - https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference
+        - https://kiro.dev/docs/reference/cli-commands/
+        - https://github.com/aws/amazon-q-developer-cli/blob/v1.19.7/crates/chat-cli/src/cli/chat/mod.rs
+        - https://cursor.com/docs/cli/reference/parameters
+        - https://github.com/QwenLM/qwen-code/blob/v0.26.0/packages/cli/src/config/top-level-options.ts
+        - https://github.com/cline/cline/blob/cli-v3.0.73/apps/cli/src/commands/program.ts
+        - https://github.com/anomalyco/opencode/blob/v1.19.3/packages/opencode/src/cli/cmd/run.ts
+        - https://github.com/aaif-goose/goose/blob/v1.55.0/documentation/docs/guides/environment-variables.md
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

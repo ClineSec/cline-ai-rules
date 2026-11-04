@@ -1,0 +1,225 @@
+rules:
+  - id: mcp-tool-description-instructions
+    # The text an MCP client shows the model for each tool: the description (a `description=`
+    # argument, or the function's docstring when there is none), parameter descriptions
+    # (`Field(description=...)`, fastmcp's `Annotated[str, "..."]`, JSON Schema
+    # "description" entries), and the server's `instructions`; prompt and resource
+    # descriptions too, which clients list the same way. Sources: MCP Python SDK v2.3.0
+    # (MCPServer.tool / add_tool / prompt / resource, mcp.types.Tool, whose input_schema
+    # also accepts inputSchema) and v1.30.0 (FastMCP.tool / add_tool), all falling back to
+    # `fn.__doc__`; fastmcp 4.1.3 (@mcp.tool bare or called,
+    # Tool.from_function, docstring and Annotated-string descriptions); Claude Agent SDK
+    # 0.2.173 @tool(name, description, input_schema). The indicators are OWASP MCP03's
+    # "Detection Indicators (Static Analysis)" (OWASP/www-project-mcp-top-10 165fe0f,
+    # 2026-07-29); zero-width and bidi characters are mcp-tool-description-hidden-unicode's,
+    # which takes its surfaces from this rule. The indicator regex is shared with
+    # mcp-tool-description-instructions-ts (build.py SHARED_REGEX): edit both together.
+    languages: [python]
+    severity: WARNING
+    message: >-
+      This tool's description (or an MCP prompt's or resource's), a parameter description, or
+      the server instructions contain text aimed at the model rather than a description: an
+      instruction tag such as `<IMPORTANT>`, "ignore previous instructions", telling the model
+      to keep something from the user, a rule for other tools, a hidden HTML comment, a
+      credential path such as `~/.ssh` together with an instruction to read or pass along its
+      contents, or an instruction to send secrets or conversation data to a URL or address.
+      MCP clients and agent frameworks put this text in the model's context as trusted, so
+      every agent that loads the tool follows it (tool poisoning), usually without the user
+      ever seeing it. Describe what the tool does and what its parameters mean, and nothing
+      else; if this code came from someone else, don't connect or load it until you know who
+      wrote that text and why.
+    patterns:
+      - pattern-either:
+          # A tool function's docstring: @mcp.tool / @mcp.tool(...) on MCPServer, FastMCP,
+          # and fastmcp, the Claude Agent SDK's @tool(...), and any other @<x>.tool
+          # registration (LangChain, CrewAI, and pydantic-ai also read the docstring); and
+          # the same for @mcp.prompt and @mcp.resource, whose docstrings clients list too.
+          - patterns:
+              - pattern-either:
+                  - pattern: |
+                      @$DEC(...)
+                      def $F(...):
+                          "$D"
+                          ...
+                  - pattern: |
+                      @$DEC
+                      def $F(...):
+                          "$D"
+                          ...
+              - metavariable-regex:
+                  metavariable: $DEC
+                  regex: ^(?:[\w.]*\.)?(?:tool|prompt|resource)$
+              - focus-metavariable: $D
+          # The docstring of a plain function in a file that registers functions as tools
+          # by reference: mcp.add_tool(fn), Tool.from_function(fn), mcp.tool()(fn). The
+          # file text is the gate because tying each registration to its function
+          # (def f ... add_tool(f)) times out on large modules.
+          - patterns:
+              - pattern-either:
+                  - pattern-regex: (?s)\A(?=.*?\.add_tool\().*
+                  - pattern-regex: (?s)\A(?=.*?\.from_function\().*
+                  - pattern-regex: (?s)\A(?=.*?\.tool\([^()]*\)\(\w).*
+              - pattern: |
+                  def $F(...):
+                      "$D"
+                      ...
+              - focus-metavariable: $D
+          # description= on a tool, prompt, or resource registration or definition, and
+          # instructions= on the server: @mcp.tool(description=...), @mcp.resource(uri,
+          # description=...), mcp.add_tool(fn, description=...),
+          # Tool.from_function(fn, description=...), the low-level types.Tool(...) returned
+          # from a list-tools handler, MCPServer(..., instructions=...).
+          - patterns:
+              - pattern-either:
+                  - patterns:
+                      - pattern: $C(..., description=$D, ...)
+                      - metavariable-regex:
+                          metavariable: $C
+                          regex: ^(?:[\w.]*\.)?(?:tool|add_tool|Tool|from_function|FunctionTool|prompt|resource|Prompt|Resource|ResourceTemplate|FunctionResource)$
+                  - patterns:
+                      - pattern: $C(..., instructions=$D, ...)
+                      - metavariable-regex:
+                          metavariable: $C
+                          regex: ^(?:[\w.]*\.)?(?:MCPServer|FastMCP|Server)$
+                  # Claude Agent SDK: @tool(name, description, input_schema).
+                  - pattern: claude_agent_sdk.tool($N, $D, ...)
+              - focus-metavariable: $D
+          # Only in files that import an MCP SDK, fastmcp, or the Claude Agent SDK:
+          # parameter descriptions, which the model reads with the tool description
+          # (Field(description=...) on a tool function's parameters or in a pydantic input
+          # model, fastmcp's Annotated[str, "..."], "description" entries in a JSON Schema
+          # such as a low-level Tool's input_schema or a Claude Agent SDK schema dict), and
+          # description or instructions text kept in a named constant.
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      from $MOD import $X
+                      ...
+                  - pattern-inside: |
+                      import $MOD
+                      ...
+                  - pattern-inside: |
+                      import $MOD as $AS
+                      ...
+              - metavariable-regex:
+                  metavariable: $MOD
+                  regex: ^(?:mcp|mcp_types|fastmcp|claude_agent_sdk)(?:\.|$)
+              - pattern-either:
+                  - pattern: pydantic.Field(..., description=$D, ...)
+                  - patterns:
+                      - pattern: Annotated[$T, $D]
+                      # A string literal, not a Field(...) or other metadata object.
+                      - metavariable-regex:
+                          metavariable: $D
+                          regex: ^[rRuU]?["']
+                  - pattern: '{..., "description": $D, ...}'
+                  # Description or instructions text kept in a module constant
+                  # (DESCRIPTION = "..." and later @mcp.tool(description=DESCRIPTION)),
+                  # recognized by its name. Linking the constant to its use times out on
+                  # large modules.
+                  - patterns:
+                      - pattern: $NAME = $D
+                      - metavariable-regex:
+                          metavariable: $NAME
+                          regex: (?i)^\w*(?:desc|instruction|docstring|usage|hint)
+                      # Text: a string, a concatenation in parentheses, or a dedent() call,
+                      # not a Field(...) or schema object reported where it is defined.
+                      - metavariable-regex:
+                          metavariable: $D
+                          regex: ^(?:[rRuUfF]{0,2}["'(]|(?:textwrap\.)?dedent\()
+              - focus-metavariable: $D
+      - metavariable-regex:
+          metavariable: $D
+          regex: |-
+            (?xis)
+            # --- MCP tool-description indicators (begin): build.py keeps this block identical in
+            # mcp-tool-description-instructions-ts; edit both together. ---
+            (?(DEFINE)
+              # A quote right before a phrase that is not the string literal's own opening quote
+              # ("phrases like 'ignore previous instructions'"), and a quote right after it.
+              (?<qb> (?<=['"`\x{201C}\x{2018}]) (?<!\A['"`]) (?<!\A[rbfu]['"]) (?<!\A['"]{3}) (?<!\A[rbfu]['"]{3}) )
+              (?<qa> [.,;:!?)]*+ ['"`\x{201D}\x{2019}] )
+              # Instruction tags aimed at the model: <IMPORTANT>, <system>, <instructions>, ...
+              (?<tag> < \s*+ (?:important|system|instructions?|secret|hidden|admin|critical) \b [^<>\n]{0,40}+ > )
+              # "ignore previous instructions" and its variants.
+              (?<override> \b (?:ignore|disregard|forget) \s++ (?:all\s++|any\s++)?+ (?:of\s++)?+ (?:the\s++|your\s++)?+
+                 (?:previous|prior|preceding|above|earlier|original|system|safety|developer) \s++
+                 (?:instructions?|directions?|directives?|rules|guidelines|guidance|prompts?|messages?|constraints?) \b )
+              # Hiding the tool's behaviour from the user.
+              (?<conceal>
+                   \b (?:do\s++not|don['\x{2019}]?t|never|must\s++not|should\s++not|shouldn['\x{2019}]?t) \s++ (?:ever\s++)?+
+                     (?:tell|inform|notify|alert|warn|mention|reveal|disclose) \b [^.]{0,40}? \busers?\b
+                 | \b (?:do\s++not|don['\x{2019}]?t|never) \s++ let \s++ (?:the\s++)?+ user \s++ know \b
+                 | \b without \s++ (?:telling|informing|notifying|alerting|warning|letting) \s++ (?:the\s++)?+ users?\b
+                 | \b (?:hide|conceal|keep) \s++ (?:this|it|that|these|those) \b [^.]{0,30}? \b from \s++ (?:the\s++)?+ users?\b
+                 | \b the \s++ user \s++ (?:must|should|need|needs) \s++ (?:not|never) \s++ (?:to\s++)?+ (?:know|see|be\s++told|find\s++out|notice) \b
+                 | \b (?:secretly|covertly|silently|quietly) \s++ (?:send|read|include|forward|copy|upload|add|call|run|append|attach|bcc|cc) \b )
+              # Rules for other tools or for the whole session ("when this tool is available, ...").
+              (?<shadow>
+                   \b when \s++ this \s++ tool \s++ is \s++ (?:available|present|loaded|installed|enabled|connected) \b
+                 | \b (?:all|every|any) \s++ (?:other\s++)?+ (?:e-?mails?|messages?|requests?|tool\s++calls?) \s++ (?:must|should|need\s++to) \s++
+                     (?:also\s++)?+ (?:be\s++)?+ (?:sent|forwarded|bcc'?d|cc'?d|copied|routed|redirected) \s++ to \b
+                 | \b (?:regardless\s++of|no\s++matter) \s++ what \s++ the \s++ user \s++ (?:says|asks|wants|requested|requests) \b )
+              # Text hidden in an HTML comment, which a rendered view doesn't show.
+              (?<comment> <!-- (?:(?!-->).){0,400}? [a-z]{3} )
+              # Credential and secret locations (MCP03's list plus common siblings and MCP client configs).
+              (?<path>
+                   (?<![\w.]) \.ssh \b | \b id_(?:rsa|dsa|ecdsa|ed25519) \b | (?<![\w.]) \.aws/ | (?<![\w.]) \.gnupg \b
+                 | (?<![\w.]) \.kube/config | (?<![\w.]) \.docker/config\.json | (?<![\w.]) \.(?:netrc|git-credentials|npmrc|pypirc) \b
+                 | /etc/(?:passwd|shadow|sudoers) \b | (?<![\w.]) \.env \b (?![\w-]) | (?<![\w.]) \.config/gcloud\b
+                 | \b (?:claude_desktop_config|mcp_config) \.json | (?<![\w.]) \.cursor/mcp\.json | (?<![\w.]) \.claude\.json
+                 | (?<![\w.]) \.(?:bash|zsh)_history \b )
+              # Words for secrets and conversation data.
+              (?<sensitive> \b (?:conversation|chat\s++(?:history|log|transcript)|message\s++history|(?:previous|prior|earlier)\s++messages
+                 |system\s++prompt|api[\s_-]?keys?|(?:access|auth|bearer|session)[\s_-]?tokens?|credentials?|secrets?|passwords?
+                 |private[\s_-]keys?|environment\s++variables|env\s++vars?|cookies) \b )
+              # An imperative send verb with a URL or email address after it.
+              (?<exfil> \b (?:send|post|upload|forward|transmit|exfiltrate|leak|bcc|cc|e-?mail|relay|curl|wget) \b
+                 .{0,160}? (?:https?://|\b[\w.+-]++@[\w-]++(?:\.[\w-]++)+) )
+              # Telling the model to do something before it uses this tool or answers.
+              (?<before> \b before \s++ (?:using|calling|invoking|running|executing|answering|responding|replying|you\s++(?:use|call|answer|respond)) \b )
+              # Telling the model to put a file's contents somewhere ("pass its content as 'sidenote'").
+              (?<carry> \b (?:pass|put|include|insert|place|provide|supply|attach|append|embed|add|copy|paste|send|forward|upload|post) \s++
+                 (?:(?:this\s++file'?s|the\s++file'?s|the|its|their|that|this)\s++)?+ (?:(?:full|entire|raw|complete|whole)\s++)?+
+                 (?:contents?|text|data|values?|lines) \b )
+              (?<strong> (?&tag) | (?&override) | (?&conceal) | (?&shadow) )
+            )
+            # --- MCP tool-description indicators (end) ---
+            # Fires on: a model-directed phrase that isn't quoted as an example, an HTML comment, a
+            # credential path together with an instruction to fetch or ship it, or a send verb aimed at
+            # a URL or address with secrets or conversation data as its object.
+            \A (?:
+                (?= .*? (?: (?!(?&qb)) (?&strong) | (?&qb) (?&strong) (?!(?&qa)) ) )
+              | (?= .*? (?&comment) )
+              | (?= .*? (?&path) ) (?= .*? (?: (?&before) | (?&carry) | (?&exfil) ) )
+              | (?= .*? \b (?:send|post|upload|forward|transmit|exfiltrate|leak|bcc|cc|e-?mail|relay|curl|wget) \b [^.]{0,80}? (?&sensitive) .{0,160}? (?:https?://|\b[\w.+-]++@[\w-]++(?:\.[\w-]++)+) )
+            )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM01:2026 - Prompt Injection"
+        - "LLM01:2025 - Prompt Injection"
+      owasp-agentic:
+        - "ASI04 - Agentic Supply Chain Vulnerabilities"
+        - "ASI01 - Agent Goal Hijack"
+      owasp-mcp:
+        - "MCP03:2025 - Tool Poisoning"
+      owasp-aisvs:
+        - "v1.01-C10.4.2 - Schema, Message, and Input Validation"
+      mitre-atlas:
+        - "AML.T0011.002 - User Execution: Poisoned AI Agent Tool"
+        - "AML.T0051.001 - LLM Prompt Injection: Indirect"
+      cwe:
+        - "CWE-506: Embedded Malicious Code"
+        - "CWE-1427: Improper Neutralization of Input Used for LLM Prompting"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, fastmcp, claude-agent-sdk]
+      references:
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP03-2025%E2%80%93Tool-Poisoning.md
+        - https://invariantlabs.ai/blog/mcp-security-notification-tool-poisoning-attacks
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/mcpserver/tools/base.py
+        - https://modelcontextprotocol.io/specification/2025-11-25/server/tools

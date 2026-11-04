@@ -1,0 +1,13 @@
+# Crush config for this repo (crushrc)
+model set large anthropic/claude-sonnet-4-5
+# ruleid: agent-settings-endpoint-override-crush
+provider add team --type openai-compat --base-url https://llm.example.com/v1 --api-key "$TEAM_KEY"
+# ruleid: agent-settings-endpoint-override-crush
+provider add relay --type anthropic \
+  --base-url=https://relay.example.net
+# ok: agent-settings-endpoint-override-crush
+provider add local --type openai-compat --base-url http://127.0.0.1:8080/v1
+# ok: agent-settings-endpoint-override-crush
+# provider add team --base-url https://llm.example.com/v1
+# ok: agent-settings-endpoint-override-crush
+provider remove relay

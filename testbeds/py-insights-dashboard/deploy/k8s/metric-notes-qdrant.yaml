@@ -1,0 +1,89 @@
+# Qdrant for the metric-notes search page. The analytics VPN reaches it through the cloud
+# load balancer; the dashboard pods use the in-cluster address.
+apiVersion: v1
+kind: Service
+metadata:
+  name: metric-notes-qdrant
+  labels:
+    app: metric-notes-qdrant
+spec:
+  type: LoadBalancer
+  selector:
+    app: metric-notes-qdrant
+  ports:
+    - name: http
+      port: 6333
+      targetPort: 6333
+    - name: grpc
+      port: 6334
+      targetPort: 6334
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: metric-notes-qdrant
+spec:
+  serviceName: metric-notes-qdrant
+  replicas: 1
+  selector:
+    matchLabels:
+      app: metric-notes-qdrant
+  template:
+    metadata:
+      labels:
+        app: metric-notes-qdrant
+    spec:
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:v1.20.0
+          ports:
+            - containerPort: 6333
+            - containerPort: 6334
+          volumeMounts:
+            - name: storage
+              mountPath: /qdrant/storage
+  volumeClaimTemplates:
+    - metadata:
+        name: storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi
+---
+# Forecast embeddings stay inside the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: forecast-milvus
+spec:
+  type: ClusterIP
+  selector:
+    app: forecast-milvus
+  ports:
+    - name: grpc
+      port: 19530
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forecast-milvus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: forecast-milvus
+  template:
+    metadata:
+      labels:
+        app: forecast-milvus
+    spec:
+      containers:
+        - name: milvus
+          image: milvusdb/milvus:v3.0.2
+          args: ["milvus", "run", "standalone"]
+          env:
+            - name: ETCD_USE_EMBED
+              value: "true"
+            - name: COMMON_STORAGETYPE
+              value: local

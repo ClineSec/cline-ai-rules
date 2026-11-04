@@ -1,0 +1,38 @@
+{
+  // Every platform host has a first label longer than DNS allows.
+  "folders": [{ "path": "." }],
+  "settings": {
+    "mcp": {
+      "servers": {
+        "productivity": {
+          "type": "http",
+          // ruleid: mcp-config-paas-remote-host-workspace
+          "url": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.onrender.com/mcp"
+        },
+        "worker": {
+          "command": "npx",
+          // ruleid: mcp-config-paas-remote-host-workspace
+          "args": ["-y", "mcp-remote@0.1.29", "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.workers.dev/sse"]
+        },
+        "billing": {
+          "command": "uvx",
+          "args": ["example-org-billing-mcp==1.2.0"],
+          // ok: mcp-config-paas-remote-host-workspace
+          "env": { "BILLING_API_URL": "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.herokuapp.com" }
+        },
+        "vendor": {
+          "type": "http",
+          // ok: mcp-config-paas-remote-host-workspace
+          "url": "https://mcp.example.com/mcp"
+        },
+        "wiki": {
+          // A commented-out bridge doesn't make the live command one.
+          // "command": "npx", "args": ["-y", "mcp-remote@0.1.29", "https://wiki.example.com/mcp"],
+          "command": "node",
+          // ok: mcp-config-paas-remote-host-workspace
+          "args": ["./tools/wiki-server.js", "--mirror", "https://fixture-placeholder-label-longer-than-dns-allows-so-it-never-resolves.onrender.com/api"]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,124 @@
+rules:
+  - id: agent-allowlist-network-exfil-commands-cli
+    # Regex: CI workflows, shell scripts, Makefiles, and package.json scripts that start an
+    # agent CLI, or a GitHub Action that wraps one.
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This agent run pre-approves a network tool (curl, wget, nc, ssh, scp, nslookup, dig,
+      ping, Invoke-WebRequest, ...), so the agent runs it without asking: --allowedTools /
+      --allowed-tools entries such as "Bash(curl:*)" (Claude Code) or
+      "run_shell_command(curl)" (Gemini CLI), --allow-tool 'shell(curl)' (GitHub Copilot
+      CLI), the older claude-code-action allowed_tools
+      input, and allow lists in an action's settings JSON. A prompt injection in a file,
+      issue, pull request, web page, or tool result the agent reads can then have it read a
+      secret (a CI token, an API key in the environment, source code) and send it out in a
+      request, an upload, or a DNS lookup of a name like <secret>.attacker.example. Narrowing
+      the rule to one URL doesn't help: wildcards and prefix matching still accept extra
+      arguments, such as a second URL or `-d @.env`. Leave network commands out of the allow
+      list, and give the agent the fetched data in its prompt or a custom tool for the one
+      service it needs.
+    paths:
+      include:
+        - ".github/workflows/*.yml"
+        - ".github/workflows/*.yaml"
+        - ".gitlab-ci.yml"
+        - ".circleci/config.yml"
+        - "azure-pipelines.yml"
+        - "bitbucket-pipelines.yml"
+        - "Jenkinsfile"
+        - "*.sh"
+        - "*.bash"
+        - "*.zsh"
+        - "Makefile"
+        - "GNUmakefile"
+        - "*.mk"
+        - "justfile"
+        - "Justfile"
+        - "package.json"
+      # Dockerfiles, compose files, and dev containers are left out, as in
+      # ai-cli-bypass-flag-invocation.
+    patterns:
+      - pattern-either:
+          # The value of an --allowedTools / --allowed-tools / --allowed_tools flag (or Copilot
+          # CLI's --allow-tool) on a line that isn't a # comment, up to the next --flag or the
+          # end of the command (lines joined with \ continue it). Quoted and parenthesized
+          # values are taken whole, so "Bash(curl --silent *)" stays inside.
+          # --disallowedTools and --deny-tool don't match.
+          - pattern-regex: |-
+              (?xm)
+              ^[\x20\t]*+ (?!\#) [^\n]*? (?<![\w-]) \K (?: --allowed[-_]?[tT]ools | --allow-tool ) (?: = | [\x20\t]++ )
+              (?: " [^"\n]*+ " | ' [^'\n]*+ ' | \( [^)\n]*+ \) | [^\n"'(\\-] | \\ (?!\r?\n) | \\\r?\n | -(?!-[a-zA-Z]) )*+
+          # claude-code-action v0's allowed_tools input, on its line or as a block scalar.
+          - pattern-regex: |-
+              (?xm)
+              ^ (?<ind>[\x20\t]*+) allowed_tools [\x20\t]*+ : [^\n]*+
+              (?: \n (?: \k<ind> [\x20\t]++ [^\n]*+ | [\x20\t]*+ (?=\n) ) )*+
+          # An allow list in an action's settings JSON (claude-code-action and run-gemini-cli
+          # take a settings input): Claude Code permissions.allow, Gemini CLI tools.allowed.
+          # tools.core and deny lists don't approve anything.
+          - patterns:
+              - pattern-regex: |-
+                  (?xm)
+                  ^ (?<sind>[\x20\t]*+) settings [\x20\t]*+ : [^\n]*+
+                  (?: \n (?: \k<sind> [\x20\t]++ [^\n]*+ | [\x20\t]*+ (?=\n) ) )*+
+              - pattern-regex: '"(?:allow|allowed|allowedTools)"\s*+:\s*+\[[^\]]*+\]'
+      # A Claude Code rule with a wildcard (a rule without * matches one exact command), a
+      # Gemini CLI command prefix, or a Copilot CLI shell(...) rule naming a network program
+      # alone or with :* (shell(curl) approves every curl command).
+      - pattern-regex: |-
+          (?x)
+          # --- network exfil programs (begin): build.py keeps this block identical in
+          # the agent-allowlist-network-exfil-commands rules; edit every copy together. ---
+          (?(DEFINE)
+            # An optional directory, so /usr/bin/curl counts.
+            (?<dir> (?: [^\s"'()\[\],:*]* [/\\]{1,2} )? )
+            # Programs whose main use is sending or fetching data over the network: HTTP
+            # clients, raw sockets, remote shells and file transfer, and DNS, ICMP, and
+            # whois lookups (a looked-up name carries data to the name's DNS server).
+            # General developer tools that can also reach the network (git, gh, npm,
+            # aws, docker) are left out: approving them is common and is a different
+            # question.
+            (?<net> (?: curl | curlie | wget2? | https? | xhs? | aria2c | grpcurl | websocat | wscat
+                      | nc | ncat | netcat | socat | telnet
+                      | ssh | scp | sftp | rsync | ftp | lftp | tftp
+                      | nslookup | dig | host | drill | whois
+                      | ping6? | traceroute6? ) (?i:\.exe)?
+                    | (?i: invoke-webrequest | invoke-restmethod | iwr | irm | resolve-dnsname ) )
+          )
+          # --- network exfil programs (end) ---
+          (?<! [\w(:*-] )
+          (?: (?: Bash | PowerShell ) \( \s*+ (?&dir) (?&net) (?= [\s*)] | : \s*+ \* \s*+ \) ) [^)\n]*? \* [^)\n]*+ \)
+            | (?: run_shell_command | ShellTool ) \( \s*+ (?&dir) (?&net) (?= [\s)] ) [^)\n]*+ \)
+            | shell \( \s*+ (?&dir) (?&net) \s*+ (?: \) | [^)\n]*? : \s*+ \* \s*+ \) ) )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0086 - Exfiltration via AI Agent Tool Invocation"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code, gemini-cli, copilot-cli, github-actions]
+      references:
+        - https://code.claude.com/docs/en/cli-reference
+        - https://code.claude.com/docs/en/permissions
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/core/src/policy/config.ts
+        - https://github.com/anthropics/claude-code-action/blob/v1.0.261/action.yml
+        - https://github.com/anthropics/claude-code-action/blob/v0.0.63/action.yml
+        - https://github.com/google-github-actions/run-gemini-cli/blob/v0.1.22/action.yml
+        - https://github.com/google-gemini/gemini-cli/blob/v0.65.0/packages/cli/src/config/config.ts
+        - https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#tool-permission-patterns
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

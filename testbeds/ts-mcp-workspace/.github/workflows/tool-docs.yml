@@ -1,0 +1,35 @@
+name: tool-docs
+# Nightly: regenerate the tool reference from src/tools/ and open a PR if it changed.
+on:
+  schedule:
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci && npm run build
+      - run: npm install -g opencode-ai@1.19.4
+      - name: Regenerate the tool reference
+        env:
+          OPENCODE_PERMISSION: |
+            {
+              "edit": { "*": "ask", "docs/**": "allow" },
+              "bash": {
+                "*": "ask",
+                "npm run build": "allow",
+                "node dist/src/index.js --list-tools": "allow",
+                "npx *": "allow"
+              }
+            }
+        run: opencode run "Update docs/tools.md so it matches the tools registered in src/tools/"
+      - name: Check the reference builds
+        env:
+          KILO_PERMISSION: '{"bash": {"*": "deny", "npm run docs:check": "allow"}, "edit": "deny"}'
+        run: npx --yes @kilocode/cli@7.8.17 run "Run npm run docs:check and report any broken links"

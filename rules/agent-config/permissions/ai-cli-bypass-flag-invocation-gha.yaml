@@ -1,0 +1,96 @@
+rules:
+  - id: ai-cli-bypass-flag-invocation-gha
+    # The GitHub Actions twin of ai-cli-bypass-flag-invocation: the vendors' agent actions
+    # take the same switches as inputs instead of a command line.
+    languages: [yaml]
+    severity: WARNING
+    message: >-
+      This workflow runs a coding agent action with its approvals or sandbox turned off, so
+      every shell command and file edit the model decides on runs at once with the job's full
+      access: its checkout, network, and secrets (the GitHub token, model API keys). Agent
+      workflows usually read text other people control (an issue, a pull request, a comment),
+      and a prompt injection in that text can then run arbitrary commands or push code. For
+      anthropics/claude-code-action, allowlist tools in claude_args (--allowedTools
+      "Bash(npm test)" "Read") instead of --dangerously-skip-permissions or bypassPermissions;
+      for openai/codex-action, use permission-profile ":workspace" or ":read-only" instead of
+      danger-full-access, and keep write tokens and deploy secrets out of the agent's job.
+    paths:
+      include:
+        - ".github/workflows/*.yml"
+        - ".github/workflows/*.yaml"
+    pattern-either:
+      # anthropics/claude-code-action v1.0.258: claude_args is passed to the Claude Code CLI,
+      # and settings takes a settings JSON string (or a path, which is not read here).
+      - patterns:
+          - pattern-inside: |
+              uses: $ACTION
+              ...
+          - metavariable-regex:
+              metavariable: $ACTION
+              regex: ^["']?anthropics/claude-code-action@
+          - pattern-either:
+              - patterns:
+                  - pattern: 'claude_args: $V'
+                  - metavariable-regex:
+                      metavariable: $V
+                      regex: (?s).*?(?<![\w-])(?:--dangerously-skip-permissions|--permission-mode(?:=|\s+)["']?bypassPermissions)(?![\w-])
+              - patterns:
+                  - pattern: 'settings: $V'
+                  - metavariable-regex:
+                      metavariable: $V
+                      regex: (?s).*?\\?"defaultMode\\?"\s*:\s*\\?"bypassPermissions\\?"
+          - focus-metavariable: $V
+      # openai/codex-action v1.13: the sandbox and permission-profile inputs, and codex-args
+      # (passed to codex exec; bypass flags only pass through with safety-strategy: unsafe).
+      - patterns:
+          - pattern-inside: |
+              uses: $ACTION
+              ...
+          - metavariable-regex:
+              metavariable: $ACTION
+              regex: ^["']?openai/codex-action@
+          - pattern-either:
+              - patterns:
+                  - pattern: 'sandbox: $V'
+                  - metavariable-regex:
+                      metavariable: $V
+                      regex: ^["']?danger-full-access["']?$
+              - patterns:
+                  - pattern: 'permission-profile: $V'
+                  - metavariable-regex:
+                      metavariable: $V
+                      regex: ^["']?:danger-full-access["']?$
+              - patterns:
+                  - pattern: 'codex-args: $V'
+                  - metavariable-regex:
+                      metavariable: $V
+                      regex: (?s).*?(?<![\w-])(?:--dangerously-bypass-approvals-and-sandbox|--yolo|(?:-s|--sandbox)(?:=|\\?["']?\s*,?\s*\\?["']?|\s+)danger-full-access|sandbox_mode\s*=\s*\\?["']?danger-full-access)(?![\w-])
+          - focus-metavariable: $V
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0112.000 - Machine Compromise: Local AI Agent"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [claude-code, codex, github-actions]
+      references:
+        - https://github.com/anthropics/claude-code-action/blob/v1.0.258/action.yml
+        - https://code.claude.com/docs/en/permission-modes
+        - https://github.com/openai/codex-action/blob/v1.13/action.yml
+        - https://github.com/openai/codex-action/blob/v1.13/README.md
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

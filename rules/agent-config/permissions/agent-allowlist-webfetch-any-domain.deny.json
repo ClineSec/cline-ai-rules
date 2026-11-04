@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*)"
+    ],
+    "deny": [
+      // ok: agent-allowlist-webfetch-any-domain
+      "WebFetch(domain:*)"
+    ]
+  }
+}

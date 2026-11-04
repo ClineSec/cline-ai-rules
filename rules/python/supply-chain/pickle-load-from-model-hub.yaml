@@ -1,0 +1,108 @@
+rules:
+  - id: pickle-load-from-model-hub
+    languages: [python]
+    severity: WARNING
+    mode: taint
+    message: >-
+      A file downloaded from a model hub or a URL reaches a pickle-based loader (pickle, dill,
+      cloudpickle, joblib, pandas.read_pickle, or fastai's load_learner). None of these has a
+      safe mode: unpickling runs whatever code the file carries, so anyone who can push to that
+      hub repo or change what the URL serves gets code execution in this process. Publish and
+      load models as safetensors (or skops for scikit-learn, with a reviewed type list). If a
+      pickle is unavoidable, pin the download to a reviewed commit SHA (`revision=`) or verify
+      a known hash before loading.
+    pattern-sources:
+      # Hugging Face Hub downloads return a local path to the downloaded file or snapshot.
+      # Downloads pinned to a commit SHA are left alone, and so are downloads that name a
+      # pickle-format file: unsafe-model-deserialization reports those on the download line,
+      # wherever the path goes, so the two rules never report the same file.
+      - patterns:
+          - pattern-either:
+              - pattern: $DL(...)
+          - metavariable-regex:
+              metavariable: $DL
+              regex: ^[\w.]+$
+          - metavariable-pattern:
+              metavariable: $DL
+              pattern-either:
+                - pattern: huggingface_hub.hf_hub_download
+                - pattern: huggingface_hub.snapshot_download
+                - pattern: $API.hf_hub_download
+                - pattern: $API.snapshot_download
+          - pattern-not: $DL(..., revision="=~/^[0-9a-fA-F]{40}$/", ...)
+          - pattern-not: $DL(..., filename="=~/(?i)\.(pkl|pickle|joblib|dill|cloudpickle)$/", ...)
+          - pattern-not: $DL($REPO, "=~/(?i)\.(pkl|pickle|joblib|dill|cloudpickle)$/", ...)
+          # f-string filenames such as f"{name}.joblib" (also unsafe-model-deserialization's).
+          - pattern-not-regex: (?i)\bf["'][^"'\n]*\.(pkl|pickle|joblib|dill|cloudpickle)["']
+      # torch.hub.download_url_to_file and urlretrieve write the URL's body to a path the
+      # caller chose, so that variable carries the taint after the call.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: torch.hub.download_url_to_file($URL, $DST, ...)
+              - pattern: urllib.request.urlretrieve($URL, $DST, ...)
+              - pattern: urllib.request.urlretrieve($URL, ..., filename=$DST, ...)
+          - focus-metavariable: $DST
+      - pattern: urllib.request.urlretrieve(...)
+      # Raw HTTP bodies (bytes or a file-like response). The sanitizers below drop the
+      # parsed or decoded forms, so a JSON field used as a local file name doesn't count.
+      - pattern: urllib.request.urlopen(...)
+      - pattern: requests.get(...)
+      - pattern: httpx.get(...)
+    pattern-sanitizers:
+      - pattern: $RESP.json(...)
+      - pattern: $RESP.text
+      - pattern: $RESP.headers
+      - pattern: $RESP.status_code
+      - pattern: $BODY.decode(...)
+      - pattern: json.loads(...)
+      - pattern: json.load(...)
+    pattern-sinks:
+      # The first argument is the file, path, or bytes being unpickled.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: pickle.load($X, ...)
+              - pattern-inside: pickle.loads($X, ...)
+              - pattern-inside: pickle.Unpickler($X, ...)
+              - pattern-inside: dill.load($X, ...)
+              - pattern-inside: dill.loads($X, ...)
+              - pattern-inside: dill.Unpickler($X, ...)
+              - pattern-inside: cloudpickle.load($X, ...)
+              - pattern-inside: cloudpickle.loads($X, ...)
+              - pattern-inside: joblib.load($X, ...)
+              - pattern-inside: pandas.read_pickle($X, ...)
+              - pattern-inside: fastai.learner.load_learner($X, ...)
+              # fastai code usually star-imports (from fastai.vision.all import *), which
+              # leaves the name unresolved; the bare name is fastai's.
+              - pattern-inside: load_learner($X, ...)
+          - pattern: $X
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-aisvs:
+        - "v1.01-C4.1.2 - AI Workload Sandboxing & Validation"
+        - "v1.01-C6.1.2 - Model Artifact Integrity"
+      mitre-atlas:
+        - "AML.T0011.000 - User Execution: Unsafe AI Artifacts"
+        - "AML.T0010.003 - AI Supply Chain Compromise: Model"
+      cwe:
+        - "CWE-502: Deserialization of Untrusted Data"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [huggingface, pytorch, scikit-learn, joblib, pandas, fastai]
+      # API shapes verified 2026-10-21 against: huggingface-hub 2.2.0 (hf_hub_download,
+      # snapshot_download, HfApi methods); torch v2.14.1 (torch/hub.py download_url_to_file);
+      # fastai 2.8.12 (learner.py load_learner: torch.load with pickle_module and
+      # weights_only=False); Python 3 urllib.request (urlretrieve, urlopen).
+      references:
+        - https://huggingface.co/docs/hub/en/security-pickle
+        - https://github.com/pytorch/pytorch/blob/v2.14.1/torch/hub.py
+        - https://docs.python.org/3/library/pickle.html
+        - https://scikit-learn.org/stable/model_persistence.html
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md
+        - https://cwe.mitre.org/data/definitions/502.html

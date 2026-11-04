@@ -1,0 +1,17 @@
+# Fixture for gha-ai-agent-trusts-untrusted-checkout: a trigger with no outside input.
+name: nightly-docs
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  pull_request:
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    env:
+      # ok: gha-ai-agent-trusts-untrusted-checkout
+      GEMINI_CLI_TRUST_WORKSPACE: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+      - run: gemini -p "Update docs/digest.md"

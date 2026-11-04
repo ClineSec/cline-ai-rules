@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      // ok: cursor-mcp-auto-approve
+      "Shell(git)",
+      // ruleid: cursor-mcp-auto-approve
+      "Mcp(*:*)",
+      // ruleid: cursor-mcp-auto-approve
+      "Mcp(datadog:*)",
+      // ruleid: cursor-mcp-auto-approve
+      "Mcp(github:create_pull_request)",
+      // ok: cursor-mcp-auto-approve
+      "Mcp(*:search)",
+      // ok: cursor-mcp-auto-approve
+      "Mcp(github:list_*)",
+      // ok: cursor-mcp-auto-approve
+      "Mcp(datadog:get_logs)"
+    ],
+    "deny": [
+      // ok: cursor-mcp-auto-approve
+      "Mcp(*:*)"
+    ]
+  },
+  "mcpAllowlist": [
+    // ruleid: cursor-mcp-auto-approve
+    "*:*",
+    // ruleid: cursor-mcp-auto-approve
+    "linear:*",
+    // ruleid: cursor-mcp-auto-approve
+    "slack:send_message",
+    // ok: cursor-mcp-auto-approve
+    "linear:list_issues",
+    // ok: cursor-mcp-auto-approve
+    "*:get_status"
+  ],
+  "terminalAllowlist": [
+    // ok: cursor-mcp-auto-approve
+    "git:*"
+  ]
+}

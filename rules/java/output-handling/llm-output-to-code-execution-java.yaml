@@ -1,0 +1,394 @@
+rules:
+  - id: llm-output-to-code-execution-java
+    # The pattern-sources, pattern-propagators, and first 5 pattern-sanitizers are shared with
+    # llm-output-to-sql-java and llm-output-to-html-java (build.py SHARED_BLOCKS "model-output
+    # sources (Java)", "lambda propagators (Java)", "value sanitizers (Java)"; the propagators
+    # and value sanitizers also with user-input-in-system-prompt-java): edit them together.
+    languages: [java]
+    severity: ERROR
+    message: >-
+      Model output reaches a code or shell execution sink. Treat completions as untrusted
+      input: an attacker who can influence the prompt (directly or through retrieved content)
+      can choose what runs here, with this service's permissions. Parse the output into a
+      constrained structure (`.entity(Plan.class)` with an enum of operations) and dispatch to
+      an allowlist of operations instead of executing it; a shell, a script engine, Groovy, or
+      a SpEL StandardEvaluationContext is not a sandbox.
+    mode: taint
+    pattern-sources:
+      # Spring AI ChatClient (spring-ai-client-chat 2.0.2 and 1.1.8): a request spec started with
+      # prompt() on a ChatClient field, parameter, or local, and everything read back from it
+      # (call().content(), entity(...), chatResponse(), stream().content()).
+      - pattern: (ChatClient $CC).prompt(...)
+      - pattern: ChatClient.create(...).prompt(...)
+      - pattern: (ChatClient.Builder $CCB).build().prompt(...)
+      # The same chain on a client the file can't type (built into a `var`, returned by a
+      # getter), and a response spec kept in a variable, in a file that imports Spring AI.
+      - patterns:
+          - pattern-either:
+              - pattern: $SPEC.call().content()
+              - pattern: $SPEC.call().entity(...)
+              - pattern: $SPEC.call().chatResponse()
+              - pattern: $SPEC.call().chatClientResponse()
+              - pattern: $SPEC.call().responseEntity(...)
+              - pattern: $SPEC.stream().content()
+              - pattern: $SPEC.stream().chatResponse()
+              - pattern: $SPEC.stream().chatClientResponse()
+              - pattern: (ChatClient.CallResponseSpec $RS).$GET(...)
+              - pattern: (CallResponseSpec $RS).$GET(...)
+              - pattern: (ChatClient.StreamResponseSpec $RS).$GET(...)
+              - pattern: (StreamResponseSpec $RS).$GET(...)
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++org\.springframework\.ai\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++org\.springframework\.ai\.)[^\n]*+\z'
+      # Spring AI ChatModel and StreamingChatModel (spring-ai-model 2.0.2): call(Prompt) returns
+      # a ChatResponse (getResult().getOutput().getText(), getContent() before 1.0.0-M6), and
+      # call(String) and stream(...) return the text.
+      - patterns:
+          - pattern-either:
+              - pattern: $SAI.call(...)
+              - pattern: $SAI.stream(...)
+          - metavariable-type:
+              metavariable: $SAI
+              types: [ChatModel, StreamingChatModel, OpenAiChatModel, AzureOpenAiChatModel, AnthropicChatModel, OllamaChatModel, VertexAiGeminiChatModel, GoogleGenAiChatModel, MistralAiChatModel, BedrockProxyChatModel, DeepSeekChatModel]
+      # LangChain4j ChatModel (langchain4j-core 1.22.0) and ChatLanguageModel (0.36.2): chat(...)
+      # and generate(...) return the text, a ChatResponse (aiMessage().text()), or a
+      # Response<AiMessage> (content().text()).
+      - patterns:
+          - pattern-either:
+              - pattern: $LC.chat(...)
+              - pattern: $LC.chatAsync(...)
+              - pattern: $LC.generate(...)
+          - metavariable-type:
+              metavariable: $LC
+              types: [ChatModel, ChatLanguageModel, OpenAiChatModel, AzureOpenAiChatModel, AnthropicChatModel, OllamaChatModel, GoogleAiGeminiChatModel, VertexAiGeminiChatModel, MistralAiChatModel, BedrockChatModel]
+      # The same calls on a model the file can't type (`var model = OpenAiChatModel.builder()
+      # ... .build()`), on a receiver named like a model, in a file that imports the framework.
+      - patterns:
+          - pattern-either:
+              - pattern: $MODEL.call(...)
+              - pattern: $MODEL.stream(...)
+          - metavariable-regex:
+              metavariable: $MODEL
+              regex: (?i)^(?:this\.)?\w*(?:model|llm)$
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++org\.springframework\.ai\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++org\.springframework\.ai\.)[^\n]*+\z'
+      - patterns:
+          - pattern-either:
+              - pattern: $MODEL.chat(...)
+              - pattern: $MODEL.chatAsync(...)
+              - pattern: $MODEL.generate(...)
+          - metavariable-regex:
+              metavariable: $MODEL
+              regex: (?i)^(?:this\.)?\w*(?:model|llm)$
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\z'
+      # LangChain4j AI services built in this file (AiServices.create(...) or
+      # AiServices.builder(...)...build()), held in a local or a field: every method called on
+      # the proxy returns model output. Services injected from another file (a Spring Boot
+      # @AiService interface) can't be seen by a single-file scan.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $T $SVC = <... AiServices.$F(...) ...>;
+                  ...
+              - pattern-inside: |
+                  $SVC = <... AiServices.$F(...) ...>;
+                  ...
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    $T $SVC = <... AiServices.$F(...) ...>;
+                    ...
+                  }
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    $CTOR(...) {
+                      ...
+                      this.$SVC = <... AiServices.$F(...) ...>;
+                      ...
+                    }
+                    ...
+                  }
+          - pattern-either:
+              - pattern: $SVC.$CALL(...)
+              - pattern: this.$SVC.$CALL(...)
+      # LangChain4j streaming, in a file that imports LangChain4j: the text a
+      # StreamingChatResponseHandler receives (onPartialResponse, onCompleteResponse; onNext and
+      # onComplete in 0.x) and the TokenStream callbacks of a streaming AI service.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: void $ON($T $P) { ... }
+              - pattern-inside: void $ON($T $P, $CT $CTX) { ... }
+          - metavariable-regex:
+              metavariable: $ON
+              regex: ^(?:onPartialResponse|onCompleteResponse|onNext|onComplete)$
+          - pattern: $P
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\z'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $TS.$ON(($P) -> $BODY)
+              - pattern-inside: $TS.$ON(($P, $CTX) -> $BODY)
+          - metavariable-regex:
+              metavariable: $ON
+              regex: ^(?:onPartialResponse|onPartialResponseWithContext|onCompleteResponse|onIntermediateResponse|onNext|onComplete)$
+          - focus-metavariable: $P
+          - pattern-not-regex: '\A(?:(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\n)*+(?![ \t]*+import[ \t]++dev\.langchain4j\.)[^\n]*+\z'
+    pattern-propagators:
+      # In --taint-intrafile mode OpenGrep drops taint through a call that takes a lambda
+      # (chatClient.prompt().user(u -> u.text(q)).call()), so carry it from the receiver to the
+      # call's result, and into the parameter of a callback over a tainted stream, Flux,
+      # Optional, or future (`.subscribe(chunk -> ...)`).
+      - patterns:
+          - pattern: $CALL
+          - pattern-either:
+              - pattern: $R.$M(..., ($P) -> $B, ...)
+              - pattern: $R.$M(..., ($P, $Q) -> $B, ...)
+        from: $R
+        to: $CALL
+      - patterns:
+          - pattern-inside: $R.$M(($P) -> $B)
+          - pattern: $P
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(?:map|flatMap|filter|forEach|forEachOrdered|peek|subscribe|doOnNext|doOnSuccess|thenAccept|thenApply|thenCompose|ifPresent|ifPresentOrElse|handle)$
+        from: $R
+        to: $P
+    pattern-sinks:
+      # Runtime.exec: the command string or argv only, not the environment or working
+      # directory. exec(String) splits on spaces without a shell, but the model still picks the
+      # program and its arguments. An argv whose program is a fixed literal (`{"git", "log",
+      # x}`) is argument injection, not code execution, and is left out, except for a shell or
+      # interpreter given inline code (next sink).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: Runtime.getRuntime().exec($CMD, ...)
+              - pattern-inside: (Runtime $RT).exec($CMD, ...)
+          - pattern: $CMD
+          - pattern-not: 'new String[]{"$PROG", ...}'
+          - pattern-not-inside: |
+              String[] $CMD = {"$PROG", ...};
+              ...
+          - pattern-not-inside: |
+              String[] $CMD = new String[]{"$PROG", ...};
+              ...
+      # ProcessBuilder: a model-chosen command string or argv list, unless its program is a
+      # fixed literal.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: new ProcessBuilder($CMD, ...)
+              - pattern-inside: (ProcessBuilder $PB).command($CMD, ...)
+              - pattern-inside: new ProcessBuilder(...).command($CMD, ...)
+          - pattern: $CMD
+          - pattern-not: '"$PROG"'
+          - pattern-not: List.of("$PROG", ...)
+          - pattern-not: Arrays.asList("$PROG", ...)
+          - pattern-not: 'new String[]{"$PROG", ...}'
+          - pattern-not-inside: |
+              $T $CMD = List.of("$PROG", ...);
+              ...
+          - pattern-not-inside: |
+              $T $CMD = Arrays.asList("$PROG", ...);
+              ...
+          - pattern-not-inside: |
+              $T $CMD = new ArrayList<>(List.of("$PROG", ...));
+              ...
+      # A shell started on inline text: new ProcessBuilder("bash", "-c", cmd),
+      # List.of("sh", "-c", cmd), new String[]{"cmd.exe", "/c", cmd}.
+      - patterns:
+          - pattern-either:
+              - pattern: $EXEC(..., "$SH", "$FLAG", $CMD, ...)
+              - pattern: new $CLS(..., "$SH", "$FLAG", $CMD, ...)
+              - pattern: 'new String[]{..., "$SH", "$FLAG", $CMD, ...}'
+          - metavariable-regex:
+              metavariable: $SH
+              regex: ^(?:[\w./-]*/)?(?:(?:ba|da|z|k|fi|c|tc)?sh|cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh)$
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^(?:-[a-zA-Z]*c[a-zA-Z]*|/[cCkK]|-(?i:command))$
+          - focus-metavariable: $CMD
+      # An interpreter started on inline code: ("python3", "-c", code), ("node", "-e", code),
+      # ("groovy", "-e", code). Each interpreter is paired with its own eval flag, so `node -c`
+      # (syntax check) doesn't count.
+      - patterns:
+          - pattern-either:
+              - pattern: $EXEC(..., "$BIN", "$FLAG", $CODE, ...)
+              - pattern: new $CLS(..., "$BIN", "$FLAG", $CODE, ...)
+              - pattern: 'new String[]{..., "$BIN", "$FLAG", $CODE, ...}'
+          - metavariable-comparison:
+              comparison: >-
+                (re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:python[0-9.]*|py)(?:[.]exe)?$", str($BIN)) and str($FLAG) == "-c")
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:node|nodejs|bun|tsx|ts-node)(?:[.]exe)?$", str($BIN)) and re.match("^(?:-e|--eval|-p|--print|-pe)$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?deno(?:[.]exe)?$", str($BIN)) and str($FLAG) == "eval")
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?(?:ruby|perl)(?:[.]exe)?$", str($BIN)) and re.match("^-[eE]$", str($FLAG)))
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?php(?:[.]exe)?$", str($BIN)) and str($FLAG) == "-r")
+                or (re.match("^(?:[a-zA-Z0-9_./-]*/)?groovy(?:[.]exe)?$", str($BIN)) and str($FLAG) == "-e")
+          - focus-metavariable: $CODE
+      # Code written to a file and then run in the same method: Files.writeString(path, code),
+      # then new ProcessBuilder("python3", path.toString()) or Runtime.exec(new String[]{"bash",
+      # path}). Only the written contents count.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  Files.writeString($PATH, $CODE, ...);
+                  ...
+                  new ProcessBuilder("$BIN", ..., <... $PATH ...>, ...);
+              - pattern-inside: |
+                  Files.write($PATH, $CODE, ...);
+                  ...
+                  new ProcessBuilder("$BIN", ..., <... $PATH ...>, ...);
+              - pattern-inside: |
+                  Files.writeString($PATH, $CODE, ...);
+                  ...
+                  $RUNTIME.exec(new String[]{"$BIN", ..., <... $PATH ...>, ...});
+              - pattern-inside: |
+                  Files.write($PATH, $CODE, ...);
+                  ...
+                  $RUNTIME.exec(new String[]{"$BIN", ..., <... $PATH ...>, ...});
+          - metavariable-regex:
+              metavariable: $BIN
+              regex: ^(?:[\w./-]*/)?(?:python[\d.]*|py|node|nodejs|deno|bun|ruby|perl|php|groovy|jshell|java|(?:ba|da|z|k|fi|c|tc)?sh|pwsh|powershell)(?:\.exe)?$
+          - pattern-either:
+              - pattern-inside: Files.writeString($PATH, $CODE, ...)
+              - pattern-inside: Files.write($PATH, $CODE, ...)
+          - pattern: $CODE
+      # In-process code: JSR 223 script engines (eval and Compilable.compile), Groovy
+      # (GroovyShell evaluate / parse / run, GroovyClassLoader.parseClass, Eval.me / x / xy /
+      # xyz; groovy 6.0.0), JShell (jdk.jshell), MVEL 2.6.0, and OGNL 3.4.17. Only the code
+      # argument: model text passed as bindings or a context object is data.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: (ScriptEngine $SE).eval($CODE, ...)
+              - pattern-inside: $SEM.getEngineByName(...).eval($CODE, ...)
+              - pattern-inside: $SEM.getEngineByExtension(...).eval($CODE, ...)
+              - pattern-inside: $SEM.getEngineByMimeType(...).eval($CODE, ...)
+              - pattern-inside: (Compilable $SE).compile($CODE)
+              - pattern-inside: ((Compilable) $SE).compile($CODE)
+              - pattern-inside: (GroovyShell $GS).evaluate($CODE, ...)
+              - pattern-inside: (GroovyShell $GS).parse($CODE, ...)
+              - pattern-inside: (GroovyShell $GS).run($CODE, ...)
+              - pattern-inside: new GroovyShell(...).evaluate($CODE, ...)
+              - pattern-inside: new GroovyShell(...).parse($CODE, ...)
+              - pattern-inside: new GroovyShell(...).run($CODE, ...)
+              - pattern-inside: (GroovyClassLoader $GCL).parseClass($CODE, ...)
+              - pattern-inside: new GroovyClassLoader(...).parseClass($CODE, ...)
+              - pattern-inside: Eval.me($CODE)
+              - pattern-inside: Eval.me($SYM, $OBJ, $CODE)
+              - pattern-inside: Eval.x($X, $CODE)
+              - pattern-inside: Eval.xy($X, $Y, $CODE)
+              - pattern-inside: Eval.xyz($X, $Y, $Z, $CODE)
+              - pattern-inside: (JShell $JS).eval($CODE)
+              - pattern-inside: JShell.create().eval($CODE)
+              - pattern-inside: MVEL.eval($CODE, ...)
+              - pattern-inside: MVEL.evalToString($CODE, ...)
+              - pattern-inside: MVEL.compileExpression($CODE, ...)
+              - pattern-inside: Ognl.parseExpression($CODE)
+              - pattern-inside: Ognl.getValue($CODE, ...)
+              - pattern-inside: Ognl.setValue($CODE, ...)
+          - pattern: $CODE
+      # Spring Expression Language: parseExpression evaluates with a StandardEvaluationContext
+      # unless a SimpleEvaluationContext is passed, and SpEL's T(...) and method calls reach any
+      # class on the classpath (spring-expression 7.0.10, SpelExpression.getEvaluationContext).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: (ExpressionParser $EP).parseExpression($EXPR, ...)
+              - pattern-inside: (SpelExpressionParser $EP).parseExpression($EXPR, ...)
+              - pattern-inside: (SpelExpressionParser $EP).parseRaw($EXPR)
+              - pattern-inside: new SpelExpressionParser(...).parseExpression($EXPR, ...)
+              - pattern-inside: new SpelExpressionParser(...).parseRaw($EXPR)
+          - pattern: $EXPR
+          - pattern-not-inside: $PARSED.getValue(<... SimpleEvaluationContext.$CTXB(...) ...>, ...)
+          - pattern-not-inside: |
+              $CTX = <... SimpleEvaluationContext.$CTXB(...) ...>;
+              ...
+          - pattern-not-inside: |
+              $CTXT $CTX = <... SimpleEvaluationContext.$CTXB(...) ...>;
+              ...
+          - pattern-not-inside: |
+              class $CLS {
+                ...
+                $CTXT $CTX = <... SimpleEvaluationContext.$CTXB(...) ...>;
+                ...
+              }
+    pattern-sanitizers:
+      # Values that can't carry text: numbers, booleans, UUIDs, dates, and enum constants
+      # parsed from the string (Integer.parseInt(x), Tone.valueOf(x); not String.valueOf).
+      - exact: true
+        patterns:
+          - pattern: $NUM.$PARSE(...)
+          - metavariable-regex:
+              metavariable: $NUM
+              regex: ^(?:java\.lang\.)?(?:Integer|Long|Short|Byte|Double|Float|Boolean)$|^(?:java\.util\.)?UUID$|^(?:java\.time\.)?(?:LocalDate|LocalDateTime|LocalTime|Instant|OffsetDateTime|ZonedDateTime|Duration)$
+          - metavariable-regex:
+              metavariable: $PARSE
+              regex: ^(?:parse\w*|valueOf|fromString)$
+      - exact: true
+        patterns:
+          - pattern: $CLS.valueOf(...)
+          - metavariable-regex:
+              metavariable: $CLS
+              regex: ^(?!(?:java\.lang\.)?(?:String|Object|CharSequence|StringBuilder|StringBuffer|Character)$)(?:\w+\.)*[A-Z]\w*$
+      # An allowlist lookup in a constant table (`PERSONAS.get(choice)`, `COMMANDS.getOrDefault(k,
+      # ...)`), and a check against a constant set or an anchored pattern before use
+      # (`if (!ALLOWED.contains(x)) throw ...`, `x.matches("[a-z_]+")`).
+      - patterns:
+          - pattern-either:
+              - pattern: $TABLE.get($KEY)
+              - pattern: $TABLE.getOrDefault($KEY, $DEF)
+          - metavariable-regex:
+              metavariable: $TABLE
+              regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+      - by-side-effect: true
+        patterns:
+          - pattern: $SET.contains($X)
+          - metavariable-regex:
+              metavariable: $SET
+              regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+          - focus-metavariable: $X
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X.matches("$RE")
+              - pattern: Pattern.matches("$RE", $X)
+              - pattern: $PAT.matcher($X).matches()
+          - focus-metavariable: $X
+      # Response metadata that can't carry the model's text: token counts, finish reasons, and
+      # model names (`response.getMetadata().getUsage()`, `chatResponse.tokenUsage()`).
+      - patterns:
+          - pattern: $OBJ.$GET()
+          - metavariable-regex:
+              metavariable: $GET
+              regex: ^(?:getMetadata|metadata|getUsage|tokenUsage|finishReason|getFinishReason|modelName|getModel)$
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C7.1.1 - Output Format Enforcement"
+      mitre-atlas:
+        - "AML.T0051 - LLM Prompt Injection"
+        - "AML.T0050 - Command and Scripting Interpreter"
+      cwe:
+        - "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [spring-ai, langchain4j, java, groovy, spring-expression, mvel, ognl]
+      # API shapes checked 2026-10-24 against Maven Central sources: spring-ai-client-chat and
+      # spring-ai-model 2.0.2 (current GA; 2.1.0-RC1 is a pre-release) and 1.1.8, spring-ai-core
+      # 1.0.0-M5 / M6 (getContent() removed in M6), langchain4j and langchain4j-core 1.22.0 and
+      # 0.36.2 (ChatLanguageModel.generate), groovy 6.0.0, spring-expression 7.0.10, mvel2
+      # 2.6.0.Final, ognl 3.4.17, and the JDK's Runtime, ProcessBuilder, javax.script, and
+      # jdk.jshell. Deliberately not sinks: arguments after a fixed program (argument injection),
+      # GraalVM polyglot Context.eval (no host access unless allowAllAccess is set), and
+      # reflection (Class.forName / Method.invoke), which picks among methods that already
+      # exist rather than running new code.
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md
+        - https://cwe.mitre.org/data/definitions/94.html
+        - https://github.com/spring-projects/spring-ai/blob/v2.0.2/spring-ai-client-chat/src/main/java/org/springframework/ai/chat/client/ChatClient.java
+        - https://github.com/langchain4j/langchain4j/blob/1.22.0/langchain4j-core/src/main/java/dev/langchain4j/model/chat/ChatModel.java
+        - https://docs.spring.io/spring-framework/reference/core/expressions/evaluation.html#expressions-evaluation-context
+        - https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/lang/ProcessBuilder.html

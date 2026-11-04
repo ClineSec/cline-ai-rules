@@ -1,0 +1,170 @@
+rules:
+  - id: agent-allowlist-network-exfil-commands-opencode
+    # Regex, not JSON: OpenGrep's JSON parser skips *.jsonc files (Kilo's default project file
+    # is .kilo/kilo.jsonc), and opencode applies the last matching rule, so key order matters,
+    # which JSON object patterns ignore. Both formats are JSONC, so comments are skipped.
+    languages: [regex]
+    severity: WARNING
+    message: >-
+      This opencode / Kilo permission lets the agent run a network tool (curl, wget, nc, ssh,
+      scp, nslookup, dig, ping, ...) without asking: a "bash" pattern such as "curl *" set to
+      "allow" approves every curl command, whatever its arguments. A prompt injection in a
+      file, issue, web page, or tool result the agent reads can then have it read a secret
+      (.env, a cloud credential, source code) and send it out in a request, an upload, or a
+      DNS lookup of a name like <secret>.attacker.example, with nobody asked. Narrowing the
+      pattern to one URL doesn't help: * matches any text, including a second URL or
+      `-d @.env`. Set these patterns to "ask", and fetch documentation through the webfetch
+      tool instead.
+    paths:
+      include:
+        # Project config at any depth, including .opencode/, .kilo/, and .kilocode/ folders.
+        - "opencode.json"
+        - "opencode.jsonc"
+        - "kilo.json"
+        - "kilo.jsonc"
+        # Agents and modes in Markdown front matter (opencode 1.19 and Kilo 7.8 read
+        # {agent,agents}/**/*.md and {mode,modes}/*.md in these folders).
+        - ".opencode/agent/**/*.md"
+        - ".opencode/agents/**/*.md"
+        - ".opencode/mode/*.md"
+        - ".opencode/modes/*.md"
+        - ".kilo/agent/**/*.md"
+        - ".kilo/agents/**/*.md"
+        - ".kilo/mode/*.md"
+        - ".kilo/modes/*.md"
+        - ".kilocode/agent/**/*.md"
+        - ".kilocode/agents/**/*.md"
+        - ".kilocode/mode/*.md"
+        - ".kilocode/modes/*.md"
+    pattern-either:
+      - patterns:
+          # The "bash" object of a "permission" object (top level or in an agent), where the
+          # "permission" key is not on a // line. A "*": "allow" pattern approves every command:
+          # that is a wholesale allow, not this rule's finding.
+          - pattern-regex: |-
+              (?xm)
+              (?(DEFINE)
+                # A JSON string, so comment markers and braces inside one are skipped.
+                (?<str> " [^"\\\n]*+ (?: \\. [^"\\\n]*+ )*+ " )
+                # One token of an object body: a string, a // or /* */ comment, a nested object or
+                # array, or any other character. It never consumes the body's own closing brace.
+                (?<piece> (?> (?&str) | //[^\n]*+ | /\* (?: [^*] | \*(?!/) )*+ \*/
+                            | \{ (?&piece)*+ \} | \[ (?&piece)*+ \] | [^"{}\[\]/] | /(?![/*]) ) )
+                # A key that matches every command or tool.
+                (?<star> " \* " \s*+ : )
+              )
+              ^[\x20\t]*+ (?!//) (?: [^"\n/] | (?&str) | /(?![/*]) )*? " permission " \s*+ : \s*+ \{
+              (?: (?! " bash " \s*+ : ) (?&piece) )*?
+              " bash " \s*+ : \s*+ \{
+              (?! (?&piece)*? (?&star) \s*+ " allow " )
+              (?&piece)*+ \}
+          # A command pattern for a network program with a * after it ("curl" alone matches only
+          # the bare command), set to allow, and not on a // line (\G picks up a second pattern
+          # on the same line). The finding lands on the pattern.
+          - pattern-regex: |-
+              (?xm)
+              # --- network exfil programs (begin): build.py keeps this block identical in
+              # the agent-allowlist-network-exfil-commands rules; edit every copy together. ---
+              (?(DEFINE)
+                # An optional directory, so /usr/bin/curl counts.
+                (?<dir> (?: [^\s"'()\[\],:*]* [/\\]{1,2} )? )
+                # Programs whose main use is sending or fetching data over the network: HTTP
+                # clients, raw sockets, remote shells and file transfer, and DNS, ICMP, and
+                # whois lookups (a looked-up name carries data to the name's DNS server).
+                # General developer tools that can also reach the network (git, gh, npm,
+                # aws, docker) are left out: approving them is common and is a different
+                # question.
+                (?<net> (?: curl | curlie | wget2? | https? | xhs? | aria2c | grpcurl | websocat | wscat
+                          | nc | ncat | netcat | socat | telnet
+                          | ssh | scp | sftp | rsync | ftp | lftp | tftp
+                          | nslookup | dig | host | drill | whois
+                          | ping6? | traceroute6? ) (?i:\.exe)?
+                        | (?i: invoke-webrequest | invoke-restmethod | iwr | irm | resolve-dnsname ) )
+              )
+              # --- network exfil programs (end) ---
+              (?(DEFINE)
+                # A JSON string, so comment markers and braces inside one are skipped.
+                (?<str> " [^"\\\n]*+ (?: \\. [^"\\\n]*+ )*+ " )
+                # One token of an object body: a string, a // or /* */ comment, a nested object or
+                # array, or any other character. It never consumes the body's own closing brace.
+                (?<piece> (?> (?&str) | //[^\n]*+ | /\* (?: [^*] | \*(?!/) )*+ \*/
+                            | \{ (?&piece)*+ \} | \[ (?&piece)*+ \] | [^"{}\[\]/] | /(?![/*]) ) )
+                # A key that matches every command or tool.
+                (?<star> " \* " \s*+ : )
+              )
+              (?: ^[\x20\t]*+ (?!//) | \G ) (?: [^"\n/] | (?&str) | /(?![/*]) )*?
+              \K " \s*+ (?&dir) (?&net) (?= [\s*"] ) [^"\n]*? \* [^"\n]*+ " \s*+ : \s*+ " allow "
+              # The last matching rule wins: a later "*" pattern in this bash object, or a later
+              # "*" permission key after it, replaces the allow.
+              (?! (?&piece)*? (?&star) )
+              (?! (?&piece)*+ \} (?&piece)*? (?&star) )
+      # The same in an agent's Markdown front matter (YAML): a permission: block, its bash:
+      # block, then the pattern.
+      - patterns:
+          - pattern-regex: \A(?:\x{FEFF})?---[ \t]*\r?\n(?s:.*?)\r?\n---[ \t]*(?:\r?\n|\z)
+          - pattern-regex: (?m)^(?<pind>[ \t]*+)permission[ \t]*+:[^\n]*+(?:\n(?:\k<pind>[ \t]++[^\n]*+|[ \t]*+(?=\n)))*+
+          # A "*": allow pattern in the bash block is a wholesale allow, not this rule's finding.
+          - pattern-regex: |-
+              (?xm)
+              ^ (?<bind>[\x20\t]++) bash [\x20\t]*+ :
+              (?! [^\n]*? ["']\*["'] [\x20\t]*+ : [\x20\t]*+ ["']?allow\b )
+              (?! [^\n]*+ (?: \n \k<bind> [\x20\t]++ [^\n]*+ )*? \n \k<bind> [\x20\t]++ ["']\*["'] [\x20\t]*+ : [\x20\t]*+ ["']?allow\b )
+              [^\n]*+ (?: \n (?: \k<bind> [\x20\t]++ [^\n]*+ | [\x20\t]*+ (?=\n) ) )*+
+          # A pattern for a network program with a * after it, set to allow, as a block key or
+          # inside a flow mapping. The last matching rule wins: a later "*" key further down
+          # the front matter replaces the allow.
+          - pattern-regex: |-
+              (?xm)
+              # --- network exfil programs (begin): build.py keeps this block identical in
+              # the agent-allowlist-network-exfil-commands rules; edit every copy together. ---
+              (?(DEFINE)
+                # An optional directory, so /usr/bin/curl counts.
+                (?<dir> (?: [^\s"'()\[\],:*]* [/\\]{1,2} )? )
+                # Programs whose main use is sending or fetching data over the network: HTTP
+                # clients, raw sockets, remote shells and file transfer, and DNS, ICMP, and
+                # whois lookups (a looked-up name carries data to the name's DNS server).
+                # General developer tools that can also reach the network (git, gh, npm,
+                # aws, docker) are left out: approving them is common and is a different
+                # question.
+                (?<net> (?: curl | curlie | wget2? | https? | xhs? | aria2c | grpcurl | websocat | wscat
+                          | nc | ncat | netcat | socat | telnet
+                          | ssh | scp | sftp | rsync | ftp | lftp | tftp
+                          | nslookup | dig | host | drill | whois
+                          | ping6? | traceroute6? ) (?i:\.exe)?
+                        | (?i: invoke-webrequest | invoke-restmethod | iwr | irm | resolve-dnsname ) )
+              )
+              # --- network exfil programs (end) ---
+              (?: ^[\x20\t]++ | [{,][\x20\t]*+ ) \K
+              (?: " (?&dir) (?&net) (?= [\s*"] ) [^"\n]*? \* [^"\n]*+ "
+                | ' (?&dir) (?&net) (?= [\s*'] ) [^'\n]*? \* [^'\n]*+ '
+                | (?&dir) (?&net) (?= [\s*] ) [^:\#\n]*? \* [^:\#\n]*+ )
+              [\x20\t]*+ : [\x20\t]*+ (?: allow | "allow" | 'allow' ) (?= [\x20\t]*+ (?: [,}\#] | $ ) )
+              (?! [^\n]*? ["']\*["'] [\x20\t]*+ : )
+              (?! (?: \n [\x20\t]++ [^\n]*+ )*? \n [\x20\t]++ ["']\*["'] [\x20\t]*+ : )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0086 - Exfiltration via AI Agent Tool Invocation"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [opencode, kilo-code]
+      references:
+        - https://opencode.ai/docs/permissions/
+        - https://github.com/sst/opencode/blob/v1.19.4/packages/opencode/src/util/wildcard.ts
+        - https://github.com/sst/opencode/blob/v1.19.4/packages/opencode/src/permission/index.ts
+        - https://github.com/Kilo-Org/kilocode/blob/v7.8.17/packages/opencode/src/kilocode/config/config.ts
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

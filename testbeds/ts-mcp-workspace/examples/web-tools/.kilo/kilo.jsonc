@@ -1,0 +1,10 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  // Kilo runs of the same eval only read the workspace docs site.
+  "permission": {
+    "webfetch": {
+      "*": "ask",
+      "https://docs.example.com/*": "allow"
+    }
+  }
+}

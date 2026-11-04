@@ -1,0 +1,44 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    // The server this repository builds.
+    "repo-tools": {
+      "type": "local",
+      // ruleid: project-mcp-server-no-prompt-opencode
+      "command": ["node", "dist/server.js"],
+      "environment": { "REPO_ROOT": "." }
+    },
+    "fixtures": {
+      "type": "local",
+      "environment": { "FIXTURES": "test/fixtures" },
+      // "command": ["node", "old/fixtures.js"],
+      // ruleid: project-mcp-server-no-prompt-opencode
+      "command": [
+        "npx", "-y", "@example-org/fixtures-mcp@0.9.1"
+      ]
+    },
+    "paused": {
+      "type": "local",
+      // ok: project-mcp-server-no-prompt-opencode
+      "command": ["node", "dist/paused.js"],
+      "environment": { "MODE": "dry-run" },
+      "enabled": false
+    },
+    "docs": {
+      "type": "remote",
+      // ok: project-mcp-server-no-prompt-opencode
+      "url": "https://mcp.example.com/docs"
+    },
+    "unset": {
+      "type": "local",
+      // ok: project-mcp-server-no-prompt-opencode
+      "command": [""]
+    }
+  },
+  "formatter": {
+    "prettier": {
+      // ok: project-mcp-server-no-prompt-opencode
+      "command": ["npx", "prettier", "--write", "$FILE"]
+    }
+  }
+}

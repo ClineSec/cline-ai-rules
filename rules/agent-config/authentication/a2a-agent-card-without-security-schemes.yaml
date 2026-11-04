@@ -1,0 +1,72 @@
+rules:
+  - id: a2a-agent-card-without-security-schemes
+    # Sources (checked 2026-10-24): A2A specification v1.0.1 (section 8.2: the card is served at
+    # /.well-known/agent-card.json, which replaced agent.json in 0.3.0; section 7.3: clients
+    # learn the required authentication from securitySchemes; section 7.4: the server MUST
+    # authenticate every request; the proto's AgentCard.security_schemes and
+    # security_requirements, which a 0.3 card calls `security`), and a2a-sdk v1.2.3, whose
+    # client AuthInterceptor sends credentials only when the card lists security requirements
+    # and schemes. A card file is also what ADK's to_a2a(agent_card="agent-card.json") and
+    # kagent load.
+    # Reported: a card that names a live A2A endpoint (a 1.0 interface with a JSONRPC, GRPC, or
+    # HTTP+JSON binding, or a 0.3 card with a url and a transport or 0.x protocolVersion) at a
+    # host other than loopback, and no securitySchemes entry. Website "agent cards" that list no
+    # A2A binding are left alone; many committed cards are those. A public agent with no
+    # credentials by design is a legitimate card, so confidence is low.
+    languages: [json]
+    severity: INFO
+    message: >-
+      This A2A agent card describes a live endpoint and declares no `securitySchemes`, which
+      tells every client the agent takes requests without credentials. The A2A SDKs don't
+      authenticate anything on their own, so unless something in front of the server checks
+      every request, anyone who finds the card can send the agent tasks, read other callers'
+      tasks, and fetch any extended card it advertises. If the agent should not be public,
+      add authentication to the server and declare it here (`securitySchemes` plus
+      `securityRequirements`, or `security` in a 0.3 card) so clients know what to send. If
+      it is public by design, say so in a `// nosemgrep` comment.
+    paths:
+      include:
+        - "agent-card.json"
+        - "*-agent-card.json"
+        - "*.agent-card.json"
+        - "**/.well-known/agent.json"
+    patterns:
+      # "name" is bound in the same object as the endpoint, so a skill's name inside the card
+      # doesn't match.
+      - pattern-either:
+          # 1.0: an interface with a real protocol binding at a host other than loopback.
+          - pattern: |
+              {..., "name": $NAME, "supportedInterfaces": [..., {..., "protocolBinding": "=~/^(JSONRPC|GRPC|HTTP\+JSON)$/", "url": "=~/^(?>(?:[a-z][a-z0-9+.-]*:\/\/)?)(?!localhost(?![\w.-])|127\.|\[::1\]|0\.0\.0\.0|\$\{)[A-Za-z0-9.-]+/", ...}, ...], ...}
+          # 0.3: a url at a host other than loopback plus a transport or a 0.x protocol version.
+          - pattern: '{..., "name": $NAME, "url": "=~/^https?:\/\/(?!localhost(?![\w.-])|127\.|\[::1\]|0\.0\.0\.0|\$\{)[A-Za-z0-9.-]+/", "preferredTransport": "=~/^(JSONRPC|GRPC|HTTP\+JSON)$/", ...}'
+          - pattern: '{..., "name": $NAME, "url": "=~/^https?:\/\/(?!localhost(?![\w.-])|127\.|\[::1\]|0\.0\.0\.0|\$\{)[A-Za-z0-9.-]+/", "protocolVersion": "=~/^0\.[23](\.|$)/", ...}'
+      - pattern-not: '{..., "securitySchemes": {..., "$SCHEME": $DEF, ...}, ...}'
+      - focus-metavariable: $NAME
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI07 - Insecure Inter-Agent Communication"
+        - "ASI03 - Identity and Privilege Abuse"
+      owasp-aisvs:
+        - "v1.01-C5.2.1 - AI Resource Authorization & Classification"
+        - "v1.01-C9.5.5 - Agent Authorization, Delegation, and Continuous Enforcement"
+      mitre-atlas:
+        - "AML.T0132 - Misconfigured or Publicly Exposed AI Services"
+      cwe:
+        - "CWE-306: Missing Authentication for Critical Function"
+      confidence: LOW
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [a2a, agent-card]
+      references:
+        - https://github.com/a2aproject/A2A/blob/v1.0.1/docs/specification.md#73-client-authentication-process
+        - https://github.com/a2aproject/A2A/blob/v1.0.1/docs/specification.md#82-discovery-mechanisms
+        - https://github.com/a2aproject/A2A/blob/v1.0.1/specification/a2a.proto
+        - https://github.com/a2aproject/A2A/blob/v1.0.1/docs/whats-new-v1.md
+        - https://github.com/a2aproject/a2a-python/blob/v1.2.3/src/a2a/client/auth/interceptor.py
+        - https://cwe.mitre.org/data/definitions/306.html

@@ -1,0 +1,95 @@
+# Helpdesk issue assistant. Maintainers comment "/helpdesk-bot ..." on an issue to get a fix
+# proposed, and new issues are labeled automatically. Runs on GitHub-hosted runners.
+name: issue-assistant
+
+on:
+  issue_comment:
+    types: [created]
+  issues:
+    types: [opened, labeled]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  propose-fix:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      startsWith(github.event.comment.body, '/helpdesk-bot')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You maintain the helpdesk service in this repository.
+            A maintainer asked: ${{ github.event.comment.body }}
+
+            The issue they are asking about:
+            ${{ github.event.issue.title }}
+            ${{ github.event.issue.body }}
+
+            Make the change, run the unit tests, and open a draft pull request.
+          claude_args: >-
+            --max-turns 20
+            --allowedTools "Read" "Grep" "Edit" "Bash(pytest:*)" "Bash(git push:*)"
+
+      # Answers maintainer questions about the codebase; the prompt carries only the
+      # maintainer's own comment, and claude-code-action refuses commenters without write
+      # access.
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: "Answer the maintainer's question: ${{ github.event.comment.body }}"
+          claude_args: --allowedTools "Read" "Grep" "Bash(pytest:*)"
+
+  label-new-issue:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pick labels
+        uses: google-github-actions/run-gemini-cli@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          prompt: |
+            Read the issue from $ISSUE_TITLE and $ISSUE_BODY, pick at most two labels from
+            `gh label list`, and apply them with `gh issue edit $ISSUE_NUMBER --add-label`.
+          settings: |
+            {
+              "tools": {
+                "core": [
+                  "run_shell_command(gh label list)",
+                  "run_shell_command(gh issue edit)"
+                ]
+              }
+            }
+
+  summarize-new-issue:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # The run-gemini-cli guidance for untrusted input: read tools and echo only, no token.
+      - uses: google-github-actions/run-gemini-cli@v0
+        env:
+          GITHUB_TOKEN: ""
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          prompt: "Summarize the issue in $ISSUE_BODY in two sentences."
+          settings: |
+            {
+              "tools": {
+                "core": ["read_file", "grep_search", "run_shell_command(echo)"]
+              }
+            }

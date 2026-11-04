@@ -1,0 +1,169 @@
+# Fixture for gha-ai-agent-untrusted-trigger: comment and issue triggers.
+name: issue-assistant
+on:
+  issue_comment:
+    types: [created]
+  issues:
+    types: [labeled]
+jobs:
+  claude:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # claude-code-action checks that the commenter has write access, but the issue itself
+      # may come from anyone.
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # ruleid: gha-ai-agent-untrusted-trigger
+          prompt: "Fix the bug described here: ${{ github.event.issue.title }}"
+          claude_args: --allowedTools "Edit" "Bash(npm test)"
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # ok: gha-ai-agent-untrusted-trigger
+          prompt: "Do what the maintainer asked: ${{ github.event.comment.body }}"
+          claude_args: --allowedTools Bash
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # ok: gha-ai-agent-untrusted-trigger
+          prompt: "Summarize issue ${{ github.event.issue.title }}"
+          claude_args: --allowedTools "Read" "Bash(gh issue view:*)" "Bash(npm test)"
+      - uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_non_write_users: "*"
+          # ruleid: gha-ai-agent-untrusted-trigger
+          prompt: "Answer this comment: ${{ github.event.comment.body }}"
+          settings: '{"permissions": {"allow": ["Bash(gh issue comment:*)"]}}'
+      - uses: anthropics/claude-code-base-action@v1
+        with:
+          # ruleid: gha-ai-agent-untrusted-trigger
+          prompt: "Answer this comment: ${{ github.event.comment.body }}"
+          claude_args: --permission-mode acceptEdits
+
+  # The write-access check, off for everyone or not.
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: anthropics/claude-code-action@v1
+        with:
+          allowed_bots: "*"
+          # ruleid: gha-ai-agent-untrusted-trigger
+          prompt: "Do what this comment asks: ${{ github.event.comment.body }}"
+          claude_args: --allowedTools "Edit"
+      # allowed_non_write_users without github_token is ignored, so the check still applies.
+      - uses: anthropics/claude-code-action@v1
+        with:
+          allowed_non_write_users: "*"
+          # ok: gha-ai-agent-untrusted-trigger
+          prompt: "Do what this comment asks: ${{ github.event.comment.body }}"
+          claude_args: --allowedTools "Edit"
+      - uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_non_write_users: "alice"
+          # ok: gha-ai-agent-untrusted-trigger
+          prompt: "Do what this comment asks: ${{ github.event.comment.body }}"
+          claude_args: --allowedTools "Edit"
+      - uses: openai/codex-action@v1
+        with:
+          allow-users: "*"
+          # ruleid: gha-ai-agent-untrusted-trigger
+          prompt: "Do what this comment asks: ${{ github.event.comment.body }}"
+      - uses: openai/codex-action@v1
+        with:
+          # ok: gha-ai-agent-untrusted-trigger
+          prompt: "Do what this comment asks: ${{ github.event.comment.body }}"
+
+  gemini:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/run-gemini-cli@v0
+        env:
+          # ruleid: gha-ai-agent-untrusted-trigger
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        with:
+          prompt: 'Label the issue in $ISSUE_BODY.'
+          settings: |
+            {"tools": {"core": ["run_shell_command(gh issue edit)", "read_file"]}}
+      - uses: google-github-actions/run-gemini-cli@v0
+        with:
+          # ruleid: gha-ai-agent-untrusted-trigger
+          prompt: "Triage: ${{ toJSON(github.event.issue) }}"
+      - uses: google-github-actions/run-gemini-cli@v0
+        env:
+          # ok: gha-ai-agent-untrusted-trigger
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        with:
+          prompt: '/gemini-triage'
+          settings: |
+            {"tools": {"core": ["run_shell_command(echo)", "read_file", "grep_search"]}}
+
+  cli:
+    runs-on: ubuntu-latest
+    env:
+      # ruleid: gha-ai-agent-untrusted-trigger
+      COMMENT: ${{ github.event.comment.body }}
+    steps:
+      - run: |
+          claude -p "Reply to: $COMMENT" \
+            --allowedTools "Bash"
+      # ruleid: gha-ai-agent-untrusted-trigger
+      - run: 'codex exec --full-auto "Fix the issue titled ${{ github.event.issue.title }}"'
+      # ok: gha-ai-agent-untrusted-trigger
+      - run: codex exec "Explain the issue titled ${{ github.event.issue.title }}"
+      # ruleid: gha-ai-agent-untrusted-trigger
+      - run: >-
+          claude -p "Fix the issue titled ${{ github.event.issue.title }}"
+          --allowedTools
+          "Read,Edit"
+      - env:
+          # ok: gha-ai-agent-untrusted-trigger
+          TITLE: ${{ github.event.issue.title }}
+        run: |
+          echo "Agents may use --allowedTools Bash" > notes.txt
+          claude -p "Summarize: $TITLE"
+
+  maintainers-only:
+    if: contains(fromJSON('["OWNER", "MEMBER"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    steps:
+      # ok: gha-ai-agent-untrusted-trigger
+      - run: gemini --yolo -p "${{ github.event.comment.body }}"
+      # ruleid: gha-ai-agent-untrusted-trigger
+      - run: gemini --yolo -p "Fix ${{ github.event.issue.body }}"
+
+  # An env entry links to the agent only when the script uses its whole name.
+  env-links:
+    runs-on: ubuntu-latest
+    env:
+      # ok: gha-ai-agent-untrusted-trigger
+      ISSUE_BODY: ${{ github.event.issue.body }}
+      ISSUE_BODY_SUMMARY: "short summary from an earlier step"
+      # ruleid: gha-ai-agent-untrusted-trigger
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+    steps:
+      - run: claude -p "Fix the issue summarized as $ISSUE_BODY_SUMMARY" --allowedTools "Edit"
+      - run: claude -p "Fix the issue titled ${{ env.ISSUE_TITLE }}" --allowedTools "Edit"
+      - env:
+          # ruleid: gha-ai-agent-untrusted-trigger
+          ISSUE_TEXT: ${{ github.event.issue.body }}
+        run: |
+          printenv ISSUE_TEXT > issue.txt
+          gemini --yolo -p "Fix the issue described in issue.txt"
+      - env:
+          # ok: gha-ai-agent-untrusted-trigger
+          ISSUE: ${{ github.event.issue.body }}
+        run: gemini --yolo -p "Fix issue number $ISSUE_NUMBER"
+
+  # opencode run allows every tool by default, with or without --auto.
+  opencode:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          # ruleid: gha-ai-agent-untrusted-trigger
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: opencode run "Draft a fix for this issue - $ISSUE_BODY"
+      - env:
+          # ok: gha-ai-agent-untrusted-trigger
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: opencode models

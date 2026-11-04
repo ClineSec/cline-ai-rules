@@ -1,0 +1,33 @@
+@page
+@model AnswerModel
+@using Microsoft.SemanticKernel.ChatCompletion
+@inject IChatCompletionService Chat
+@{
+    ViewData["Title"] = "Answer";
+    var answer = await Chat.GetChatMessageContentAsync($"Answer question {Model.QuestionId} in HTML.");
+    var intro = "<p>Here is what the assistant found.</p>";
+    var sources = await Chat.GetChatMessageContentAsync($"List sources for question {Model.QuestionId} as HTML.");
+    var sourcesHtml = sources.Content ?? "";
+}
+
+<!-- ok: llm-output-to-html-razor -->
+@Html.Raw(intro)
+<article>
+    <!-- ruleid: llm-output-to-html-razor -->
+    @Html.Raw(answer.Content)
+</article>
+<!-- ok: llm-output-to-html-razor -->
+<p>@answer.Content</p>
+<!-- ok: llm-output-to-html-razor -->
+@Html.Raw(Model.BannerHtml)
+<!-- ruleid: llm-output-to-html-razor -->
+@(new HtmlString(answer.Content))
+
+<aside>
+    <!-- ruleid: llm-output-to-html-razor -->
+    @Html.Raw(sourcesHtml)
+</aside>
+
+@functions {
+    public IHtmlContent Footer(string text) => new HtmlString(System.Net.WebUtility.HtmlEncode(text));
+}

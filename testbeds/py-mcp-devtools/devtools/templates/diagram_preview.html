@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Diagram preview</title>
+  <link rel="stylesheet" href="https://cdn.example.com/npm/katex@0.19.0/dist/katex.min.css">
+  <script src="https://cdn.example.com/npm/mermaid@12.2.0/dist/mermaid.min.js"></script>
+  <script defer src="https://cdn.example.com/npm/katex@0.19.0/dist/katex.min.js"></script>
+  <script defer src="https://cdn.example.com/npm/katex@0.19.0/dist/contrib/auto-render.min.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; }
+    .caption { color: #555; max-width: 60rem; }
+  </style>
+</head>
+<body>
+  <pre class="mermaid">__DIAGRAM__</pre>
+  <p class="caption" id="caption">__CAPTION__</p>
+  <script>
+    // preview.py fills in the config: { securityLevel: "loose" } for architecture diagrams
+    // (click links), strict for release notes.
+    mermaid.initialize(__MERMAID_CONFIG__);
+    document.addEventListener("DOMContentLoaded", () => {
+      renderMathInElement(document.getElementById("caption"), {
+        delimiters: [{ left: "$", right: "$", display: false }],
+        throwOnError: false,
+        // Captions cite the metrics docs with \href or \url.
+        trust: (context) => context.command === "\\href" || context.command === "\\url",
+      });
+    });
+  </script>
+</body>
+</html>

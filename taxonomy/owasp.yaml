@@ -1,0 +1,66 @@
+# OWASP identifiers that rule metadata may use. scripts/build.py rejects anything else.
+#
+# Policy: IDs and titles are copied exactly as OWASP writes them in the latest official release
+# of each list. `current` is that release; `previous` holds the prior edition's IDs, which rules
+# carry as compatibility tags where `compat` names one.
+#
+# Titles verified 2026-10-21 against:
+#   LLM 2026/2025: GenAI-Security-Project/GenAI-LLM-Top10, 2026/final and 2025 entry headings
+#   Agentic 2026:  OWASP-Top-10-for-Agentic-Applications-2026-v1.0.pdf entry headings
+#                  (GenAI-Security-Project/GenAI-Security-Corpus)
+#   MCP (beta):    OWASP/www-project-mcp-top-10, index.md
+
+owasp-llm:
+  source: https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/tree/main/2026/final
+  current:
+    "LLM01:2026": { title: Prompt Injection, compat: "LLM01:2025" }
+    "LLM02:2026": { title: Sensitive Information Disclosure, compat: "LLM02:2025" }
+    "LLM03:2026": { title: Excessive Agency, compat: "LLM06:2025" }
+    "LLM04:2026": { title: Supply Chain, compat: "LLM03:2025" }
+    "LLM05:2026": { title: Data and Model Poisoning, compat: "LLM04:2025" }
+    "LLM06:2026": { title: Unbounded Consumption, compat: "LLM10:2025" }
+    "LLM07:2026": { title: Misinformation, compat: "LLM09:2025" }
+    "LLM08:2026": { title: Hidden Context Exposure, compat: "LLM07:2025" }
+    "LLM09:2026": { title: Vector and Embedding Weaknesses, compat: "LLM08:2025" }
+    "LLM10:2026": { title: Improper Output Handling, compat: "LLM05:2025" }
+  previous:
+    "LLM01:2025": { title: Prompt Injection }
+    "LLM02:2025": { title: Sensitive Information Disclosure }
+    "LLM03:2025": { title: Supply Chain }
+    "LLM04:2025": { title: Data and Model Poisoning }
+    "LLM05:2025": { title: Improper Output Handling }
+    "LLM06:2025": { title: Excessive Agency }
+    "LLM07:2025": { title: System Prompt Leakage }
+    "LLM08:2025": { title: Vector and Embedding Weaknesses }
+    "LLM09:2025": { title: Misinformation }
+    "LLM10:2025": { title: Unbounded Consumption }
+
+owasp-agentic:
+  source: https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/
+  current:
+    "ASI01": { title: Agent Goal Hijack }
+    "ASI02": { title: Tool Misuse and Exploitation }
+    "ASI03": { title: Identity and Privilege Abuse }
+    "ASI04": { title: Agentic Supply Chain Vulnerabilities }
+    "ASI05": { title: Unexpected Code Execution (RCE) }
+    "ASI06": { title: Memory & Context Poisoning }
+    "ASI07": { title: Insecure Inter-Agent Communication }
+    "ASI08": { title: Cascading Failures }
+    "ASI09": { title: Human-Agent Trust Exploitation }
+    "ASI10": { title: Rogue Agents }
+
+# Beta: the MCP Top 10 has no final release yet. IDs and titles follow the project's index.md.
+owasp-mcp:
+  beta: true
+  source: https://owasp.org/www-project-mcp-top-10/
+  current:
+    "MCP01:2025": { title: Token Mismanagement & Secret Exposure }
+    "MCP02:2025": { title: Privilege Escalation via Scope Creep }
+    "MCP03:2025": { title: Tool Poisoning }
+    "MCP04:2025": { title: Software Supply Chain Attacks & Dependency Tampering }
+    "MCP05:2025": { title: Command Injection & Execution }
+    "MCP06:2025": { title: Intent Flow Subversion }
+    "MCP07:2025": { title: Insufficient Authentication & Authorization }
+    "MCP08:2025": { title: Lack of Audit and Telemetry }
+    "MCP09:2025": { title: Shadow MCP Servers }
+    "MCP10:2025": { title: Context Injection & Over-Sharing }

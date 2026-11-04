@@ -1,0 +1,11 @@
+{
+  // A website's "agent card" that names no A2A binding.
+  // ok: a2a-agent-card-without-security-schemes
+  "name": "Example Docs",
+  "description": "Documentation site.",
+  "version": "1.0",
+  "url": "https://docs.example.com",
+  "supportedInterfaces": [{ "protocol": "https", "url": "https://docs.example.com" }],
+  "capabilities": { "streaming": false },
+  "skills": []
+}

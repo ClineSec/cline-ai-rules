@@ -1,0 +1,84 @@
+rules:
+  - id: agent-sdk-subagent-permission-mode-ts
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      This Claude Agent SDK subagent definition (or the same object passed as JSON to claude
+      --agents) sets its own permission mode, looser than a Manual (`default`) or `dontAsk`
+      session, and the SDK and `claude -p` start sessions in `default` when no mode is set. In such a session Claude Code runs this subagent in the mode named here:
+      `acceptEdits` approves file edits and `rm`, `mv`, `cp`, and `sed` inside the working
+      directory before your `canUseTool` callback is asked (the SDK's
+      CLAUDE_SDK_CAN_USE_TOOL_SHADOWED warning doesn't cover it), and `auto` lets a classifier
+      approve shell commands and network requests. Whatever the model delegates to this
+      subagent therefore skips the checks the session's `allowedTools` and `canUseTool` were
+      meant to apply, and a prompt injection in an issue, file, or tool result it reads can
+      change files or run commands. Leave `permissionMode` unset so the subagent inherits the
+      session's mode, give it a `tools` list without Edit, Write, or Bash if it shouldn't
+      change anything, or gate its calls with a PreToolUse hook, which runs before the mode
+      is applied.
+    # Claude Code docs for v2.1.310, read 2026-10-25: agent-sdk/permissions ("Auto-approved
+    # tools never reach canUseTool"; the shadowed-callback warning covers bypassPermissions
+    # and bare allowedTools entries, not acceptEdits; the subagent inheritance note) and
+    # agent-sdk/subagents (AgentDefinition.permissionMode), @anthropic-ai/claude-agent-sdk
+    # 0.3.310. An AgentDefinition always has description and prompt, which session Options
+    # don't. An object JSON.stringify'd for claude --agents has the same shape and is
+    # reported here, not by subagent-permission-mode-cli-ts. bypassPermissions is left out
+    # because current SDKs ignore it on a subagent (agent-sdk-bypass-permissions-ts skips it
+    # too); dontAsk and plan are stricter.
+    patterns:
+      - pattern-either:
+          # A definition object: typed, `satisfies AgentDefinition`, or untyped.
+          - pattern: '{..., description: $D, prompt: $P, permissionMode: $V, ...}'
+          # A definition under `agents`, which may spread its description and prompt from a
+          # shared base.
+          - pattern: '{..., agents: {..., $NAME: {..., permissionMode: $V, ...}, ...}, ...}'
+          # A registry typed as one (Record<string, AgentDefinition> or an index signature),
+          # by annotation or by `satisfies` / `as` (also after `as const`). A type
+          # metavariable binds only `Record` and type patterns ignore the arguments, so the
+          # declaration is read as text, its object balanced with a recursive group.
+          - patterns:
+              - pattern-regex: (?(DEFINE)(?<obj>\{(?:[^{}]++|(?&obj))*+\})(?<reg>Record\s*+<[^<>]*?\bAgentDefinition\s*+>|\{\s*+\[[^\]]*+\]\s*+:\s*+AgentDefinition\s*+;?\s*+\}))(?:const|let|var)\s++[\w$]++\s*+(?::\s*+(?&reg)\s*+=\s*+(?&obj)|=\s*+(?&obj)\s*+(?:as\s++const\s++)?(?:satisfies|as)\s++(?&reg))
+              - pattern: '{..., $NAME: {..., permissionMode: $V, ...}, ...}'
+      - metavariable-pattern:
+          metavariable: $V
+          patterns:
+            - pattern-either:
+                - pattern: '"acceptEdits"'
+                - pattern: '"auto"'
+            # `'auto' as const` would otherwise match twice.
+            - pattern-not-inside: $X as $T
+            # A guard that picks the mode from a comparison isn't the mode itself.
+            - pattern-not-inside: $A === $B
+            - pattern-not-inside: $A !== $B
+            - pattern-not-inside: $A == $B
+            - pattern-not-inside: $A != $B
+            - pattern-not-inside: $A.includes($B)
+      - focus-metavariable: $V
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI03 - Identity and Privilege Abuse"
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-269: Improper Privilege Management"
+      # The app's own author picks both the session's and the subagent's mode, often on
+      # purpose; the finding marks a subagent the session's approval checks don't cover.
+      confidence: LOW
+      likelihood: LOW
+      impact: HIGH
+      technology: [claude-agent-sdk, anthropic]
+      references:
+        - https://code.claude.com/docs/en/agent-sdk/permissions
+        - https://code.claude.com/docs/en/agent-sdk/subagents
+        - https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk/v/0.3.310
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

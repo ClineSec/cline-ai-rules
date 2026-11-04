@@ -1,0 +1,57 @@
+rules:
+  - id: hf-trust-remote-code
+    languages: [python]
+    severity: WARNING
+    message: >-
+      `trust_remote_code=True` runs Python shipped inside the model or dataset repository at
+      load time. Anyone who can push to that repository, or swap it before you pin it, gets
+      code execution in this process. Prefer architectures supported natively by the library.
+      If remote code is unavoidable, pin `revision=` to a reviewed commit SHA.
+    pattern-either:
+      # No revision pin at all.
+      - patterns:
+          - pattern: $FN(..., trust_remote_code=True, ...)
+          - pattern-not: $FN(..., revision=$REV, ...)
+      # Pinned to a string that is not a full commit SHA (a branch or tag can move). Constant
+      # propagation resolves module-level constants; revisions that can't be resolved are
+      # left alone rather than guessed at.
+      - patterns:
+          - pattern: $FN(..., trust_remote_code=True, ...)
+          - pattern: $FN(..., revision="$REV", ...)
+          - metavariable-regex:
+              metavariable: $REV
+              regex: ^(?![0-9a-fA-F]{40}$)
+      # The same two checks on a dict literal of load options passed as **kwargs. The finding
+      # sits on the dict. (dict(trust_remote_code=True, ...) is a call and matches above.)
+      - patterns:
+          - pattern: '{..., "trust_remote_code": True, ...}'
+          - pattern-not: '{..., "revision": $REV, ...}'
+      - patterns:
+          - pattern: '{..., "trust_remote_code": True, ...}'
+          - pattern: '{..., "revision": "$REV", ...}'
+          - metavariable-regex:
+              metavariable: $REV
+              regex: ^(?![0-9a-fA-F]{40}$)
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM04:2026 - Supply Chain"
+        - "LLM03:2025 - Supply Chain"
+      owasp-aisvs:
+        - "v1.01-C4.1.2 - AI Workload Sandboxing & Validation"
+        - "v1.01-C6.1.3 - Model Artifact Integrity"
+      mitre-atlas:
+        - "AML.T0010.003 - AI Supply Chain Compromise: Model"
+        - "AML.T0011.000 - User Execution: Unsafe AI Artifacts"
+      cwe:
+        - "CWE-494: Download of Code Without Integrity Check"
+      confidence: HIGH
+      likelihood: LOW
+      impact: HIGH
+      technology: [huggingface, transformers, datasets]
+      references:
+        - https://huggingface.co/docs/transformers/en/models#custom-models
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM04_SupplyChain.md
+        - https://cwe.mitre.org/data/definitions/494.html

@@ -1,0 +1,27 @@
+{
+  "folders": [
+    { "path": "." },
+    { "path": "../workspace-mcp-fixtures" }
+  ],
+  "settings": {
+    "typescript.tsdk": "node_modules/typescript/lib",
+    "mcp": {
+      "servers": {
+        "multi-root-fs": {
+          "type": "stdio",
+          "command": "cmd",
+          "args": [
+            "/c", "npx", "-y", "@modelcontextprotocol/server-filesystem@2.0.0",
+            "${workspaceFolder}",
+            "%USERPROFILE%"
+          ]
+        },
+        "fixtures-fs": {
+          "type": "stdio",
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "${workspaceFolder:workspace-mcp-fixtures}"]
+        }
+      }
+    }
+  }
+}

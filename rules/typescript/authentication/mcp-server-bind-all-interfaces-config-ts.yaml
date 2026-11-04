@@ -1,0 +1,153 @@
+rules:
+  - id: mcp-server-bind-all-interfaces-config-ts
+    # JavaScript/TypeScript twin of mcp-server-bind-all-interfaces-config: code that sets
+    # FASTMCP_HOST to every interface in process.env or in an env object, or that launches
+    # `fastmcp run ... --host 0.0.0.0` as a child process (child_process, or execa calls and
+    # its $`...` template form).
+    # Sources: punkpeye fastmcp 4.23.5 src/FastMCP.ts (start() reads FASTMCP_HOST and
+    # FASTMCP_TRANSPORT when no host is passed in code; default "localhost"); PrefectHQ fastmcp
+    # 4.1.3 settings.py and cli/run.py (the Python server and CLI a Node tool may launch:
+    # FASTMCP_HOST, FASTMCP_SERVER_HOST before 2.14, `fastmcp run --host`, host dropped for
+    # stdio).
+    # Only literal addresses are reported (a module constant counts). A host passed in code
+    # (start({httpStream: {host}})) is reported by mcp-server-exposed-without-auth-ts, which
+    # also checks auth. An env object given to a container (testcontainers withEnvironment,
+    # dockerode Env) is container-internal and not reported. A launch or env object that also
+    # sets the transport to stdio is not reported.
+    languages: [typescript, javascript]
+    severity: INFO
+    message: >-
+      This makes a fastmcp MCP server listen on every network interface of the machine it runs
+      on, so anyone who can reach that machine on the server's port can list and call its tools
+      and do whatever they can do. Nothing here shows whether the server requires auth, and
+      fastmcp has none by default. Use 127.0.0.1 or localhost (the default) for local use. For a
+      server other machines must reach, require auth in the server (FastMCP `authenticate` or
+      `auth=`) or put it behind an authenticating proxy, and say so in a comment.
+    pattern-either:
+      # The environment: process.env.FASTMCP_HOST = ..., an env object's entry. The name is
+      # an identifier ($NAME) or a quoted key ($KEY).
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: $ENV.$NAME = $H
+                      - pattern: $ENV.$NAME ??= $H
+                      - pattern: $ENV.$NAME ||= $H
+                      - pattern: '{..., $NAME: $H, ...}'
+                  - metavariable-regex:
+                      metavariable: $NAME
+                      regex: ^FASTMCP_(?:SERVER_)?HOST$
+              - patterns:
+                  - pattern-either:
+                      - pattern: $ENV[$KEY] = $H
+                      - pattern: '{..., $KEY: $H, ...}'
+                  - metavariable-regex:
+                      metavariable: $KEY
+                      regex: ^["'`]FASTMCP_(?:SERVER_)?HOST["'`]$
+          - pattern-not-inside: $X.withEnvironment(...)
+          - pattern-not-inside: '{..., FASTMCP_TRANSPORT: "stdio", ...}'
+          - pattern-not-inside: '{..., "FASTMCP_TRANSPORT": "stdio", ...}'
+          - metavariable-pattern:
+              metavariable: $H
+              patterns:
+                - pattern: '"=~/^(?:0\.0\.0\.0|::|\[::\])$/"'
+                - pattern-not-inside: $X === $Y
+                - pattern-not-inside: $X !== $Y
+                - pattern-not-inside: $X == $Y
+                - pattern-not-inside: $X != $Y
+          - focus-metavariable: $H
+      # A child process running fastmcp run --host 0.0.0.0. The call is read as words, so argv
+      # items and a command string read the same.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: $ARGV
+                  - pattern: $F(...)
+                  # $ARGV is the whole call, not one of its arguments.
+                  - metavariable-regex:
+                      metavariable: $ARGV
+                      regex: ^[\w$.]+\s*\(
+                  - metavariable-regex:
+                      metavariable: $F
+                      regex: ^(?:[\w$.]+\.)?(?:spawn|spawnSync|execFile|execFileSync|exec|execSync|execa|execaSync|execaCommand|execaCommandSync)$
+              # execa's template form: $`...`, $({...})`...`, execa`...`. $ARGV is the whole
+              # tagged template, not its text alone.
+              - patterns:
+                  - pattern: $ARGV
+                  - pattern: $TAG`...`
+                  - metavariable-regex:
+                      metavariable: $TAG
+                      regex: (?s)^(?:\$|execa|execaSync|execaNode)(?:\s*\(.*\))?$
+                  - metavariable-regex:
+                      metavariable: $ARGV
+                      regex: ^(?:\$|execa)
+              # An argv array kept in a variable.
+              - patterns:
+                  - pattern: $V = $ARGV
+                  - metavariable-regex:
+                      metavariable: $ARGV
+                      regex: ^\[
+          - metavariable-regex:
+              metavariable: $ARGV
+              regex: |-
+                (?xs)
+                (?(DEFINE)
+                  (?<sep> (?: [\s"'`,\[\]()] | \\n )++ )
+                  (?<addr> 0\.0\.0\.0 | :: | \[::\] ) )
+                # A run with --transport stdio never binds the host.
+                ^ (?! .*? (?<![\w-]) (?: --transport | -t ) (?: = | (?&sep) ) stdio \b )
+                .*? (?<![\w./-]) fastmcp (?: [=@] [\w.=]*+ )?+ (?&sep) run (?&sep)
+                (?: .*? (?&sep) )?? --host (?: = | (?&sep) ) (?&addr) (?= [\s"'`,\])] | \z )
+          # The same argv split into a program and an args array declared earlier.
+      - patterns:
+          - pattern-inside: |
+              $ARGS = $ARR;
+              ...
+          - pattern: $F($PROG, $ARGS, ...)
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(?:[\w$.]+\.)?(?:spawn|spawnSync|execFile|execFileSync|execa|execaSync)$
+          - metavariable-regex:
+              metavariable: $PROG
+              regex: ^["'`](?:[^"'`]*/)?fastmcp["'`]$
+          - metavariable-regex:
+              metavariable: $ARR
+              regex: |-
+                (?xs)
+                (?(DEFINE)
+                  (?<sep> (?: [\s"'`,\[\]] )++ )
+                  (?<addr> 0\.0\.0\.0 | :: | \[::\] ) )
+                ^ \[ (?! .*? (?<![\w-]) (?: --transport | -t ) (?: = | (?&sep) ) stdio \b )
+                (?&sep) run (?&sep) (?: .*? (?&sep) )?? --host (?: = | (?&sep) ) (?&addr) (?= [\s"'`,\]] )
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI03 - Identity and Privilege Abuse"
+      owasp-mcp:
+        - "MCP07:2025 - Insufficient Authentication & Authorization"
+        - "MCP09:2025 - Shadow MCP Servers"
+      owasp-aisvs:
+        - "v1.01-C10.2.1 - Authentication & Authorization"
+        - "v1.01-C10.3.1 - Secure Transport"
+      mitre-atlas:
+        - "AML.T0132 - Misconfigured or Publicly Exposed AI Services"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-1327: Binding to an Unrestricted IP Address"
+      confidence: LOW
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, fastmcp, node]
+      references:
+        - https://github.com/punkpeye/fastmcp/blob/v4.23.5/src/FastMCP.ts
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/settings.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/cli/cli.py
+        - https://github.com/PrefectHQ/fastmcp/blob/v4.1.3/fastmcp_slim/fastmcp/cli/run.py
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP07-2025%E2%80%93Insufficient-Authentication%26Authorization.md
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP09-2025%E2%80%93Shadow-MCP-Servers.md
+        - https://cwe.mitre.org/data/definitions/1327.html

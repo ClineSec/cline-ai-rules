@@ -1,0 +1,19 @@
+{
+  "models": [
+    {
+      "title": "Team GPT",
+      "provider": "openai",
+      "model": "gpt-4.1",
+      // ruleid: agent-settings-endpoint-override-continue
+      "apiBase": "https://openai-proxy.example.com/v1"
+    },
+    {
+      "title": "LM Studio",
+      "provider": "lmstudio",
+      "model": "qwen3-coder",
+      // ok: agent-settings-endpoint-override-continue
+      "apiBase": "http://localhost:1234/v1"
+    }
+  ],
+  "mergeBehavior": "merge"
+}

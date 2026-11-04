@@ -1,0 +1,150 @@
+rules:
+  - id: mcp-server-exposed-without-auth-ts
+    # JavaScript/TypeScript twin of mcp-server-exposed-without-auth. Sources: MCP TypeScript
+    # SDK v2.3.1 (@modelcontextprotocol/express 2.0.2 createMcpExpressApp, fastify 2.0.1
+    # createMcpFastifyApp, hono 2.0.2 createMcpHonoApp: `host` defaults to '127.0.0.1' and only
+    # chooses the Host/Origin checks, it doesn't bind; '0.0.0.0' or '::' without allowedHosts
+    # gets a console.warn and no checks; requireBearerAuth is the SDK's auth middleware),
+    # 1.32.1 (@modelcontextprotocol/sdk/server/express.js createMcpExpressApp, same host
+    # logic), and punkpeye fastmcp 4.23.5 (start({httpStream: {host}}), default "localhost",
+    # FASTMCP_HOST; new FastMCP({authenticate}) or {auth}).
+    # Authentication is looked for anywhere in the file: the SDK's requireBearerAuth, fastmcp's
+    # authenticate, or a team's own middleware (an auth, JWT, bearer, passport, or API-key
+    # name or header).
+    # Node's own listen(port) default binds every interface too; only an explicit
+    # all-interfaces address is reported, because that is a choice someone made.
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      This MCP server listens on every network interface and the file sets up no
+      authentication, so anyone who can reach the port can list and call its tools, read its
+      resources, and do whatever those tools can do on this host. Host-header checks don't
+      help: `host: '0.0.0.0'` switches off createMcpExpressApp's checks, and `allowedHosts`
+      or the localhost default only stop browsers, because a direct client sends any Host
+      header it likes. Bind to 127.0.0.1 for local use. For a remote server, require auth on
+      the MCP route (`requireBearerAuth({ verifier })` from the SDK, fastmcp's `authenticate`,
+      or your own middleware), or put it behind an authenticating proxy and say so in a
+      `// nosemgrep` comment.
+    patterns:
+      # The file imports an MCP SDK package or fastmcp, so a bare listen() is an MCP server's.
+      # Shared with mcp-http-transport-without-host-validation-ts (build.py SHARED_BLOCKS).
+      - pattern-either:
+          - pattern-inside: |
+              import $I from "=~/^(@modelcontextprotocol\/|fastmcp$)/";
+              ...
+          - pattern-inside: |
+              import {...} from "=~/^(@modelcontextprotocol\/|fastmcp$)/";
+              ...
+          - pattern-inside: |
+              import * as $I from "=~/^(@modelcontextprotocol\/|fastmcp$)/";
+              ...
+          - pattern-inside: |
+              $I = require("=~/^(@modelcontextprotocol\/|fastmcp$)/");
+              ...
+      - pattern-either:
+          # The SDK's app helpers given an all-interfaces host.
+          - patterns:
+              - pattern: '$CREATE({..., host: $HOST, ...})'
+              - metavariable-regex:
+                  metavariable: $CREATE
+                  regex: ^createMcp(Express|Fastify|Hono)App$
+          # punkpeye fastmcp: start({ httpStream: { host } }) on a FastMCP built in this file.
+          - patterns:
+              - pattern-inside: |
+                  $S = new FastMCP(...);
+                  ...
+              - pattern: '$S.start({..., httpStream: {..., host: $HOST, ...}, ...})'
+          # The server bound to every interface: listen(port, host) (Express, node:http),
+          # listen({ host }) (Fastify), serve({ hostname }) (Hono's node-server, Bun). An app made
+          # by an SDK helper given the same host, or an all-interfaces one, is reported there.
+          - patterns:
+              - pattern-either:
+                  - pattern: $APP.listen($PORT, $HOST, ...)
+                  - pattern: '$APP.listen({..., host: $HOST, ...}, ...)'
+                  - pattern: '$SERVE({..., fetch: $APP.fetch, ..., hostname: $HOST, ...})'
+                  - pattern: '$SERVE({..., hostname: $HOST, ..., fetch: $APP.fetch, ...})'
+              - pattern-not-inside: |
+                  $APP = $CREATE2({..., host: $HOST, ...});
+                  ...
+              - pattern-not-inside: |
+                  $APP = $CREATE2({..., host: "=~/^(0\.0\.0\.0|::|\[::\])$/", ...});
+                  ...
+      # Where the all-interfaces address comes from: the argument itself (also through a
+      # constant, or inline as process.env.HOST ?? "0.0.0.0"), or a variable assigned earlier.
+      # Each branch re-matches the bind and binds $H.
+      - pattern-either:
+          - pattern: '$F({..., host: $H, ...})'
+          - pattern: '$F({..., hostname: $H, ...})'
+          - pattern: $X.listen($P, $H, ...)
+          - pattern: '$X.start({..., httpStream: {..., host: $H, ...}, ...})'
+          - patterns:
+              - pattern-inside: |
+                  $HV = $H;
+                  ...
+              - pattern-either:
+                  - pattern: '$F({..., host: $HV, ...})'
+                  - pattern: '$F({..., hostname: $HV, ...})'
+                  - pattern: $X.listen($P, $HV, ...)
+                  - pattern: '$X.start({..., httpStream: {..., host: $HV, ...}, ...})'
+      # Every-interface addresses, also through a constant or an environment default
+      # (process.env.HOST ?? "0.0.0.0"). A comparison against one isn't a bind.
+      - metavariable-pattern:
+          metavariable: $H
+          patterns:
+            - pattern: '"=~/^(0\.0\.0\.0|::|\[::\])$/"'
+            - pattern-not-inside: $X === $Y
+            - pattern-not-inside: $X == $Y
+            - pattern-not-inside: $X !== $Y
+            - pattern-not-inside: $X != $Y
+      # --- authentication signals (shared with mcp-http-transport-without-host-validation-ts
+      # and a2a-server-without-auth-ts through build.py SHARED_BLOCKS; edit all three
+      # together) ---
+      # No authentication anywhere in the file, as code rather than prose (a comment saying
+      # "TODO: add auth" doesn't count): the SDK's requireBearerAuth, fastmcp's authenticate or
+      # auth option, a route or app middleware whose name says auth, JWT, bearer, passport, or
+      # API key or verifies a token, or a check of the Authorization or X-API-Key header. One
+      # simple regex per signal: a single alternation scanned from the start of the file hits
+      # PCRE's match limit on files of about 100 KB, and the finding is then kept.
+      - pattern-not-regex: (?s)\A(?=.*?requireBearerAuth\s*\().*
+      - pattern-not-regex: (?s)\A(?=.*?\b(?:authenticate|auth)\s*[:(]).*
+      - pattern-not-regex: (?s)\A(?=.*?\.(?:use|all|get|post|put|delete|patch|route|addHook|register)\s*\([^;]{0,300}?(?i:(?<!\.no)(?<!new un)auth(?!ors?\b)|jwt|bearer|passport|api[-_]?key|(?:verify|check|require|validate)[\w$]*token)).*
+      - pattern-not-regex: (?s)\A(?=.*?(?i:headers\s*(?:\.\s*authorization|\[\s*["'](?:authorization|x-api-key)["']))).*
+      - pattern-not-regex: (?s)\A(?=.*?(?i:\.(?:get|header)\s*\(\s*["'](?:authorization|x-api-key)["'])).*
+      - pattern-not-regex: (?s)\A(?=.*?\b(?:expressjwt|jwtVerify|bearerAuth|basicAuth)\s*\().*
+      - pattern-not-regex: (?s)\A(?=.*?\bjwt\.verify\s*\().*
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: mcp-server
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI03 - Identity and Privilege Abuse"
+      owasp-mcp:
+        - "MCP07:2025 - Insufficient Authentication & Authorization"
+        - "MCP09:2025 - Shadow MCP Servers"
+      owasp-aisvs:
+        - "v1.01-C10.2.1 - Authentication & Authorization"
+        - "v1.01-C10.3.1 - Secure Transport"
+      mitre-atlas:
+        - "AML.T0132 - Misconfigured or Publicly Exposed AI Services"
+        - "AML.T0053 - AI Agent Tool Invocation"
+      cwe:
+        - "CWE-306: Missing Authentication for Critical Function"
+        - "CWE-1327: Binding to an Unrestricted IP Address"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [mcp, fastmcp, express, fastify, hono, node]
+      references:
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.3.1/packages/middleware/express/src/express.ts
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.3.1/packages/middleware/fastify/src/fastify.ts
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.3.1/packages/middleware/hono/src/hono.ts
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.3.1/packages/middleware/express/src/auth/bearerAuth.ts
+        - https://github.com/modelcontextprotocol/typescript-sdk/blob/1.32.1/src/server/express.ts
+        - https://github.com/punkpeye/fastmcp/blob/v4.23.5/src/FastMCP.ts
+        - https://github.com/modelcontextprotocol/typescript-sdk/security/advisories/GHSA-w48q-cv73-mx4w
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP07-2025%E2%80%93Insufficient-Authentication%26Authorization.md
+        - https://github.com/OWASP/www-project-mcp-top-10/blob/165fe0f78ef104459237b4a8e0f6e78db9b02391/2025/MCP09-2025%E2%80%93Shadow-MCP-Servers.md
+        - https://cwe.mitre.org/data/definitions/1327.html

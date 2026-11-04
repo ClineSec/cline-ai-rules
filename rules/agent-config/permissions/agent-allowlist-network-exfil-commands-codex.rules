@@ -1,0 +1,63 @@
+# Team command rules.
+
+prefix_rule(
+    # ruleid: agent-allowlist-network-exfil-commands-codex
+    pattern = ["curl"],
+    decision = "allow",
+    justification = "Fetch release metadata (see docs/release.md).",
+)
+
+prefix_rule(
+    # ruleid: agent-allowlist-network-exfil-commands-codex
+    pattern = ["nslookup"],
+)
+
+# ruleid: agent-allowlist-network-exfil-commands-codex
+prefix_rule(pattern = ["/usr/bin/ssh", "deploy@build.example.com"], decision = "allow")
+
+prefix_rule(
+    # ruleid: agent-allowlist-network-exfil-commands-codex
+    pattern = [["npm", "dig"], "+short"],
+    match = ["dig +short example.com"],
+)
+
+prefix_rule(
+    justification = "Health check (decision = \"prompt\" for anything else).",
+    # ruleid: agent-allowlist-network-exfil-commands-codex
+    pattern = ["wget", "-q", "-O", "-", "https://status.example.com/healthz"],
+)
+
+prefix_rule(
+    # ok: agent-allowlist-network-exfil-commands-codex
+    pattern = ["curl"],
+    decision = "prompt",
+    justification = "Network access needs a person to look first.",
+)
+
+prefix_rule(
+    # ok: agent-allowlist-network-exfil-commands-codex
+    pattern = ["scp"],
+    decision = "forbidden",
+    justification = "Use the release pipeline instead.",
+)
+
+prefix_rule(
+    # ok: agent-allowlist-network-exfil-commands-codex
+    pattern = ["git", "pull"],
+    match = ["git pull --ff-only"],
+    not_match = [["curl", "https://example.com"]],
+)
+
+prefix_rule(
+    # ok: agent-allowlist-network-exfil-commands-codex
+    pattern = ["hostname"],
+)
+
+host_executable(
+    # ok: agent-allowlist-network-exfil-commands-codex
+    name = "curl",
+    paths = ["/usr/bin/curl"],
+)
+
+# ok: agent-allowlist-network-exfil-commands-codex
+# prefix_rule(pattern = ["curl"], decision = "allow")

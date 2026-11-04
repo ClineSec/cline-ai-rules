@@ -1,0 +1,67 @@
+rules:
+  - id: subagent-permission-mode-qwen
+    # Regex: the front matter of a Qwen Code subagent file.
+    languages: [regex]
+    severity: ERROR
+    message: >-
+      This Qwen Code project subagent sets its own approval mode: `approvalMode: yolo`
+      approves every tool call it makes, shell commands included, without asking, and
+      `approvalMode: auto` lets a classifier approve them in place of a person. A Claude Code
+      style `permissionMode: bypassPermissions` becomes `yolo` when the file has no
+      `approvalMode`. Qwen Code applies the file's mode whenever the session runs in default
+      or plan mode, in any folder it counts as trusted, which is every folder unless folder
+      trust is turned on. Everything the model delegates to this subagent, including
+      delegations it starts on its own, then runs unattended, and a prompt injection in a
+      file, issue, or tool result the subagent reads can run commands with the developer's
+      credentials. Leave the mode unset (subagents in trusted folders already auto-approve
+      edits) or set `default` or `plan`, and pre-approve the specific commands the subagent
+      needs in the session's permission settings.
+    # Qwen Code v0.26.1 source: packages/core/src/tools/agent/agent.ts
+    # resolveSubagentApprovalMode (a yolo, auto-edit, or auto parent wins; otherwise the
+    # definition's mode applies when the folder is trusted, and an unset mode resolves to
+    # auto-edit), config.ts isTrustedFolder (trustedFolder ?? !folderTrust), and
+    # subagents/agent-frontmatter-schema.ts (permissionMode bypassPermissions -> yolo,
+    # acceptEdits and auto -> auto-edit, dontAsk -> default; approvalMode wins when both are
+    # set). auto-edit is left out because it is what an unset mode gives. Qwen Code reads
+    # .qwen/agents/ only, not .claude/agents/.
+    paths:
+      include:
+        - ".qwen/agents/**"
+    pattern-either:
+      - patterns:
+          # The frontmatter.
+          - pattern-regex: \A(?:\x{FEFF})?---[ \t]*\r?\n(?s:.*?)\r?\n---[ \t]*(?:\r?\n|\z)
+          - pattern-regex: (?m)^approvalMode[ \t]*:[ \t]*(?:yolo|auto|"(?:yolo|auto)"|'(?:yolo|auto)')[ \t]*(?:\#[^\r\n]*)?(?=\r?$)
+      - patterns:
+          # The frontmatter, when no top-level approvalMode key overrides permissionMode.
+          - pattern-regex: \A(?:\x{FEFF})?---[ \t]*\r?\n(?:(?!approvalMode[ \t]*:|---[ \t]*\r?\n)[^\n]*+\n)*+---[ \t]*(?:\r?\n|\z)
+          - pattern-regex: (?m)^permissionMode[ \t]*:[ \t]*(?:bypassPermissions|"bypassPermissions"|'bypassPermissions')[ \t]*(?:\#[^\r\n]*)?(?=\r?$)
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: agent-config
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI03 - Identity and Privilege Abuse"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0112.000 - Machine Compromise: Local AI Agent"
+      cwe:
+        - "CWE-269: Improper Privilege Management"
+      # The mode applies in a default or plan session; some teams set it on purpose for a
+      # subagent they only run in a sandbox.
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [qwen-code]
+      references:
+        - https://github.com/QwenLM/qwen-code/blob/v0.26.1/packages/core/src/tools/agent/agent.ts
+        - https://github.com/QwenLM/qwen-code/blob/v0.26.1/packages/core/src/subagents/agent-frontmatter-schema.ts
+        - https://github.com/QwenLM/qwen-code/blob/v0.26.1/packages/core/src/subagents/types.ts
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

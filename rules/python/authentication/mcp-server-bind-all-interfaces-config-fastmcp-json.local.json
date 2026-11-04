@@ -1,0 +1,12 @@
+{
+  "source": {"path": "server.py"},
+  "environment": {
+    // ok: mcp-server-bind-all-interfaces-config-fastmcp-json
+    "host": "0.0.0.0"
+  },
+  "deployment": {
+    "transport": "http",
+    // ok: mcp-server-bind-all-interfaces-config-fastmcp-json
+    "host": "127.0.0.1"
+  }
+}

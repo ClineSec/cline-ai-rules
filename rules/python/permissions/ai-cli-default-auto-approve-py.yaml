@@ -1,0 +1,205 @@
+rules:
+  - id: ai-cli-default-auto-approve-py
+    # Python twin of ai-cli-default-auto-approve: Cline CLI 3.0.73 (tool auto-approval
+    # defaults to on), Amp execute mode (Amp does not ask by default), and opencode 1.19 run
+    # (every tool is allowed by default) started from code, as an argv list or a command
+    # string. Explicit bypass flags are
+    # ai-cli-bypass-flag-invocation-py. WARNING, not ERROR: no safety switch is turned off in
+    # the code (decision log, 2026-10-22).
+    languages: [python]
+    severity: WARNING
+    message: >-
+      This code starts a coding agent that runs every tool without asking unless it is told
+      otherwise: Cline CLI auto-approves all tools by default, Amp does not ask before running
+      tools, and opencode allows every tool unless the project's opencode.json says otherwise.
+      Every shell command and file edit the model decides on then runs at once with this
+      process's full access: its files, network, and credentials. Agents launched from code
+      usually work on text other people control (a ticket, an issue, a log), and a prompt
+      injection in that text can then run arbitrary commands. If this only ever runs in a
+      disposable container or VM with no secrets, that may be intended; otherwise pass cline
+      --auto-approve false (or --plan for a read-only task), give Amp permission rules that ask
+      for or reject shell and edit tools, or set opencode's bash and edit permissions to "ask"
+      or "deny" (opencode run then rejects what would ask).
+    pattern-either:
+      # --- Cline CLI: a task run without --auto-approve false ---
+      - patterns:
+          - pattern-either:
+              - pattern: subprocess.$FN([$PROG, ...], ...)
+              - pattern: subprocess.$FN(($PROG, ...), ...)
+              - pattern: asyncio.create_subprocess_exec($PROG, ...)
+              - pattern: pexpect.spawn($PROG, ...)
+              - pattern: |
+                  $ARGV = [$PROG, ...]
+                  ...
+                  subprocess.$FN($ARGV, ...)
+          - metavariable-pattern:
+              metavariable: $PROG
+              pattern-either:
+                - pattern: '"=~/^(?:.*\/)?cline$/"'
+                - pattern-regex: (?i)^[\w.$]*cline\w*(?:\(\))?$
+          # Not a subcommand, and none of the flags that opt out, pick another mode, or are
+          # explicit bypass flags (ai-cli-bypass-flag-invocation-py reports those). Checked as
+          # text over the matched call, so a flag anywhere in the argv counts.
+          - pattern-not-regex: (?s)\bcline\w*["']?\s*,\s*[rbuRBU]?["'](?:auth|config|plugin|skill|connect|mcp|doctor|hook|schedule|hub|dashboard|update|version|kanban|history|help)["']
+          - pattern-not-regex: '[rbuRBU]?["''](?:--auto-approve(?:=\w+)?|--yolo|-y|-p|--plan|-i|--tui|--acp|-h|--help|-V|--version|--update|--kanban)["'']'
+          - focus-metavariable: $PROG
+      # --- Amp execute mode: -x / --execute (-ox runs on Amp's servers, not here) ---
+      - patterns:
+          - pattern-either:
+              # The program by name or string first or second in the argv. A free $PROG paired
+              # with a later $X in one list pattern tries every pair of elements, which times
+              # out on lists of a few hundred elements.
+              - patterns:
+                  - pattern-either:
+                      - pattern: subprocess.$FN([$PROG, ..., $X, ...], ...)
+                      - pattern: subprocess.$FN([$W, $PROG, ..., $X, ...], ...)
+                      - pattern: subprocess.$FN(($PROG, ..., $X, ...), ...)
+                      - pattern: subprocess.$FN(($W, $PROG, ..., $X, ...), ...)
+                      - pattern: asyncio.create_subprocess_exec(..., $PROG, ..., $X, ...)
+                      - pattern: pexpect.spawn($PROG, [..., $X, ...], ...)
+                      - pattern: |
+                          $ARGV = [$PROG, ..., $X, ...]
+                          ...
+                          subprocess.$FN($ARGV, ...)
+                      - pattern: |
+                          $ARGV = [$W, $PROG, ..., $X, ...]
+                          ...
+                          subprocess.$FN($ARGV, ...)
+                  - metavariable-pattern:
+                      metavariable: $PROG
+                      pattern-either:
+                        - pattern: '"=~/^(?:.*\/)?amp$/"'
+                        - pattern-regex: ^(?:AMP\w*|\w*_AMP\w*)$
+                  - metavariable-regex:
+                      metavariable: $X
+                      regex: ^[rbuRBU]?["'](?:-x|--execute)["']$
+              # The program as a string anywhere in the argv, or by name anywhere after a known
+              # wrapper first (timeout, sudo, env, uv run, ...): the program and -x are each
+              # found in one pass over the list and joined on it.
+              - patterns:
+                  - patterns:
+                      - pattern-either:
+                          - pattern: subprocess.$FN([..., $X, ...], ...)
+                          - pattern: subprocess.$FN((..., $X, ...), ...)
+                          - pattern: |
+                              $ARGV = [..., $X, ...]
+                              ...
+                              subprocess.$FN($ARGV, ...)
+                      - metavariable-regex:
+                          metavariable: $X
+                          regex: ^[rbuRBU]?["'](?:-x|--execute)["']$
+                  - patterns:
+                      - pattern-either:
+                          - pattern: subprocess.$FN([..., $PROG, ...], ...)
+                          - pattern: subprocess.$FN((..., $PROG, ...), ...)
+                          - pattern: |
+                              $ARGV = [..., $PROG, ...]
+                              ...
+                              subprocess.$FN($ARGV, ...)
+                      - metavariable-pattern:
+                          metavariable: $PROG
+                          pattern: '"=~/^(?:.*\/)?amp$/"'
+              - patterns:
+                  - patterns:
+                      - pattern-either:
+                          - pattern: subprocess.$FN(["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $X, ...], ...)
+                          - pattern: subprocess.$FN(("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $X, ...), ...)
+                          - pattern: pexpect.spawn("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $X, ...], ...)
+                          - pattern: |
+                              $ARGV = ["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $X, ...]
+                              ...
+                              subprocess.$FN($ARGV, ...)
+                      - metavariable-regex:
+                          metavariable: $X
+                          regex: ^[rbuRBU]?["'](?:-x|--execute)["']$
+                  - patterns:
+                      - pattern-either:
+                          - pattern: subprocess.$FN(["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...], ...)
+                          - pattern: subprocess.$FN(("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...), ...)
+                          - pattern: pexpect.spawn("=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", [..., $PROG, ...], ...)
+                          - pattern: |
+                              $ARGV = ["=~/^(?:.*\/)?(?:sudo|doas|env|exec|nohup|time|command|timeout|xargs|nice|ionice|setsid|stdbuf|unbuffer|xvfb-run|script|uv|uvx|poetry|pipenv|pdm|hatch|npx|bunx|pnpm|yarn)$/", ..., $PROG, ...]
+                              ...
+                              subprocess.$FN($ARGV, ...)
+                      - metavariable-pattern:
+                          metavariable: $PROG
+                          pattern-regex: ^(?:AMP\w*|\w*_AMP\w*)$
+          - focus-metavariable: $PROG
+      # --- opencode run: every tool is allowed unless config sets it to ask or deny ---
+      - patterns:
+          - pattern-either:
+              - pattern: subprocess.$FN([$PROG, $RUN, ...], ...)
+              - pattern: subprocess.$FN(($PROG, $RUN, ...), ...)
+              - pattern: asyncio.create_subprocess_exec($PROG, $RUN, ...)
+              - pattern: pexpect.spawn($PROG, [$RUN, ...], ...)
+              - pattern: |
+                  $ARGV = [$PROG, $RUN, ...]
+                  ...
+                  subprocess.$FN($ARGV, ...)
+          - metavariable-pattern:
+              metavariable: $PROG
+              pattern-either:
+                - pattern: '"=~/^(?:.*\/)?opencode$/"'
+                - pattern-regex: (?i)^[\w.$]*opencode\w*(?:\(\))?$
+          - metavariable-regex:
+              metavariable: $RUN
+              regex: ^[rbuRBU]?["']run["']$
+          # Quiet when the file also sets OPENCODE_PERMISSION or OPENCODE_CONFIG_CONTENT: those
+          # rules decide, and kilo-opencode-permission-allow-env reports the ones that allow all.
+          - pattern-not-regex: |-
+              (?xm)
+              (?: \A (?= (?s:.*?) (?<![\w$-]) (?:OPENCODE|KILO)_(?:PERMISSION|CONFIG_CONTENT) ["']? [ \t]* [:=] ) | (?!\A) \G )
+              (?: [^\n]*+ \n )*? \K [^\n]*? (?<![\w-]) opencode (?![\w-]) [^\n]*
+          # --auto and its aliases are ai-cli-bypass-flag-invocation-py's; help is not a run.
+          - pattern-not-regex: '[rbuRBU]?["''](?:--auto|--yolo|--dangerously-skip-permissions|-h|--help)["'']'
+          - focus-metavariable: $PROG
+      # --- A whole command line in one string passed to a shell ---
+      - patterns:
+          - pattern-either:
+              - pattern: subprocess.$FN($CMD, ..., shell=True, ...)
+              - pattern: os.system($CMD)
+              - pattern: os.popen($CMD, ...)
+              - pattern: asyncio.create_subprocess_shell($CMD, ...)
+              - pattern: subprocess.$FN(shlex.split($CMD), ...)
+          - metavariable-regex:
+              metavariable: $CMD
+              # cline then a prompt, not a subcommand and with no opt-out, mode, or bypass flag;
+              # amp with -x / --execute; or opencode run without --auto or help.
+              regex: |-
+                (?x) ^ [rRbBuUfF]{0,2} (?<qt>["']) [ \t]* (?: [\w.~/${}-]*/ )?
+                (?: (?: (?:npx|bunx|pnpx) (?:[ \t]+(?:-y|--yes))? [ \t]+ )? cline (?:@[\w.^~-]+)? (?:[ \t]|\k<qt>)
+                    (?! [ \t]* (?:auth|config|plugin|skill|connect|mcp|doctor|hook|schedule|hub|dashboard|update|version|kanban|history|help)\b )
+                    (?! .*? (?<=[ \t]) (?:--auto-approve|--yolo|-y|-p|--plan|-i|--tui|--acp|-h|--help|-V|--version|--update|--kanban) (?=[ \t=]|["']) )
+                  | amp [ \t] .*? (?<=[ \t]) (?:-x|--execute) (?=[ \t]|["'])
+                  | (?: (?:npx|bunx|pnpx) (?:[ \t]+(?:-y|--yes))? [ \t]+ opencode-ai (?:@[\w.^~-]+)? | opencode ) [ \t]+ run (?:[ \t]|\k<qt>)
+                    (?! .*? (?<=[ \t]) (?:--auto|--yolo|--dangerously-skip-permissions|-h|--help) (?=[ \t=]|["']) ) )
+          - focus-metavariable: $CMD
+    metadata:
+      category: security
+      subcategory: [audit]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM03:2026 - Excessive Agency"
+        - "LLM06:2025 - Excessive Agency"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+        - "ASI05 - Unexpected Code Execution (RCE)"
+      owasp-aisvs:
+        - "v1.01-C9.5.1 - Agent Authorization, Delegation, and Continuous Enforcement"
+        - "v1.01-C9.2.1 - High-Impact Action Approval and Irreversibility Controls"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0112.000 - Machine Compromise: Local AI Agent"
+      cwe:
+        - "CWE-250: Execution with Unnecessary Privileges"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [cline-cli, amp, opencode]
+      references:
+        - https://github.com/cline/cline/blob/cli-v3.0.73/apps/cli/src/commands/program.ts
+        - https://github.com/cline/cline/blob/cli-v3.0.73/apps/cli/src/utils/startup-settings.ts
+        - https://ampcode.com/manual/appendix/legacy-permissions-rules.txt
+        - https://ampcode.com/docs/cli/execute-mode
+        - https://github.com/anomalyco/opencode/blob/v1.19.4/packages/opencode/src/cli/cmd/run.ts
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md

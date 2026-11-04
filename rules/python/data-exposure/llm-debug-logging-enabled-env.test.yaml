@@ -1,0 +1,38 @@
+services:
+  gateway:
+    image: ghcr.io/example-org/litellm:1.106.3
+    # ruleid: llm-debug-logging-enabled-env
+    command: --config /app/config.yaml --port 4000 --detailed_debug
+    environment:
+      # ruleid: llm-debug-logging-enabled-env
+      LITELLM_LOG: "DEBUG"
+      # ok: llm-debug-logging-enabled-env
+      LITELLM_MODE: PRODUCTION
+  worker:
+    image: ghcr.io/example-org/insights-worker:2.4.0
+    environment:
+      # ruleid: llm-debug-logging-enabled-env
+      - OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
+      # ok: llm-debug-logging-enabled-env
+      - OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agents-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/example-org/agents-api:1.0.0
+          env:
+            # ruleid: llm-debug-logging-enabled-env
+            - name: OPENAI_AGENTS_DONT_LOG_TOOL_DATA
+              value: "false"
+            # ok: llm-debug-logging-enabled-env
+            - name: OPENAI_AGENTS_DONT_LOG_MODEL_DATA
+              value: "1"
+            # ok: llm-debug-logging-enabled-env
+            - name: LITELLM_LOG
+              value: INFO

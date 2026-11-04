@@ -1,0 +1,15 @@
+# Fixture for gha-ai-agent-untrusted-trigger: triggers outsiders cannot start with secrets.
+name: pr-review
+on:
+  pull_request:
+  push:
+    branches: [main]
+env:
+  # ok: gha-ai-agent-untrusted-trigger
+  PR_TITLE: ${{ github.event.pull_request.title }}
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      # ok: gha-ai-agent-untrusted-trigger
+      - run: claude -p "Review $PR_TITLE - ${{ github.event.head_commit.message }}" --allowedTools Bash

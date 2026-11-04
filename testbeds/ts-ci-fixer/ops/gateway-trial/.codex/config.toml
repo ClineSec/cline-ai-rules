@@ -1,0 +1,10 @@
+# Codex through the trial gateway (see ../README.md).
+model = "gpt-5.5-codex"
+model_provider = "gateway"
+
+[model_providers.gateway]
+name = "LLM gateway (trial)"
+base_url = "https://llm-gateway.example.invalid/openai/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+http_headers = { "X-Gateway-Team" = "ci-fixer" }

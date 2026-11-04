@@ -1,0 +1,396 @@
+rules:
+  - id: agent-tool-arg-to-sql
+    # Sources: the agent tool parameters of agent-tool-arg-to-shell (build.py SHARED_BLOCKS
+    # "agent tool sources (Python)"); sinks and sanitizers: llm-output-to-sql's SQL sinks
+    # ("SQL sinks (Python)", "SQL sanitizers (Python)"). Edit each block with its group.
+    languages: [python]
+    severity: ERROR
+    message: >-
+      An agent tool argument reaches a SQL statement. The model chooses every tool argument,
+      and a prompt injection in anything it has read (a web page, an issue, a document,
+      another tool's result) can choose them for it, so an argument like `x' OR '1'='1` or a
+      whole statement reads or changes rows the tool was never meant to touch, with the
+      agent's database privileges.
+      Keep the statement fixed and pass the argument as a bound parameter
+      (`cur.execute("... WHERE queue = %s", (queue,))`, `text("... :queue").bindparams(queue=queue)`),
+      pick table and column names from a constant allowlist (`COLUMNS[choice]`), or constrain
+      the parameter's type (`Literal[...]`, `int`). If the tool exists to run model-written
+      SQL, give it a read-only role limited to the views it may read, with row-level
+      security, a statement timeout, and a row limit.
+    mode: taint
+    pattern-sources:
+      # A tool function's parameters, which the model fills in. Parameters typed int, float,
+      # bool, Literal[...] (or an alias of one assigned earlier in the file), a framework
+      # context (RunContext, RunContextWrapper, ToolContext,
+      # ToolRuntime, RunnableConfig), an Injected* argument the application supplies, or a
+      # string constrained by an anchored pattern (Field(pattern=r"^...$")) are skipped: the
+      # frameworks validate arguments against the annotation with pydantic before the call.
+      - patterns:
+          - pattern-either:
+              # LangChain @tool (langchain_core.tools, re-exported by langchain.tools and,
+              # before 1.0, langchain.agents), CrewAI @tool, OpenAI Agents SDK @function_tool.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          @$DEC
+                          def $F(...): ...
+                      - pattern-inside: |
+                          @$DEC(...)
+                          def $F(...): ...
+                  - metavariable-pattern:
+                      metavariable: $DEC
+                      pattern-either:
+                        - pattern: langchain_core.tools.tool
+                        - pattern: langchain.tools.tool
+                        - pattern: langchain.agents.tool
+                        - pattern: crewai.tools.tool
+                        - pattern: agents.function_tool
+              # pydantic-ai: @agent.tool takes a RunContext first (pydantic-ai rejects a
+              # context tool without one, and no MCP server SDK uses RunContext), and
+              # @agent.tool_plain. mcp-tool-arg-to-shell skips the RunContext form.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          @$AGENT.tool
+                          def $F(...): ...
+                      - pattern-inside: |
+                          @$AGENT.tool(...)
+                          def $F(...): ...
+                  - pattern-either:
+                      - pattern-inside: |
+                          def $F($CTX: pydantic_ai.RunContext, ...): ...
+                      - pattern-inside: |
+                          def $F($CTX: pydantic_ai.RunContext[...], ...): ...
+              - pattern-inside: |
+                  @$AGENT.tool_plain
+                  def $F(...): ...
+              - pattern-inside: |
+                  @$AGENT.tool_plain(...)
+                  def $F(...): ...
+              # A plain function registered later in the file: StructuredTool.from_function(f),
+              # Tool.from_function(func=f), function_tool(f), pydantic_ai.Tool(f),
+              # Agent(tools=[f]), create_agent(model, tools=[f]), ToolNode([f]),
+              # llm.bind_tools([f]), in a file that imports an agent framework. The regex covers
+              # the def (decorators, signature, and indented body) and looks ahead for a call to
+              # one of those names with F among its top-level arguments (bare, in a list, or as a
+              # keyword's value); its F group must name the def below. A statement region from
+              # each def to a later registration took 257 s on a 4,000-function file (OpenGrep
+              # 1.30.2); the regex scans the rest of the file once per def, 5 s there. A paren
+              # not preceded by e, l, n, s, or t can't end a registration callee, so the scan steps
+              # over it before trying the callee names (20 s without that). The callee is matched
+              # by name, so the import region stands in for resolving it; an MCP
+              # add_tool(Tool.from_function(f)) is mcp-tool-arg-to-shell's.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          import $MOD
+                          ...
+                      - pattern-inside: |
+                          from $MOD import $NAME
+                          ...
+                  - metavariable-regex:
+                      metavariable: $MOD
+                      regex: ^(?:langchain\w*|langgraph|agents|crewai|pydantic_ai)(?:\.|$)
+                  - pattern-regex: >-
+                      (?m)^(?<IND>[ \t]*+)(?:@[^\n]*+\n\k<IND>)*+(?:async[ \t]++)?def[ \t]++(?<F>\w++)\b[^\n]*+(?:\n(?:\k<IND>[ \t)\]][^\n]*+|[ \t]*+(?:\#[^\n]*+)?(?=\n|\z)))*+(?=(?:[^(]++|(?<![elnst])\(|(?<=add_tool|add_prompt|add_template)\(\s*+[\w.]*\.from_function\(|(?<!\.from_function|\bfunction_tool|\btool|\bTool|\bAgent|\bcreate_agent|\bcreate_react_agent|\bToolNode|\.bind_tools)\(|\((?!(?:[^()"'\w]++|(?:"(?:[^"\\\n]|\\.)*+"|'(?:[^'\\\n]|\\.)*+'|["'])|(?&pa)|(?!\k<F>\b(?!\s*+[(=]))\w++)*+\k<F>\b(?!\s*+[(=])))*+(?<=\.from_function|\bfunction_tool|\btool|\bTool|\bAgent|\bcreate_agent|\bcreate_react_agent|\bToolNode|\.bind_tools)\((?:[^()"'\w]++|(?:"(?:[^"\\\n]|\\.)*+"|'(?:[^'\\\n]|\\.)*+'|["'])|(?&pa)|(?!\k<F>\b(?!\s*+[(=]))\w++)*+\k<F>\b(?!\s*+[(=]))(?(DEFINE)(?<pa>\((?:[^()"']++|(?:"(?:[^"\\\n]|\\.)*+"|'(?:[^'\\\n]|\\.)*+'|["'])|(?&pa))*+\)))
+              # LangChain and CrewAI BaseTool subclasses: _run / _arun get the arguments.
+              - patterns:
+                  - pattern-inside: |
+                      class $C(..., $BASE, ...):
+                          ...
+                  - metavariable-pattern:
+                      metavariable: $BASE
+                      pattern-either:
+                        - pattern: langchain_core.tools.BaseTool
+                        - pattern: langchain.tools.BaseTool
+                        - pattern: crewai.tools.BaseTool
+                  - pattern-inside: |
+                      def $F(...): ...
+                  - metavariable-regex:
+                      metavariable: $F
+                      regex: ^_a?run$
+          - pattern-either:
+              - patterns:
+                  - pattern: |
+                      def $F(..., $P, ...): ...
+                  - pattern-not: |
+                      def $F(..., $P: $TYPE, ...): ...
+                  - pattern-not: |
+                      def $F(..., $P: $TYPE = $DEFAULT, ...): ...
+              - patterns:
+                  - pattern-either:
+                      - pattern: |
+                          def $F(..., $P: $TYPE, ...): ...
+                      - pattern: |
+                          def $F(..., $P: $TYPE = $DEFAULT, ...): ...
+                  - metavariable-regex:
+                      metavariable: $TYPE
+                      regex: ^(?!(?:typing\.)?(?:Annotated\[\s*)?(?:int|float|bool|(?:typing\.)?Literal\[|[\w.]*(?:Context|ContextWrapper|ToolRuntime|RunnableConfig)\b|(?:typing\.)?Optional\[[\w.]*CallbackManager)|.*\bInjected\w*|.*\bpattern\s*=\s*r?["']\^.*\$["'])
+                  # A Literal alias assigned earlier in the block (Service = Literal["web", "db"],
+                  # or Service: TypeAlias = ...) is as safe as the Literal written inline.
+                  - pattern-not-inside: |
+                      $TYPE = typing.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE: $ALIAS_KIND = typing.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE = typing_extensions.Literal[...]
+                      ...
+                  - pattern-not-inside: |
+                      $TYPE: $ALIAS_KIND = typing_extensions.Literal[...]
+                      ...
+          - metavariable-regex:
+              metavariable: $P
+              regex: ^(?!(?:self|cls|run_manager)$)
+          - focus-metavariable: $P
+    pattern-sanitizers:
+      # Shared with llm-output-to-sql (its first 4) and the other tool-argument SQL rule
+      # (build.py SHARED_BLOCKS "SQL sanitizers (Python)"): edit them together.
+      # An allowlist check before use: re.fullmatch, or re.match / re.search with a pattern
+      # anchored at the end (a start-only re.match lets "id; DROP ..." through).
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: re.fullmatch($PAT, $X, ...)
+              - pattern: $RE.fullmatch($X, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern: re.match($PAT, $X, ...)
+                      - pattern: re.search($PAT, $X, ...)
+                  - metavariable-regex:
+                      metavariable: $PAT
+                      regex: ^[rRbB]*["'].*(?:\$|\\Z)["']$
+          - focus-metavariable: $X
+      # An allowlist lookup in a constant table (`QUERIES[name]`, `COLUMNS.get(choice)`) and a
+      # membership check against a constant collection before use
+      # (`if table not in ALLOWED_TABLES: raise`).
+      - patterns:
+          - pattern-either:
+              - pattern: $TABLE[$KEY]
+              - pattern: $TABLE.get($KEY, ...)
+          - metavariable-regex:
+              metavariable: $TABLE
+              regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X in $ALLOWED
+              - pattern: $X not in $ALLOWED
+          - metavariable-regex:
+              metavariable: $ALLOWED
+              regex: ^(?:\w+\.)*[A-Z][A-Z0-9_]*$
+          - focus-metavariable: $X
+      # Numbers, and the PyMySQL / mysqlclient quoting helpers on a connection (not
+      # html.escape or re.escape).
+      - exact: true
+        pattern-either:
+          - pattern: int(...)
+          - pattern: float(...)
+          - pattern: pymysql.converters.escape_string(...)
+          - patterns:
+              - pattern-either:
+                  - pattern: $CONN.escape_string(...)
+                  - pattern: $CONN.escape(...)
+                  - pattern: $CONN.literal(...)
+              - metavariable-regex:
+                  metavariable: $CONN
+                  regex: (?i)^(?:[\w]+\.)*_*(?:[a-z0-9]+_)*(?:cur|cursor|conn|connection|con|db|database)\d*$
+    pattern-sinks:
+      # Shared with llm-output-to-sql and the other tool-argument SQL rule (build.py
+      # SHARED_BLOCKS "SQL sinks (Python)"): edit them together.
+      # One sink, so a call that two branches cover is reported once. Only the statement
+      # counts, never the bound parameters. A statement object from SQLAlchemy, SQLModel, or
+      # psycopg's sql module (select(...).where(col == value), text(...).bindparams(...),
+      # sql.SQL(...).format(sql.Literal(...))) binds or quotes the values in it, so it is
+      # skipped when passed inline (the regex on $Q) or through a name assigned one (the
+      # pattern-not-inside conditions); untrusted text inside text(), literal_column(), or
+      # sql.SQL() is reported there, once.
+      - patterns:
+          - pattern-either:
+              # DB-API 2.0 and its async cousins: sqlite3, psycopg 2 and 3, PyMySQL,
+              # mysqlclient, mysql-connector, aiosqlite (also execute_fetchall /
+              # execute_insert), asyncpg, DuckDB, and SQLAlchemy sessions. `execute` is a common
+              # method name, so the receiver must be named like a connection or the file must
+              # import a database driver. For speed on large modules, method names are spelled
+              # out (`$CUR.$EXEC(...)` plus a regex matches every call first), and "imports a
+              # driver" is a whole-file regex used as pattern-not-regex (it matches the whole
+              # file only when no line imports one), several times cheaper than
+              # `import $MOD` / `...` regions.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $CUR.execute($Q, ...)
+                      - pattern: $CUR.executemany($Q, ...)
+                      - pattern: $CUR.executescript($Q, ...)
+                      - pattern: $CUR.execute_fetchall($Q, ...)
+                      - pattern: $CUR.execute_insert($Q, ...)
+                  - metavariable-regex:
+                      metavariable: $CUR
+                      regex: (?i)^(?:[\w]+\.)*_*(?:[a-z0-9]+_)*(?:cur|cursor|conn|connection|con|db|database|session|engine|tx|txn|transaction|pool|sqlite|duckdb|duck)\d*$
+              - patterns:
+                  - pattern-either:
+                      - pattern: $CUR.execute($Q, ...)
+                      - pattern: $CUR.executemany($Q, ...)
+                      - pattern: $CUR.executescript($Q, ...)
+                      - pattern: $CUR.execute_fetchall($Q, ...)
+                      - pattern: $CUR.execute_insert($Q, ...)
+                  - pattern-not-regex: '\A(?:(?![ \t]*+(?:import|from)[ \t]++(?:sqlite3|psycopg2?|psycopg_pool|pymysql|MySQLdb|mysql\.connector|aiomysql|asyncpg|aiosqlite|sqlalchemy|sqlmodel|duckdb|pyodbc|oracledb|cx_Oracle|pymssql|snowflake\.connector|databricks\.sql|clickhouse_driver|trino\.dbapi|django\.db)\b)[^\n]*+\n)*+(?![ \t]*+(?:import|from)[ \t]++(?:sqlite3|psycopg2?|psycopg_pool|pymysql|MySQLdb|mysql\.connector|aiomysql|asyncpg|aiosqlite|sqlalchemy|sqlmodel|duckdb|pyodbc|oracledb|cx_Oracle|pymssql|snowflake\.connector|databricks\.sql|clickhouse_driver|trino\.dbapi|django\.db)\b)[^\n]*+\z'
+              # asyncpg's query methods (Connection and Pool), in a file that imports asyncpg.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $CONN.fetch($Q, ...)
+                      - pattern: $CONN.fetchrow($Q, ...)
+                      - pattern: $CONN.fetchval($Q, ...)
+                      - pattern: $CONN.fetchmany($Q, ...)
+                      - pattern: $CONN.prepare($Q, ...)
+                      - pattern: $CONN.cursor($Q, ...)
+                  - pattern-not-regex: '\A(?:(?![ \t]*+(?:import|from)[ \t]++(?:asyncpg)\b)[^\n]*+\n)*+(?![ \t]*+(?:import|from)[ \t]++(?:asyncpg)\b)[^\n]*+\z'
+              # psycopg2.extras batch helpers take the cursor first and the statement second.
+              - pattern: psycopg2.extras.execute_values($CUR, $Q, ...)
+              - pattern: psycopg2.extras.execute_batch($CUR, $Q, ...)
+              # psycopg's sql.SQL() marks a string as trusted SQL text; Identifier and Literal
+              # quote.
+              - pattern: psycopg.sql.SQL($Q)
+              - pattern: psycopg2.sql.SQL($Q)
+              # SQLAlchemy: text(), literal_column(), and Connection.exec_driver_sql() (also on
+              # AsyncConnection).
+              - pattern: sqlalchemy.text($Q)
+              - pattern: sqlalchemy.sql.text($Q)
+              - pattern: sqlalchemy.sql.expression.text($Q)
+              - pattern: sqlmodel.text($Q)
+              - pattern: sqlalchemy.literal_column($Q, ...)
+              - pattern: sqlalchemy.sql.expression.literal_column($Q, ...)
+              - pattern: $CONN.exec_driver_sql($Q, ...)
+              # pandas: read_sql and read_sql_query run their first argument. read_sql_table
+              # takes a table name, which SQLAlchemy quotes, so it isn't listed.
+              - pattern: pandas.read_sql($Q, ...)
+              - pattern: pandas.read_sql_query($Q, ...)
+              - pattern: pandas.read_sql(..., sql=$Q, ...)
+              - pattern: pandas.read_sql_query(..., sql=$Q, ...)
+              # LangChain: SQLDatabase.run / run_no_throw, and the QuerySQLDatabaseTool that
+              # wraps them, on an object built in this file, a parameter annotated as one, or
+              # a receiver named like a database.
+              - pattern: $DB.run_no_throw($Q, ...)
+              - patterns:
+                  - pattern: $DB.run($Q, ...)
+                  - pattern-either:
+                      - pattern-inside: |
+                          $DB = SQLDatabase(...)
+                          ...
+                      - pattern-inside: |
+                          $DB = SQLDatabase.$FROM(...)
+                          ...
+                      - pattern-inside: |
+                          def $FN(..., $DB: SQLDatabase, ...):
+                              ...
+                      - patterns:
+                          - pattern: $DB.run($Q, ...)
+                          - metavariable-regex:
+                              metavariable: $DB
+                              regex: (?i)^(?:[\w]+\.)*_*(?:[a-z0-9]+_)*(?:db|database)$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $TOOL = $QT(...)
+                          ...
+                      - pattern-inside: |
+                          $TOOL = $QT(...).$M(...)
+                          ...
+                  - metavariable-regex:
+                      metavariable: $QT
+                      regex: ^(?:QuerySQLDatabaseTool|QuerySQLDataBaseTool)$
+                  - pattern-either:
+                      - pattern: $TOOL.invoke($Q, ...)
+                      - pattern: $TOOL.ainvoke($Q, ...)
+                      - pattern: $TOOL.run($Q, ...)
+                      - pattern: $TOOL.arun($Q, ...)
+              # DuckDB (module and connection `sql` / `query`) and Spark SQL, in a file that
+              # imports them; duckdb.query_df takes the SQL third.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $CON.sql($Q, ...)
+                      - pattern: $CON.query($Q, ...)
+                      - pattern: $CON.from_query($Q, ...)
+                      - pattern: duckdb.query_df($DF, $NAME, $Q, ...)
+                  - pattern-not-regex: '\A(?:(?![ \t]*+(?:import|from)[ \t]++(?:duckdb|pyspark)\b)[^\n]*+\n)*+(?![ \t]*+(?:import|from)[ \t]++(?:duckdb|pyspark)\b)[^\n]*+\z'
+              # Google BigQuery: Client.query / query_and_wait.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $BQ.query($Q, ...)
+                      - pattern: $BQ.query_and_wait($Q, ...)
+                  - pattern-either:
+                      - pattern-inside: |
+                          $BQ = google.cloud.bigquery.Client(...)
+                          ...
+                      - pattern-inside: |
+                          def $FN(..., $BQ: google.cloud.bigquery.Client, ...):
+                              ...
+              # Django: Manager.raw / QuerySet.raw and RawSQL expressions.
+              - pattern: $MODEL.objects.raw($Q, ...)
+              - pattern: django.db.models.expressions.RawSQL($Q, ...)
+              - pattern: django.db.models.RawSQL($Q, ...)
+          - metavariable-regex:
+              metavariable: $Q
+              regex: ^(?!(?:\w+\.)*(?:text|literal_column|select|insert|update|delete|union|union_all|exists|values|SQL|Composed|Identifier|Literal)\()
+          - pattern-not-inside: |
+              $Q = <... sqlalchemy.$BUILD(...) ...>
+              ...
+          - pattern-not-inside: |
+              $Q = <... sqlalchemy.$MOD.$BUILD(...) ...>
+              ...
+          - pattern-not-inside: |
+              $Q = <... sqlmodel.$BUILD(...) ...>
+              ...
+          - pattern-not-inside: |
+              $Q = <... psycopg.sql.$BUILD(...) ...>
+              ...
+          - pattern-not-inside: |
+              $Q = <... psycopg2.sql.$BUILD(...) ...>
+              ...
+          - focus-metavariable: $Q
+      # SQL text built from untrusted input (an f-string, `+`, `%`, or `.format()` whose text
+      # starts like an uppercase SQL statement) and handed to any call, such as a module's own
+      # run-query helper, so it is reported where the text is built, in the default scan too.
+      # Logging and print calls are skipped. A statement built into a variable first is left to
+      # the sinks above, so it is reported once.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: $F(..., $Q, ...)
+              - pattern-inside: $F(..., $K=$Q, ...)
+          - pattern: $Q
+          - metavariable-regex:
+              metavariable: $Q
+              regex: ^[rRuUfF]{0,2}(?:"""|'''|"|')\s*(?:SELECT\b[\s\S]*?\bFROM\b|WITH\s+\w+\s+AS\s*\(|INSERT\s+INTO\b|UPDATE\s+\w+\s+SET\b|DELETE\s+FROM\b)
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(?!(?:print|(?:\w+\.)*(?:debug|info|warning|warn|error|exception|critical|log))$)
+          - focus-metavariable: $Q
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      owasp-agentic:
+        - "ASI02 - Tool Misuse and Exploitation"
+      owasp-aisvs:
+        - "v1.01-C7.1.1 - Output Format Enforcement"
+        - "v1.01-C9.3.1 - Component Isolation and Tool Authorization"
+      mitre-atlas:
+        - "AML.T0053 - AI Agent Tool Invocation"
+        - "AML.T0036 - Data from Information Repositories"
+      cwe:
+        - "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [langchain, crewai, openai-agents, pydantic-ai, sqlite3, psycopg, pymysql, sqlalchemy, pandas, asyncpg, aiosqlite, duckdb, bigquery, django]
+      # SQL API shapes: see llm-output-to-sql (checked 2026-10-22).
+      references:
+        - https://github.com/langchain-ai/langchain/blob/langchain-core%3D%3D1.6.13/libs/core/langchain_core/tools/convert.py
+        - https://github.com/openai/openai-agents-python/blob/v0.24.0/src/agents/tool.py
+        - https://cwe.mitre.org/data/definitions/89.html
+        - https://peps.python.org/pep-0249/#id15
+        - https://docs.sqlalchemy.org/en/20/core/sqlelement.html#sqlalchemy.sql.expression.text
+        - https://cheatsheetseries.owasp.org/cheatsheets/Query_Parameterization_Cheat_Sheet.html

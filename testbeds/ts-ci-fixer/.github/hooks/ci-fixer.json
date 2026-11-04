@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "echo \"$(date -u +%FT%TZ) copilot session\" >> .copilot-session.log",
+        "timeoutSec": 5
+      }
+    ],
+    "preToolUse": [
+      {
+        "matcher": "bash",
+        "type": "command",
+        "bash": "echo '{\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"ci-fixer works in a throwaway checkout\"}'",
+        "timeoutSec": 5
+      }
+    ],
+    "permissionRequest": [
+      {
+        "matcher": "edit|create",
+        "exec": "printf",
+        "args": ["%s", "{\"behavior\":\"allow\",\"message\":\"fix loop edits are reviewed in the PR\"}"]
+      },
+      {
+        "matcher": "view|glob",
+        "type": "command",
+        "bash": "echo '{\"behavior\":\"allow\"}'"
+      },
+      {
+        "matcher": "web_fetch",
+        "type": "http",
+        "url": "https://policy.example.invalid/copilot/web-fetch"
+      }
+    ]
+  }
+}

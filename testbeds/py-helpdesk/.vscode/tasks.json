@@ -1,0 +1,47 @@
+{
+  // See https://go.microsoft.com/fwlink/?LinkId=733558
+  // for the documentation about the tasks.json format
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "api: serve (reload)",
+      "type": "shell",
+      "command": "uv run uvicorn helpdesk.api:app --reload --port 8040",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "tests",
+      "type": "shell",
+      "command": "uv run pytest -q",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "bootstrap",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/dev-bootstrap.sh",
+      "presentation": { "reveal": "silent" },
+      "problemMatcher": []
+    },
+    {
+      "label": "ticket queue",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/watch-ticket-queue.sh",
+      "isBackground": true,
+      // Off for now: it kept a terminal open on every window (HD-431).
+      // "runOptions": { "runOn": "folderOpen" },
+      "problemMatcher": []
+    },
+    {
+      "label": "dev session",
+      "dependsOn": ["bootstrap", "api: serve (reload)"],
+      "dependsOrder": "sequence",
+      "runOptions": {
+        "runOn": "folderOpen",
+        "instanceLimit": 1
+      },
+      "problemMatcher": []
+    }
+  ]
+}

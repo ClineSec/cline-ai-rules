@@ -1,0 +1,385 @@
+rules:
+  - id: llm-output-to-html-csharp
+    # The pattern-sources, pattern-propagators, and the first 9 pattern-sanitizers are shared with
+    # llm-output-to-code-execution-csharp and llm-output-to-sql-csharp (build.py SHARED_BLOCKS
+    # "model-output sources (C#)", "lambda propagators (C#)", "value sanitizers (C#)",
+    # "model-output metadata sanitizer (C#)"): edit them together.
+    languages: [csharp]
+    severity: ERROR
+    message: >-
+      Model output is sent to the browser as HTML here. Completions are untrusted input: anyone
+      who can influence the prompt, directly or through a web page, document, or tool result the
+      model reads, can make it emit `<img src=x onerror=...>` or a `javascript:` link, which runs
+      in your page with the user's session (XSS, account takeover, data exfiltration). Markdig
+      passes raw HTML and `javascript:` links through, so `Markdown.ToHtml` output is not safe
+      either. Return the text as text (a string result is served as text/plain, and Razor and
+      Blazor encode `@value`); if the page must show HTML, encode it (`HtmlEncoder.Default.Encode`,
+      `WebUtility.HtmlEncode`) or sanitize the rendered HTML with an allowlist (HtmlSanitizer's
+      `Sanitize`) before wrapping it in `HtmlString` or `MarkupString`.
+    mode: taint
+    pattern-sources:
+      # Semantic Kernel (Microsoft.SemanticKernel 1.81.0): chat and text completion services and
+      # prompts run on the kernel, and everything read back from them (ChatMessageContent
+      # .Content and .Items, FunctionResult.GetValue<string>(), streaming chunks).
+      - pattern-either:
+          - pattern: $SVC.GetChatMessageContentAsync(...)
+          - pattern: $SVC.GetChatMessageContentsAsync(...)
+          - pattern: $SVC.GetStreamingChatMessageContentsAsync(...)
+          - pattern: $SVC.GetTextContentAsync(...)
+          - pattern: $SVC.GetTextContentsAsync(...)
+          - pattern: $SVC.GetStreamingTextContentsAsync(...)
+          - pattern: $SVC.InvokePromptAsync(...)
+          - pattern: $SVC.InvokePromptAsync<$T>(...)
+          - pattern: $SVC.InvokePromptStreamingAsync(...)
+          - pattern: $SVC.InvokePromptStreamingAsync<$T>(...)
+      # A prompt function created in this file (CreateFunctionFromPrompt,
+      # KernelFunctionFactory.CreateFromPrompt, KernelFunctionYaml.FromPromptYaml), held in a
+      # local or a field and invoked directly or through kernel.InvokeAsync. Native plugin
+      # functions are not sources.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $FT $FN = <... $KF.$CREATE(...) ...>;
+                  ...
+              - pattern-inside: |
+                  var $FN = <... $KF.$CREATE(...) ...>;
+                  ...
+              - pattern-inside: |
+                  $FN = <... $KF.$CREATE(...) ...>;
+                  ...
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    $FT $FN = <... $KF.$CREATE(...) ...>;
+                    ...
+                  }
+              - pattern-inside: |
+                  class $CLS {
+                    ...
+                    $CTOR(...) {
+                      ...
+                      $FN = <... $KF.$CREATE(...) ...>;
+                      ...
+                    }
+                    ...
+                  }
+          - metavariable-regex:
+              metavariable: $CREATE
+              regex: ^(?:CreateFunctionFromPrompt\w*|CreateFromPrompt\w*|FromPromptYaml)$
+          - pattern-either:
+              - pattern: $FN.InvokeAsync(...)
+              - pattern: $FN.InvokeAsync<$T>(...)
+              - pattern: $FN.InvokeStreamingAsync(...)
+              - pattern: $K.InvokeAsync($FN, ...)
+              - pattern: $K.InvokeAsync<$T>($FN, ...)
+              - pattern: $K.InvokeStreamingAsync($FN, ...)
+      # Agents: Semantic Kernel agents and group chats (Microsoft.SemanticKernel.Agents.* 1.81.0)
+      # and Microsoft Agent Framework agents (Microsoft.Agents.AI 1.26.0), typed in this file,
+      # or named like an agent in a file that imports either framework.
+      - patterns:
+          - pattern-either:
+              - pattern: $AG.InvokeAsync(...)
+              - pattern: $AG.InvokeStreamingAsync(...)
+              - pattern: $AG.RunAsync(...)
+              - pattern: $AG.RunAsync<$T>(...)
+              - pattern: $AG.RunStreamingAsync(...)
+          - metavariable-type:
+              metavariable: $AG
+              types: [Agent, KernelAgent, ChatHistoryAgent, ChatCompletionAgent, OpenAIAssistantAgent, OpenAIResponseAgent, AzureAIAgent, AgentGroupChat, AgentChat, BedrockAgent, CopilotStudioAgent, AIAgent, ChatClientAgent]
+      - patterns:
+          - pattern-either:
+              - pattern: $AG.InvokeAsync(...)
+              - pattern: $AG.InvokeStreamingAsync(...)
+              - pattern: $AG.RunAsync(...)
+              - pattern: $AG.RunAsync<$T>(...)
+              - pattern: $AG.RunStreamingAsync(...)
+          - metavariable-regex:
+              metavariable: $AG
+              regex: (?i)^(?:this\.)?_?\w*agent$
+          - pattern-not-regex: '\A(?:(?![ \t]*+(?:global[ \t]++)?using[ \t]++Microsoft\.(?:SemanticKernel\.Agents|Agents\.AI)\b)[^\n]*+\n)*+(?![ \t]*+(?:global[ \t]++)?using[ \t]++Microsoft\.(?:SemanticKernel\.Agents|Agents\.AI)\b)[^\n]*+\z'
+      # Microsoft.Extensions.AI (10.11.0) IChatClient: GetResponseAsync (ChatResponse.Text,
+      # ChatResponse<T>.Result) and GetStreamingResponseAsync, on a receiver typed as a chat
+      # client or in a file that imports Microsoft.Extensions.AI (System.Net's
+      # WebRequest.GetResponseAsync has the same name).
+      - patterns:
+          - pattern-either:
+              - pattern: $CC.GetResponseAsync(...)
+              - pattern: $CC.GetResponseAsync<$T>(...)
+              - pattern: $CC.GetStreamingResponseAsync(...)
+          - metavariable-type:
+              metavariable: $CC
+              types: [IChatClient, DelegatingChatClient]
+      - patterns:
+          - pattern-either:
+              - pattern: $CC.GetResponseAsync(...)
+              - pattern: $CC.GetResponseAsync<$T>(...)
+              - pattern: $CC.GetStreamingResponseAsync(...)
+          - pattern-not-regex: '\A(?:(?![ \t]*+(?:global[ \t]++)?using[ \t]++Microsoft\.Extensions\.AI\b)[^\n]*+\n)*+(?![ \t]*+(?:global[ \t]++)?using[ \t]++Microsoft\.Extensions\.AI\b)[^\n]*+\z'
+      # OpenAI .NET (OpenAI 2.14.0; Azure.AI.OpenAI hands out the same clients): chat
+      # completions (ChatCompletion.Content[0].Text) and the Responses API
+      # (ResponseResult.GetOutputText(); OpenAIResponseClient before 2.8.0).
+      - pattern-either:
+          - pattern: $OC.CompleteChatAsync(...)
+          - pattern: $OC.CompleteChat(...)
+          - pattern: $OC.CompleteChatStreamingAsync(...)
+          - pattern: $OC.CompleteChatStreaming(...)
+      - patterns:
+          - pattern-either:
+              - pattern: $RC.CreateResponseAsync(...)
+              - pattern: $RC.CreateResponse(...)
+              - pattern: $RC.CreateResponseStreamingAsync(...)
+              - pattern: $RC.CreateResponseStreaming(...)
+          - metavariable-type:
+              metavariable: $RC
+              types: [ResponsesClient, OpenAIResponseClient]
+      - patterns:
+          - pattern-either:
+              - pattern: $RC.CreateResponseAsync(...)
+              - pattern: $RC.CreateResponse(...)
+              - pattern: $RC.CreateResponseStreamingAsync(...)
+              - pattern: $RC.CreateResponseStreaming(...)
+          - pattern-not-regex: '\A(?:(?![ \t]*+(?:global[ \t]++)?using[ \t]++OpenAI\.Responses\b)[^\n]*+\n)*+(?![ \t]*+(?:global[ \t]++)?using[ \t]++OpenAI\.Responses\b)[^\n]*+\z'
+    pattern-propagators:
+      # In --taint-intrafile mode OpenGrep drops taint through a call that takes a lambda
+      # (messages.Where(m => ...).Select(m => m.Text)), so carry it from the receiver to the
+      # call's result, and into the parameter of a callback over a tainted collection or task
+      # (`replies.ToList().ForEach(r => ...)`, `task.ContinueWith(t => ...)`).
+      - patterns:
+          - pattern: $CALL
+          - pattern-either:
+              - pattern: $R.$M(..., ($P) => $B, ...)
+              - pattern: $R.$M(..., ($P, $Q) => $B, ...)
+        from: $R
+        to: $CALL
+      - patterns:
+          - pattern-inside: $R.$M(($P) => $B)
+          - pattern: $P
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(?:Select|SelectMany|Where|ForEach|ContinueWith|Aggregate|Any|All|First|FirstOrDefault|Last|LastOrDefault|Single|SingleOrDefault|OrderBy|OrderByDescending|ThenBy|GroupBy|ToDictionary|ToLookup|TakeWhile|SkipWhile)$
+        from: $R
+        to: $P
+    pattern-sinks:
+      # ASP.NET Core (10.0) results with an HTML content type: ControllerBase / PageModel
+      # Content(text, "text/html"), Results / TypedResults Content and Text, and a ContentResult
+      # whose ContentType is HTML.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: Content($HTML, $TYPE, ...)
+              - pattern-inside: $R.Content($HTML, $TYPE, ...)
+              - pattern-inside: $R.Text($HTML, $TYPE, ...)
+              - pattern-inside: 'Content($HTML, ..., contentType: $TYPE, ...)'
+              - pattern-inside: '$R.Content($HTML, ..., contentType: $TYPE, ...)'
+              - pattern-inside: '$R.Text($HTML, ..., contentType: $TYPE, ...)'
+              - pattern-inside: 'new ContentResult { ..., Content = $HTML, ..., ContentType = $TYPE, ... }'
+              - pattern-inside: 'new ContentResult { ..., ContentType = $TYPE, ..., Content = $HTML, ... }'
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: (?i).*(?:text/html|Text\.Html|application/xhtml)
+          - pattern: $HTML
+      # The response body after an HTML content type is set in the same method
+      # (`Response.ContentType = "text/html"; await Response.WriteAsync(html);`).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $RESP.ContentType = $TYPE;
+                  ...
+              - pattern-inside: |
+                  $RESP.Headers.ContentType = $TYPE;
+                  ...
+              - pattern-inside: |
+                  $RESP.Headers[$NAME] = $TYPE;
+                  ...
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: (?i).*(?:text/html|Text\.Html|application/xhtml)
+          - pattern-inside: $RESP.WriteAsync($HTML, ...)
+          - pattern: $HTML
+      # Markup that Razor and Blazor write without encoding: HtmlString, Html.Raw,
+      # IHtmlContentBuilder.AppendHtml / SetHtmlContent (tag helpers, TagBuilder.InnerHtml),
+      # Blazor's MarkupString (constructor or cast), and RenderTreeBuilder.AddMarkupContent.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: new HtmlString($HTML)
+              - pattern-inside: new MarkupString($HTML)
+              - pattern-inside: (MarkupString)$HTML
+              - pattern-inside: $C.SetHtmlContent($HTML)
+              - pattern-inside: $C.AppendHtml($HTML)
+              - pattern-inside: $B.AddMarkupContent($SEQ, $HTML)
+              - patterns:
+                  - pattern-inside: $H.Raw($HTML)
+                  - metavariable-regex:
+                      metavariable: $H
+                      regex: (?i)^(?:this\.)?_?(?:\w*html|htmlhelper|helper)$
+          - pattern: $HTML
+    pattern-sanitizers:
+      # Values that can't carry text: numbers, booleans, GUIDs, dates, and enums parsed from the
+      # string (int.Parse(x), Guid.Parse(x), Enum.Parse<Tone>(x), Convert.ToInt32(x)), and LINQ
+      # counts and checks. The out
+      # value of TryParse is not tainted to begin with.
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $NUM.Parse(...)
+              - pattern: $NUM.ParseExact(...)
+          - metavariable-regex:
+              metavariable: $NUM
+              regex: ^(?:System\.)?(?:int|long|short|byte|uint|ulong|ushort|sbyte|double|float|decimal|bool|Int16|Int32|Int64|UInt16|UInt32|UInt64|Byte|SByte|Double|Single|Decimal|Boolean|Guid|DateTime|DateTimeOffset|DateOnly|TimeOnly|TimeSpan)$
+      - exact: true
+        pattern-either:
+          - pattern: Enum.Parse<$E>(...)
+          - pattern: Enum.Parse(...)
+      - exact: true
+        patterns:
+          - pattern: Convert.$TO(...)
+          - metavariable-regex:
+              metavariable: $TO
+              regex: ^To(?:Int16|Int32|Int64|UInt16|UInt32|UInt64|Byte|SByte|Double|Single|Decimal|Boolean|DateTime)$
+      # LINQ aggregates that return a number or a bool (replies.Count(r => ...), items.Any()).
+      - exact: true
+        patterns:
+          - pattern: $SEQ.$AGG(...)
+          - metavariable-regex:
+              metavariable: $AGG
+              regex: ^(?:Count|LongCount|Any|All|Sum|Average)$
+      # An allowlist lookup in a table held in a field or static member (`Personas[choice]`,
+      # `PromptLibrary.Personas[choice]`, `_commands.GetValueOrDefault(key)`); request
+      # collections (`Request.Query[...]`, `HttpContext.Items[...]`) don't count.
+      - patterns:
+          - pattern-either:
+              - pattern: $TABLE[$KEY]
+              - pattern: $TABLE.GetValueOrDefault($KEY, ...)
+          - metavariable-regex:
+              metavariable: $TABLE
+              regex: ^(?!(?:\w+\.)*(?:Request|HttpContext)\b)(?!.*\.(?:Query|Form|Headers|Cookies|RouteValues|Items|Session)$)(?:this\.|(?:[A-Z]\w*\.)+)?(?:[A-Z][A-Za-z0-9_]*|_[A-Za-z]\w*|s_\w+)$
+      # A check against such a set before use (`if (!AllowedTeams.Contains(team)) return ...;`,
+      # or use inside `if (Personas.ContainsKey(p)) { ... }`). OpenGrep 1.30.2 ignores
+      # by-side-effect sanitizers in C#, so the checked value is cleared in the code after the
+      # check instead.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$SET.$HAS($X)) return ...;
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($X)) return;
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($X)) throw ...;
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($X)) { ... }
+                  ...
+              - pattern-inside: |
+                  if ($SET.$HAS($X)) { ... }
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(?:Contains|ContainsKey)$
+          - metavariable-regex:
+              metavariable: $SET
+              regex: ^(?!(?:\w+\.)*(?:Request|HttpContext)\b)(?!.*\.(?:Query|Form|Headers|Cookies|RouteValues|Items|Session)$)(?:this\.|(?:[A-Z]\w*\.)+)?(?:[A-Z][A-Za-z0-9_]*|_[A-Za-z]\w*|s_\w+)$
+          - pattern: $X
+      # ... and against an anchored pattern (`Regex.IsMatch(x, "^[a-z-]+$")`, or a Regex field
+      # or [GeneratedRegex] method: `SlugRegex().IsMatch(x)`).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$RX.IsMatch($X)) return ...;
+                  ...
+              - pattern-inside: |
+                  if (!$RX.IsMatch($X)) throw ...;
+                  ...
+              - pattern-inside: |
+                  if (!$RX.IsMatch($X)) { ... }
+                  ...
+              - pattern-inside: |
+                  if ($RX.IsMatch($X)) { ... }
+          - metavariable-regex:
+              metavariable: $RX
+              regex: ^(?:this\.)?(?:_?\w*(?:Regex|Pattern|Re)|\w+\(\))$
+          - pattern: $X
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!Regex.IsMatch($X, "$RE", ...)) return ...;
+                  ...
+              - pattern-inside: |
+                  if (!Regex.IsMatch($X, "$RE", ...)) throw ...;
+                  ...
+              - pattern-inside: |
+                  if (!Regex.IsMatch($X, "$RE", ...)) { ... }
+                  ...
+              - pattern-inside: |
+                  if (Regex.IsMatch($X, "$RE", ...)) { ... }
+          - metavariable-regex:
+              metavariable: $RE
+              regex: (?s)^\^.*(?:\$|\\z)$
+          - pattern: $X
+      # Response metadata that can't carry the model's text: token usage, finish reasons, model
+      # IDs, and roles (`response.Usage`, `result.Metadata`, `reply.Role`).
+      - patterns:
+          - pattern: $OBJ.$META
+          - metavariable-regex:
+              metavariable: $META
+              regex: ^(?:Metadata|Usage|FinishReason|ModelId|Role|AuthorName|ResponseId|CreatedAt)$
+      # HTML encoders and allowlist sanitizers: System.Text.Encodings.Web HtmlEncoder,
+      # WebUtility / HttpUtility.HtmlEncode, the AntiXSS encoder, SecurityElement.Escape,
+      # HtmlSanitizer (Ganss.Xss 9.2) Sanitize / SanitizeDocument, and helpers named for what
+      # they do (`EscapeHtml(...)`, `SanitizeHtml(...)`).
+      - patterns:
+          - pattern: $ENCODER.Encode(...)
+          - metavariable-regex:
+              metavariable: $ENCODER
+              regex: (?i)^(?:this\.)?_?\w*htmlencoder$
+      - pattern-either:
+          - pattern: HtmlEncoder.$ENC.Encode(...)
+          - pattern: WebUtility.HtmlEncode(...)
+          - pattern: HttpUtility.HtmlEncode(...)
+          - pattern: HttpUtility.HtmlAttributeEncode(...)
+          - pattern: AntiXssEncoder.HtmlEncode(...)
+          - pattern: Encoder.HtmlEncode(...)
+          - pattern: SecurityElement.Escape(...)
+      - patterns:
+          - pattern-either:
+              - pattern: $SAN.Sanitize(...)
+              - pattern: $SAN.SanitizeDocument(...)
+          - metavariable-regex:
+              metavariable: $SAN
+              regex: (?i)^(?:this\.)?_?\w*sanitizer$|^new\s+HtmlSanitizer\(
+      - patterns:
+          - pattern: $HELPER(...)
+          - metavariable-regex:
+              metavariable: $HELPER
+              regex: (?i)^(?:[\w.]*\.)?(?!\w*un(?:escape|sanitiz))\w*(?:escapehtml|htmlescape|htmlencode|encodehtml|sanitizehtml)\w*$
+    metadata:
+      category: security
+      subcategory: [vuln]
+      pack-category: ai-code
+      owasp-llm:
+        - "LLM10:2026 - Improper Output Handling"
+        - "LLM05:2025 - Improper Output Handling"
+      mitre-atlas:
+        - "AML.T0077 - LLM Response Rendering"
+        - "AML.T0051 - LLM Prompt Injection"
+      cwe:
+        - "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [semantic-kernel, microsoft-extensions-ai, agent-framework, openai, aspnetcore, blazor, markdig]
+      # API shapes checked 2026-10-25: model-output sources as in
+      # llm-output-to-code-execution-csharp, plus aspnetcore v10.0.13 (ControllerBase.Content,
+      # Results / TypedResults.Content and Text, ContentResult, HtmlString, IHtmlContentBuilder,
+      # MarkupString, RenderTreeBuilder.AddMarkupContent; a string returned from an action or a
+      # minimal API handler is written as text/plain), markdig 1.5.0 (no URL scheme filtering;
+      # raw HTML passes unless DisableHtml()), and HtmlSanitizer 9.2.1039. Raw-HTML
+      # wrappers written in .cshtml and .razor templates are llm-output-to-html-razor's (a regex
+      # rule, as OpenGrep doesn't parse Razor).
+      references:
+        - https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md
+        - https://cwe.mitre.org/data/definitions/79.html
+        - https://learn.microsoft.com/aspnet/core/security/cross-site-scripting
+        - https://learn.microsoft.com/aspnet/core/blazor/components/#raw-html
+        - https://github.com/xoofx/markdig/blob/1.5.0/src/Markdig/MarkdownExtensions.cs
+        - https://github.com/mganss/HtmlSanitizer
+        - https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html

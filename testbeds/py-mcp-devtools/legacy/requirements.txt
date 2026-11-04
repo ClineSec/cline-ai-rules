@@ -1,0 +1,2 @@
+# The 1.x server some teams still run; see legacy/README.md.
+mcp>=1.30,<2
